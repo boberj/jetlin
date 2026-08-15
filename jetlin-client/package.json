@@ -1,0 +1,14 @@
+{
+  "name": "jetlin-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser runtime for Jetlin: applies server-computed DOM mutations and reports events back.",
+  "scripts": {
+    "build": "esbuild src/jetlin.ts --bundle --format=iife --minify --target=es2020 --outfile=../jetlin-server-ktor/src/main/resources/jetlin/jetlin.js",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
