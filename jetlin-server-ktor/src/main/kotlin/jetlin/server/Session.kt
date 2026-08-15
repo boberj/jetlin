@@ -29,13 +29,15 @@ public class JetlinSession internal constructor(
  * Keeps compositions alive between the page render and the socket connecting.
  *
  * The initial HTTP response and the WebSocket are two separate requests, and the composition built
- * for the first is exactly the one the second wants. Holding it here for a few seconds means the
- * view is composed once per session rather than once per transport — LiveView, by contrast, does a
- * "dead" render followed by a live one.
+ * for the first is exactly the one the second wants. Holding it here for a few seconds means each
+ * view is composed once per session rather than once per transport.
  *
- * The same structure is where hibernation belongs: instead of closing an unclaimed or disconnected
- * session, capture its saveable state, drop the composition, and store the snapshot under the same
- * token so a reconnect — possibly on another node — can restore it.
+ * Sessions are reaped on a timer: if no socket ever arrives, or a socket goes away and does not
+ * come back within the grace period, the composition is closed and its memory released.
+ *
+ * This is also where hibernation belongs: instead of closing a disconnected session, capture its
+ * saveable state, drop the composition, and store the snapshot under the same token so a reconnect
+ * — possibly on another node — can restore it.
  */
 public class SessionRegistry(
     private val scope: CoroutineScope,

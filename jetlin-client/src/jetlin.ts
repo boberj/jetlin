@@ -1,11 +1,9 @@
 /**
  * Jetlin browser runtime.
  *
- * Deliberately dumb: it applies mutations the server computed, and reports events back. There is no
- * diffing algorithm here — no morphdom, no idiomorph, no virtual DOM reconciliation — because the
- * Compose runtime on the server already emitted the exact mutations. That is the single biggest
- * structural difference from Livewire (which morphs whole re-rendered HTML on the client) and from
- * LiveView (which reassembles templates from static/dynamic slots).
+ * Deliberately small. It does two things: apply the mutation ops the server sends, and report DOM
+ * events back. It holds no application state and makes no rendering decisions, so there is no
+ * reconciliation step here — the server has already worked out which nodes to touch.
  */
 
 type PropValue = { t: "s"; v: string } | { t: "b"; v: boolean };
@@ -200,8 +198,9 @@ class Jetlin {
       case "mv": {
         const parent = this.nodes.get(op.parent) as Element;
         const siblings = this.children.get(op.parent)!;
-        // Must match androidx.compose.runtime.AbstractApplier.move exactly, including this
-        // destination adjustment, or lists silently reorder differently on the two sides.
+        // `to` is an index in the list as it was *before* the move, so when items shift left the
+        // destination has to be adjusted by the number removed. This mirrors what the server-side
+        // applier does; if the two ever disagree, lists silently reorder differently on each side.
         const dest = op.from > op.to ? op.to : op.to - op.count;
         const moved = siblings.splice(op.from, op.count);
         siblings.splice(dest, 0, ...moved);

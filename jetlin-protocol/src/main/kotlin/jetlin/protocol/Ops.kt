@@ -11,11 +11,10 @@ public const val ROOT_ID: NodeId = 0
 /**
  * A single mutation to apply to the browser DOM.
  *
- * These are not diffs. Every op here is something the Compose runtime told the applier to do, in
- * the order it said to do it — the framework never compares two trees to work out what changed.
- * That is the whole reason this project uses the Compose runtime rather than a template engine:
- * LiveView's fingerprint/static-dynamic machinery and Livewire's client-side morph both exist to
- * recover information that positional memoization already has.
+ * Ops are produced, not computed. As a composition recomposes, the Compose runtime tells the
+ * applier which nodes to insert, remove, move or update; each of those calls is recorded as one op,
+ * in the order it happened. Nothing compares an old tree against a new one, so the browser receives
+ * a list of instructions rather than a document to reconcile.
  */
 @Serializable
 public sealed interface Op {
@@ -97,9 +96,10 @@ public sealed interface NodeSpec {
 /**
  * What the client should do when an event fires, and what it should send back.
  *
- * Handlers themselves never cross the wire — the server keeps the lambda and looks it up by
- * (node, event). That is why Jetlin has no equivalent of Livewire's `wire:click="increment"`
- * string method names: a closure just captures what it needs, and stays type-checked.
+ * Handlers themselves never cross the wire. The client only learns that a node listens for an
+ * event; when one fires it sends back the node id and the event name, and the server looks up the
+ * lambda it is holding. Handlers can therefore be ordinary closures over whatever they need, and
+ * stay type-checked, instead of being named by a string the client would have to send.
  */
 @Serializable
 public data class ListenerSpec(

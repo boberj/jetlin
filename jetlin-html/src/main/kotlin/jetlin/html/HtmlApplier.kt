@@ -6,10 +6,10 @@ import jetlin.protocol.Op
 /**
  * Turns Compose's tree mutations into wire ops.
  *
- * This class is the entire "diffing engine" of Jetlin, and it does no diffing: the runtime already
- * knows precisely which nodes moved, appeared or disappeared, and simply tells the applier. Every
- * op recorded here corresponds to a decision the Compose runtime made, not to a comparison the
- * framework performed.
+ * An [AbstractApplier] is how the Compose runtime edits whatever tree a composition describes: as
+ * it recomposes, it calls insert / remove / move on the applier. Each of those calls updates the
+ * server-side tree and records the equivalent op for the browser, so the two stay in step without
+ * either side comparing trees.
  *
  * Insertion is handled bottom-up: Compose finishes building a subtree before parenting it, so an
  * inserted subtree is complete at the moment it becomes visible to the client and ships as one op.

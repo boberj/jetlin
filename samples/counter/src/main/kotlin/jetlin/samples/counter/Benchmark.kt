@@ -20,10 +20,9 @@ import kotlinx.coroutines.runBlocking
 /**
  * Measures retained heap per live session.
  *
- * This is the number that decides whether a stateful server-driven architecture is viable on the
- * JVM at all, so it belongs in the walking skeleton rather than in a later performance pass. For
- * calibration: Phoenix LiveView is reported at roughly 3 MB per active connection, dropping to
- * ~150 kB once hibernated, and Vaadin sessions typically run 50 kB-1 MB.
+ * Holding UI state on the server means memory scales with the number of connected users, so this
+ * number sets the practical ceiling on how many sessions a node can carry. It works by creating
+ * many sessions, keeping them all reachable, and comparing heap usage before and after.
  *
  * Run with: ./gradlew :samples:counter:benchmark
  */

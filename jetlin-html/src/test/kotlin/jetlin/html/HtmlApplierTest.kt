@@ -19,10 +19,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /**
- * These tests are the load-bearing claim of the whole project: that a state change produces the
- * *minimum* set of DOM mutations without any diffing step, because the Compose runtime already
- * knows what changed. Assertions are on exact op lists, not on "contains", so any extra chatter
- * fails the build.
+ * Checks what a state change actually puts on the wire.
+ *
+ * Assertions are on exact op lists rather than "contains", so a change that updates more of the
+ * page than it needs to — or re-creates nodes it could have moved — fails the build instead of
+ * quietly costing bandwidth.
  */
 class HtmlApplierTest {
 

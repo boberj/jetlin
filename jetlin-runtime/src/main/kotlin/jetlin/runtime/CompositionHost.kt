@@ -24,11 +24,10 @@ import kotlinx.coroutines.yield
 /**
  * Runs one Compose composition headlessly on the JVM, driving an arbitrary [Applier].
  *
- * This is the piece that Molecule deliberately leaves out: Molecule reduces a composition to a
- * single `StateFlow` value and throws the node tree away, whereas Jetlin's entire premise is that
- * the node tree — and the precise mutations the runtime applies to it — *is* the wire protocol.
- * Structurally this follows Mosaic: [Recomposer] + [Composition] + a custom frame clock, with no
- * Android and no UI toolkit anywhere in the stack.
+ * Compose is usually started by a UI toolkit, which supplies the three pieces this class supplies
+ * instead: a [Recomposer] to schedule recomposition, a [Composition] bound to an [Applier] that
+ * materializes the tree, and a frame clock to pace the work. None of that requires a UI — the
+ * runtime is happy to maintain any tree of nodes, and here that tree is a virtual DOM.
  *
  * One host is one live session. Everything is confined to a single-threaded [dispatcher] so that
  * event handling, recomposition and patch recording cannot interleave, which removes a whole class

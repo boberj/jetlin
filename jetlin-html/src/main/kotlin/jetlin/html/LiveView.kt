@@ -67,8 +67,10 @@ public class LiveView(
 
     /**
      * Patches produced by this view, whatever caused them — a client event, a `LaunchedEffect`, or
-     * a background coroutine writing shared state. Server push needs no special API here: state
-     * that a composable read simply changes, and the runtime does the rest.
+     * a background coroutine writing shared state.
+     *
+     * Sending updates to the client needs no separate API: when state a composable read changes,
+     * that composable recomposes, the applier records ops, and they arrive here.
      */
     public val patches: Flow<ServerMessage.Patch> = flow {
         for (signal in owner.dirtySignals) {

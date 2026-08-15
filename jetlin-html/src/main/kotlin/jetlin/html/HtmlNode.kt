@@ -60,9 +60,9 @@ public class ElementNode internal constructor(
     internal val listeners: LinkedHashMap<String, ListenerSpec> = LinkedHashMap()
 
     /**
-     * Never serialized. Handlers stay server-side and are looked up by (node, event) when an event
-     * arrives, so a handler closure can capture whatever it likes and stays type-checked — there is
-     * no Jetlin equivalent of Livewire's `wire:click="methodName"` string indirection.
+     * Never serialized. When an event arrives from the client it carries only this node's id and
+     * the event name, and the matching lambda is found here, so handlers can be ordinary closures
+     * over whatever they need.
      */
     internal var handlers: Map<String, EventHandler> = emptyMap()
 
@@ -134,10 +134,10 @@ public class ElementNode internal constructor(
 /**
  * The declared shape of an element for one composition pass.
  *
- * Handlers are deliberately excluded: lambdas get fresh identities on every recomposition, so
- * including them would make every element unequal to its previous self and defeat Compose's
- * skipping. Listener *specs* are included, because a change in debounce or extraction really does
- * need to reach the client.
+ * Compared against the previous pass to decide whether anything needs to be sent. Handlers are
+ * deliberately excluded: lambdas get fresh identities on every recomposition, so including them
+ * would make every element unequal to its previous self and cause needless work. Listener *specs*
+ * are included, because a change in debounce or extraction really does need to reach the client.
  */
 internal data class ElementData(
     val attributes: Map<String, String>,

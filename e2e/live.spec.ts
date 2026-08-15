@@ -1,10 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * End-to-end checks for the parts of a server-driven framework that unit tests cannot reach: that
- * the client applies ops correctly, that server push arrives unprompted, and — the failure mode
- * every LiveView-style framework is judged on — that a server update never eats what the user is
- * currently typing.
+ * End-to-end checks for the parts that unit tests cannot reach: that the client applies ops to a
+ * real DOM correctly, that updates originating on the server arrive without being asked for, and
+ * that an update never overwrites what the user is currently typing.
  */
 
 test("first paint is server-rendered HTML, before any script runs", async ({ page }) => {
@@ -35,8 +34,8 @@ test("the patch only touches the node that changed", async ({ page }) => {
   const count = page.locator("[data-test=count]");
   await expect(count).toHaveText("0");
 
-  // Tag the surrounding DOM. If the client were morphing re-rendered HTML rather than applying
-  // targeted ops, these nodes would be replaced and the markers would be gone.
+  // Tag the surrounding DOM. The markers live only on the JavaScript objects, so they survive only
+  // if the update leaves those exact nodes in place instead of replacing them.
   await page.evaluate(() => {
     document.querySelectorAll("li").forEach((li, i) => ((li as HTMLElement).dataset.marker = `m${i}`));
     (document.querySelector("[data-test=count]") as HTMLElement).dataset.marker = "count";

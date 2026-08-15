@@ -117,11 +117,11 @@ private fun Todos() {
 }
 
 /**
- * Server-driven updates with no extra API surface.
+ * An update the client never asked for.
  *
- * There is no equivalent of LiveView's `handle_info` or a Livewire polling directive: a coroutine
- * writes state, the composables that read it recompose, and patches follow. Livewire's stateless
- * model structurally cannot do this at all.
+ * The effect runs on the server for as long as the session lives. Each tick writes state that this
+ * composable reads, which recomposes it, which produces a patch. Nothing here is aware of the
+ * browser, and no polling or subscription API is involved.
  */
 @Composable
 private fun ServerClock() {

@@ -17,11 +17,12 @@ private val LISTENER_MAP_SERIALIZER = MapSerializer(String.serializer(), Listene
 /**
  * Serializes the current tree to HTML for the initial page load.
  *
- * First paint is real server-rendered HTML — indexable, and visible before any JavaScript runs.
- * Each element carries its server node id in `data-jl` and its listener specs in `data-jl-on`, so
- * the client runtime binds to the existing DOM rather than re-rendering it. LiveView renders twice
- * (a "dead" render, then a live one); Jetlin renders once and hands the same live composition to
- * the socket.
+ * First paint is real HTML, so the page is indexable and readable before any JavaScript runs.
+ * Elements carry their server node id in `data-jl` and their listener specs in `data-jl-on`, which
+ * lets the client bind to the markup it was given.
+ *
+ * The composition that produced this HTML stays alive and is handed to the WebSocket when it
+ * connects, so a page is composed once rather than once per request.
  */
 public fun renderToHtml(owner: HtmlOwner): String = buildString {
     owner.root.children.forEach { appendNode(it) }
