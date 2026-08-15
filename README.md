@@ -1,7 +1,7 @@
 # Jetlin
 
 Interactive web UI written as Kotlin `@Composable` functions that run **on the server**. The browser
-gets HTML plus a 4.6 kB runtime that applies the DOM changes the server sends and reports events
+gets HTML plus a 4.9 kB runtime that applies the DOM changes the server sends and reports events
 back.
 
 Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and
@@ -9,24 +9,37 @@ Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_
 
 ```kotlin
 @Composable
-fun Counter() {
-    var count by remember { mutableStateOf(0) }
+fun TodoDetail() {
+    val todo = TodoStore.find(pathParam("id").toInt()) ?: return
+    val navigator = LocalNavigator.current
+    val title = rememberField(todo.title) {
+        if (it.isBlank()) "A title is required" else null
+    }
 
     Div({ classes("card") }) {
-        H1 { Text("Count: $count") }
-        Button({ classes("btn"); onClick { count++ } }) { Text("+") }
+        Input({ classes("input"); bind(title) })
+        title.error?.let { P({ classes("error") }) { Text(it) } }
+        Button({
+            disabled(!title.isValid)
+            onClick { todo.title = title.value; navigator.push("/") }
+        }) { Text("Save") }
     }
 }
 
 fun main() {
     embeddedServer(Netty, port = 8080) {
-        jetlin { view("/", title = "Counter") { Counter() } }
+        jetlin {
+            view("/", title = "Todos") { TodoList() }
+            view("/todo/{id}", title = "Edit") { TodoDetail() }
+        }
     }.start(wait = true)
 }
 ```
 
-Clicking that button sends one event and receives one `SetText` instruction. There is no template
-language, no client-side state, and no REST layer in between.
+Typing sends one debounced event and receives the instructions to update the error message and the
+button's disabled state. Saving navigates without reloading the page. There is no template language,
+no client-side state, and no REST layer in between — the validation rule and the code that acts on
+it are the same Kotlin, in the same place.
 
 ## How it works
 
@@ -55,10 +68,10 @@ boundary to design — a handler closes over the objects it needs and calls stra
 
 ## Status
 
-**Walking skeleton.** The core is built, tested, and working end to end in a browser.
-[`docs/architecture.md`](docs/architecture.md) has the full design: the update path, the protocol,
-sessions, input handling, design decisions, and what is designed but not yet built (hibernation,
-adopting server-rendered DOM, back-pressure, routing, forms, uploads).
+**Early.** The core is built and tested end to end in a browser, with routing, request context,
+live navigation and forms on top of it. [`docs/architecture.md`](docs/architecture.md) has the full
+design: the update path, the protocol, sessions, input handling, design decisions, and what is
+designed but not yet built (hibernation, adopting server-rendered DOM, back-pressure, uploads).
 
 Measured at **134 kB of retained heap per live session**, 1000 concurrent sessions in 131 MB. Since
 session state lives on the server, this is the number that sets how many users a node can carry.
@@ -66,24 +79,27 @@ session state lives on the server, this is the number that sets how many users a
 ## Try it
 
 ```bash
-./gradlew :samples:counter:run          # http://localhost:8080
+./gradlew :samples:demo:run          # http://localhost:8080
 ```
 
-The demo has a counter, a keyed todo list, and a clock driven from the server.
+A three-page app: a keyed todo list, a detail page with server-side validation reached by a real
+`<a href>` that navigates without reloading, and a clock driven from the server. The store is shared
+across sessions, so opening two windows shows edits in one appearing in the other.
 
 ## Test
 
 ```bash
-./gradlew test                          # 26 unit tests, asserting exact op streams
-./gradlew :samples:counter:benchmark    # retained heap per session
+./gradlew test                       # 51 unit tests, asserting exact op streams
+./gradlew :samples:demo:benchmark    # retained heap per session
 
-cd e2e && npm install && npx playwright test    # 7 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 12 browser tests (server must be running)
 ```
 
 Unit tests assert on exact op lists rather than `contains`, so an update that touches more of the
-page than it needs to fails the build. Browser tests cover first paint with JavaScript blocked,
-targeted patching, keyed list reordering, server-originated updates, typing while the server sends
-unrelated updates, and reconnection with state preserved.
+page than it needs to fails the build. Browser tests cover first paint with JavaScript blocked, deep
+links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
+typing while the server sends unrelated updates, navigation without a page load, back and forward,
+validation gating a submit, and reconnection with state preserved.
 
 ## Modules
 
@@ -91,10 +107,10 @@ unrelated updates, and reconnection with state preserved.
 |---|---|
 | `jetlin-runtime` | `CompositionHost`, `FramePolicy`, `GlobalSnapshotManager` — running a Compose composition headlessly on the JVM |
 | `jetlin-protocol` | Ops and messages (kotlinx.serialization) |
-| `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, HTML serializer |
+| `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, routing, forms, HTML serializer |
 | `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
-| `samples/counter` | Runnable demo and the memory benchmark |
+| `samples/demo` | Runnable three-page demo and the memory benchmark |
 
 ## Building the client
 

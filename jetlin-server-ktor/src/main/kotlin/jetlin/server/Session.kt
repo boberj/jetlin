@@ -5,6 +5,7 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import jetlin.html.LiveView
+import jetlin.html.RequestContext
 import jetlin.runtime.FramePolicy
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -52,9 +53,10 @@ public class SessionRegistry(
 
     public suspend fun create(
         framePolicy: FramePolicy = FramePolicy.Immediate,
-        content: @Composable () -> Unit,
+        request: RequestContext,
+        content: @Composable (RequestContext) -> Unit,
     ): JetlinSession {
-        val session = JetlinSession(newToken(), LiveView(framePolicy, content))
+        val session = JetlinSession(newToken(), LiveView(request, framePolicy, content))
         session.view.start()
         sessions[session.token] = session
         scheduleReap(session.token, handoffTimeout)

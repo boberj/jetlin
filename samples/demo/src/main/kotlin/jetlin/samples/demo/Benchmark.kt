@@ -1,4 +1,4 @@
-package jetlin.samples.counter
+package jetlin.samples.demo
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -24,18 +24,18 @@ import kotlinx.coroutines.runBlocking
  * number sets the practical ceiling on how many sessions a node can carry. It works by creating
  * many sessions, keeping them all reachable, and comparing heap usage before and after.
  *
- * Run with: ./gradlew :samples:counter:benchmark
+ * Run with: ./gradlew :samples:demo:benchmark
  */
 fun main() = runBlocking {
     val sessionCount = System.getenv("SESSIONS")?.toInt() ?: 1000
 
     // Warm up the runtime so class loading and JIT are not counted as session cost.
-    repeat(20) { LiveView { BenchmarkView() }.also { it.start() }.close() }
+    repeat(20) { LiveView(content = { _ -> BenchmarkView() }).also { it.start() }.close() }
 
     val before = usedHeap()
     val views = ArrayList<LiveView>(sessionCount)
     repeat(sessionCount) {
-        val view = LiveView { BenchmarkView() }
+        val view = LiveView(content = { _ -> BenchmarkView() })
         view.start()
         views += view
     }

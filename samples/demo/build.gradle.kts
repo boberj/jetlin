@@ -11,14 +11,14 @@ dependencies {
 }
 
 application {
-    mainClass.set("jetlin.samples.counter.MainKt")
+    mainClass.set("jetlin.samples.demo.MainKt")
 }
 
-/** Retained heap per live session — the number that decides whether stateful sessions are viable. */
+/** Retained heap per live session — the ceiling on how many users a node can carry. */
 tasks.register<JavaExec>("benchmark") {
     group = "verification"
     description = "Measures retained heap per live session."
-    mainClass.set("jetlin.samples.counter.BenchmarkKt")
+    mainClass.set("jetlin.samples.demo.BenchmarkKt")
     classpath = sourceSets["main"].runtimeClasspath
     jvmArgs("-Xmx2g")
 }

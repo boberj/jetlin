@@ -181,6 +181,16 @@ public class HtmlOwner {
         dirty.trySend(Unit)
     }
 
+    /**
+     * Wakes the sender when something needs transmitting that is not an op.
+     *
+     * A navigation to a route that happens to render identically produces no tree edits, and would
+     * otherwise leave the browser's address bar stale because nothing signalled the sender.
+     */
+    internal fun signalDirty() {
+        dirty.trySend(Unit)
+    }
+
     /** True if at least one op is buffered; used to skip empty frames. */
     public val hasPendingOps: Boolean get() = ops.isNotEmpty()
 

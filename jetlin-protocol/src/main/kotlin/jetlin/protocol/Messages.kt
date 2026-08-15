@@ -24,6 +24,21 @@ public sealed interface ServerMessage {
     @SerialName("reset")
     public data class Reset(val rev: Long, val children: List<NodeSpec>) : ServerMessage
 
+    /**
+     * The session moved to another location; the browser should update its address bar.
+     *
+     * Carried on the same channel as patches so it cannot overtake the patch that rendered the
+     * destination. [replace] chooses `replaceState` over `pushState`, which matters for redirects
+     * that should not add a history entry the user can go back to.
+     */
+    @Serializable
+    @SerialName("nav")
+    public data class Navigate(
+        val url: String,
+        val replace: Boolean = false,
+        val title: String? = null,
+    ) : ServerMessage
+
     @Serializable
     @SerialName("error")
     public data class Error(val message: String, val fatal: Boolean = false) : ServerMessage
@@ -48,6 +63,16 @@ public sealed interface ClientMessage {
         val seq: Long,
         val payload: EventPayload = EventPayload(),
     ) : ClientMessage
+
+    /**
+     * The user pressed back or forward.
+     *
+     * The browser has already changed its address bar, so the server follows rather than leads: it
+     * moves the session to [url] and does not echo a [ServerMessage.Navigate] back.
+     */
+    @Serializable
+    @SerialName("nav")
+    public data class Navigate(val url: String) : ClientMessage
 }
 
 @Serializable

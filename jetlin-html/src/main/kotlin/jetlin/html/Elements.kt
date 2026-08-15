@@ -82,6 +82,9 @@ public class AttrsScope internal constructor() {
             handler(it.key.orEmpty())
         }
 
+    /** Marks a `<option>` as chosen. A property rather than an attribute, like `value`. */
+    public fun selected(value: Boolean): Unit = prop("selected", value)
+
     internal fun data(): ElementData = ElementData(attributes, properties, listeners)
     internal fun handlers(): Map<String, EventHandler> = handlers
 }
@@ -172,3 +175,103 @@ public fun A(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> 
 
 @Composable
 public fun Input(attrs: (AttrsScope.() -> Unit)? = null): Unit = Element("input", attrs)
+
+@Composable
+public fun H3(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("h3", attrs, content)
+
+@Composable
+public fun Nav(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("nav", attrs, content)
+
+@Composable
+public fun Header(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("header", attrs, content)
+
+@Composable
+public fun Footer(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("footer", attrs, content)
+
+@Composable
+public fun Section(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("section", attrs, content)
+
+@Composable
+public fun Strong(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("strong", attrs, content)
+
+@Composable
+public fun Em(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("em", attrs, content)
+
+@Composable
+public fun Code(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("code", attrs, content)
+
+@Composable
+public fun Pre(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("pre", attrs, content)
+
+@Composable
+public fun Img(attrs: (AttrsScope.() -> Unit)? = null): Unit = Element("img", attrs)
+
+@Composable
+public fun TextArea(attrs: (AttrsScope.() -> Unit)? = null): Unit = Element("textarea", attrs)
+
+@Composable
+public fun Select(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("select", attrs, content)
+
+@Composable
+public fun Option(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("option", attrs, content)
+
+@Composable
+public fun Table(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("table", attrs, content)
+
+@Composable
+public fun Thead(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("thead", attrs, content)
+
+@Composable
+public fun Tbody(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("tbody", attrs, content)
+
+@Composable
+public fun Tr(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("tr", attrs, content)
+
+@Composable
+public fun Th(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("th", attrs, content)
+
+@Composable
+public fun Td(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("td", attrs, content)
+
+/**
+ * An anchor that navigates within the live session instead of reloading the page.
+ *
+ * It renders as an ordinary `<a href>`, so it is a real link: crawlers follow it, middle-click and
+ * "open in new tab" work, and with JavaScript disabled it falls back to a normal request that
+ * happens to start a fresh session on the same path. With the client running, the click is
+ * intercepted and the session moves without a page load.
+ */
+@Composable
+public fun Link(
+    href: String,
+    attrs: (AttrsScope.() -> Unit)? = null,
+    content: @Composable () -> Unit = {},
+) {
+    val navigator = LocalNavigator.current
+    Element(
+        tag = "a",
+        attrs = {
+            href(href)
+            attrs?.invoke(this)
+            on("click", ListenerSpec(preventDefault = true)) { navigator.push(href) }
+        },
+        content = content,
+    )
+}

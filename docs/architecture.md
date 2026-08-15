@@ -6,8 +6,8 @@ server sends and reports events back.
 
 Phoenix LiveView and Livewire were the inspirations for the idea.
 
-Status: **walking skeleton**. The core is built, tested and working end to end in a real browser.
-Section 9 lists what is designed but not yet built.
+Status: **early**. The core is built and tested end to end in a real browser, with routing, request
+context, navigation and forms on top of it. Section 12 lists what is designed but not yet built.
 
 ---
 
@@ -53,7 +53,7 @@ that read it, and a patch follows. Sending updates to a connected client needs n
 
 ```
 ┌─ Browser ──────────────────────────────────────────────────────────────────┐
-│  jetlin.js (4.6 kB minified)                                               │
+│  jetlin.js (4.9 kB minified)                                               │
 │  applies ops · delegates events · guards in-flight input · reconnects      │
 └───────────────▲──────────────────────────────────────┬─────────────────────┘
                 │ patch { rev, ack, ops }              │ event { node, seq }
@@ -154,8 +154,11 @@ Server → client:
 | `on(id, event, spec)` / `off(id, event)` | listener registration |
 
 Messages: `patch{rev, ack, ops}`, `reset{rev, children}` (a full tree, sent when a client attaches
-or rejoins), `error{message, fatal}`. Client → server: `hello{token}` and
-`event{node, event, seq, payload}`.
+or rejoins), `nav{url, replace, title}`, `error{message, fatal}`. Client → server: `hello{token}`,
+`event{node, event, seq, payload}` and `nav{url}` for back/forward.
+
+Navigations travel on the same channel as patches, emitted after the patch that rendered the
+destination, so the address bar can never run ahead of the content on screen.
 
 `ListenerSpec` tells the client what to extract from the DOM event (`value`, `checked`, `key`,
 `form`) and how to rate-limit it (`debounceMs`, `throttleMs`, `preventDefault`, `stopPropagation`).
@@ -168,7 +171,7 @@ or CBOR would be a drop-in change; readable frames are more useful at this stage
 
 ## 6. The browser runtime
 
-4.6 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
+4.9 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
 children per element, and the listener specs.
 
 The child array exists because the DOM's own `childNodes` cannot be trusted for indexing — browsers
@@ -189,6 +192,13 @@ registration survives any amount of subtree churn.
 A `GET` renders the composition to HTML and returns it with a session token. The composition stays
 alive in `SessionRegistry`; when the WebSocket connects with that token it adopts the composition
 that is already there, so a page is composed once per session rather than once per request.
+
+A session is bound to the **whole route table**, not to one view. `RouteHost` resolves the current
+path against the registered patterns and composes whatever matched, keyed on the pattern, so moving
+between two routes rebuilds while moving between two instances of one route (`/todo/1` to `/todo/2`)
+keeps the view and re-runs it with new parameters. Because the route is composition state,
+navigating is just a state change: the view swaps inside the live composition and the applier records
+the difference. No page load, no new session, same socket.
 
 The browser's same-origin policy does not apply to WebSockets — any page on any site can open one —
 so the socket handler checks `Origin` against the request's `Host` before looking up a session, and
@@ -222,6 +232,55 @@ would just be composables that emit HTML.
 State and effects are ordinary Compose: `remember`, `derivedStateOf`, `LaunchedEffect`,
 `snapshotFlow`, `CompositionLocal`, `key`, and coroutines throughout.
 
+### Routes, context and navigation
+
+Views are registered against path patterns, and a `Link` renders a real `<a href>` whose click is
+intercepted into a live navigation:
+
+```kotlin
+jetlin {
+    head = STYLES
+    attributes { call -> mapOf(CurrentUser to call.principal<User>()) }
+    view("/", title = "Todos") { TodoListPage() }
+    view("/todo/{id}", title = "Edit") { TodoDetailPage() }
+}
+
+@Composable
+fun TodoDetailPage() {
+    val todo = TodoStore.find(pathParam("id").toInt())
+    val user = LocalRequest.current[CurrentUser]
+    val navigator = LocalNavigator.current
+    ...
+    Button({ onClick { navigator.push("/") } }) { Text("Done") }
+}
+```
+
+`RequestContext` carries the path, path parameters, query and headers. Application-specific values —
+a principal, a tenant, a locale — enter through `AttributeKey`, computed once per session from the
+originating HTTP call, which avoids threading a type parameter through the whole configuration DSL.
+
+Because `Link` is a real anchor, it works without JavaScript: middle-click and "open in new tab"
+behave normally, crawlers follow it, and with scripting disabled it falls back to a plain request
+that starts a fresh session on that path.
+
+### Forms
+
+```kotlin
+val title = rememberField(todo.title) {
+    if (it.isBlank()) "A title is required" else null
+}
+
+Input({ classes("input"); bind(title) })
+title.error?.let { P({ classes("error") }) { Text(it) } }
+Button({ disabled(!title.isValid); onClick { save(title.value) } }) { Text("Save") }
+```
+
+The authoritative value lives on the server, so `validate` can consult a database or another service
+without an API in between, and a submit button's disabled state is decided in the same place as the
+rule that disables it. `touched` keeps a fresh form from opening covered in errors: an untouched
+field reports no `error` even while `isValid` is false. `bind` debounces by default, because a field
+that round-trips on every keystroke is the usual way this architecture is made to feel slow.
+
 ### Interaction latency and typing
 
 Every interaction is a round trip, so two things need care.
@@ -246,7 +305,7 @@ control's initial value and is ignored once the user has interacted with it.
 Holding UI state on the server means memory scales with connected users, so per-session cost sets
 the ceiling on how many sessions a node can carry.
 
-Measured with `./gradlew :samples:counter:benchmark` — 1000 concurrent sessions of a 111-node view:
+Measured with `./gradlew :samples:demo:benchmark` — 1000 concurrent sessions of a 111-node view:
 
 ```
 sessions:           1000
@@ -276,7 +335,7 @@ rather than a requirement.
 **Ktor first, with a portable core.** `LiveView` knows nothing about WebSockets or Ktor and can be
 driven straight from a test with no server involved. Adapters for other servers are additive.
 
-**The client is TypeScript.** About 600 lines of DOM manipulation, which ships as 4.6 kB with no
+**The client is TypeScript.** About 600 lines of DOM manipulation, which ships as 4.9 kB with no
 runtime of its own to carry.
 
 ---
@@ -284,16 +343,18 @@ runtime of its own to carry.
 ## 11. Verification
 
 ```bash
-./gradlew test                         # unit tests, asserting exact op streams
-./gradlew :samples:counter:benchmark   # retained heap per session
-./gradlew :samples:counter:run         # http://localhost:8080
+./gradlew test                      # unit tests, asserting exact op streams
+./gradlew :samples:demo:benchmark   # retained heap per session
+./gradlew :samples:demo:run         # http://localhost:8080
 
 cd e2e && npm install && npx playwright test
 ```
 
-26 unit tests and 7 browser tests. The browser tests cover first paint with JavaScript blocked,
-targeted patching, keyed list add/reorder/remove, updates that originate on the server, typing while
-the server pushes unrelated updates, and reconnection with state preserved.
+51 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
+deep links rendering server-side, targeted patching, keyed list add/reorder/remove, updates that
+originate on the server, typing while the server pushes unrelated updates, navigation without a page
+load, back and forward, server-side validation gating a submit, and reconnection with state
+preserved.
 
 Two bugs came out of the browser tests rather than from reasoning about the code:
 
@@ -322,8 +383,7 @@ Two bugs came out of the browser tests rather than from reasoning about the code
   the right place to apply pressure: stop granting frames while the socket's send buffer is full.
 - **Client-only interactivity.** Toggles, dropdowns and tooltips should not need a round trip. A
   `clientOnly {}` escape hatch is the missing piece.
-- Routing and live navigation, forms and validation, file uploads, a testing module, a Spring Boot
-  adapter, telemetry.
+- File uploads, a testing module, a Spring Boot adapter, telemetry, and CI.
 
 Known limitation: `ack` can be set slightly early when a background patch overlaps an inbound event,
 which could let one stale property write through. The fix is to capture the ack at drain time.

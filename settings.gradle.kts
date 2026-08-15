@@ -18,5 +18,5 @@ include(
     ":jetlin-runtime",
     ":jetlin-html",
     ":jetlin-server-ktor",
-    ":samples:counter",
+    ":samples:demo",
 )

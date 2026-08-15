@@ -41,6 +41,7 @@ type Op =
 type ServerMessage =
   | { t: "patch"; rev: number; ack: number; ops: Op[] }
   | { t: "reset"; rev: number; children: NodeSpec[] }
+  | { t: "nav"; url: string; replace?: boolean; title?: string }
   | { t: "error"; message: string; fatal?: boolean };
 
 const ROOT_ID = 0;
@@ -101,6 +102,13 @@ class Jetlin {
     this.url = options.url ?? `${scheme}//${location.host}/jetlin`;
     this.register(ROOT_ID, this.container);
     this.children.set(ROOT_ID, []);
+
+    // Back and forward move the address bar first; the server follows. It is told where the browser
+    // went rather than asked for permission, so history stays authoritative.
+    window.addEventListener("popstate", () => {
+      this.sendRaw(JSON.stringify({ t: "nav", url: location.pathname + location.search }));
+    });
+
     this.open();
   }
 
@@ -153,6 +161,13 @@ class Jetlin {
         break;
       case "patch":
         for (const op of message.ops) this.apply(op, message.ack);
+        break;
+      case "nav":
+        // The DOM for this location arrived in the patch immediately before, so the address bar is
+        // updated last and never points at content that is not on screen yet.
+        if (message.replace) history.replaceState({ jetlin: true }, "", message.url);
+        else history.pushState({ jetlin: true }, "", message.url);
+        if (message.title) document.title = message.title;
         break;
       case "error":
         console.error("[jetlin]", message.message);
@@ -381,8 +396,10 @@ class Jetlin {
   private send(id: number, event: string, payload: Record<string, unknown>): void {
     this.seq += 1;
     this.sentFrom.set(id, this.seq);
-    const frame = JSON.stringify({ t: "event", node: id, event, seq: this.seq, payload });
+    this.sendRaw(JSON.stringify({ t: "event", node: id, event, seq: this.seq, payload }));
+  }
 
+  private sendRaw(frame: string): void {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(frame);
       return;
