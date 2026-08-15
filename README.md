@@ -74,7 +74,7 @@ The demo has a counter, a keyed todo list, and a clock driven from the server.
 ## Test
 
 ```bash
-./gradlew test                          # 15 unit tests, asserting exact op streams
+./gradlew test                          # 26 unit tests, asserting exact op streams
 ./gradlew :samples:counter:benchmark    # retained heap per session
 
 cd e2e && npm install && npx playwright test    # 7 browser tests (server must be running)

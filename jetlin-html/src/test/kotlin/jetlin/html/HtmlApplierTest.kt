@@ -162,6 +162,41 @@ class HtmlApplierTest {
     }
 
     @Test
+    fun `unsafeInnerHtml writes markup through verbatim`() = runTest {
+        harness {
+            Div({ unsafeInnerHtml("<b>bold</b>") })
+        }.use { h ->
+            assertEquals("""<div data-jl="1"><b>bold</b></div>""", h.html())
+        }
+    }
+
+    @Test
+    fun `unsafeInnerHtml updates travel as a property write`() = runTest {
+        var markup by mutableStateOf("<b>one</b>")
+        harness {
+            Div({ unsafeInnerHtml(markup) })
+        }.use { h ->
+            h.act { markup = "<i>two</i>" }
+            assertEquals(listOf(Op.SetProp(1, "innerHTML", PropValue.Str("<i>two</i>"))), h.drain())
+        }
+    }
+
+    @Test
+    fun `an element cannot have both unsafeInnerHtml and children`() = runTest {
+        val failure = runCatching {
+            harness {
+                Div({ unsafeInnerHtml("<b>raw</b>") }) { Text("child") }
+            }.close()
+        }.exceptionOrNull()
+
+        assertTrue(
+            failure?.let { generateSequence(it) { e -> e.cause } }
+                ?.any { it.message?.contains("cannot also have composable children") == true } == true,
+            "expected the conflicting combination to be rejected, got $failure",
+        )
+    }
+
+    @Test
     fun `text content is escaped rather than interpolated`() = runTest {
         harness {
             Div { Text("<script>alert('xss')</script>") }

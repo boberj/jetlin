@@ -132,8 +132,10 @@ Splitting the two solves both: the comparison sees only data, and the lambdas ar
 time.
 
 **Text is a node, not a string.** There is no point at which a value is spliced into markup, so
-there is nothing to escape and nothing to forget to escape. `unsafeHtml()` is the deliberate
-opt-out.
+there is nothing to escape and nothing to forget to escape. `AttrsScope.unsafeInnerHtml()` is the
+deliberate opt-out, for content that is already HTML and already trusted; it rides the existing
+`SetProp` path as an `innerHTML` write, and an element that uses it may not also have composable
+children, since the raw markup and the child nodes would overwrite each other.
 
 ---
 
@@ -187,6 +189,11 @@ registration survives any amount of subtree churn.
 A `GET` renders the composition to HTML and returns it with a session token. The composition stays
 alive in `SessionRegistry`; when the WebSocket connects with that token it adopts the composition
 that is already there, so a page is composed once per session rather than once per request.
+
+The browser's same-origin policy does not apply to WebSockets — any page on any site can open one —
+so the socket handler checks `Origin` against the request's `Host` before looking up a session, and
+refuses the connection otherwise. `JetlinConfig.allowedOrigins` widens this for deployments where the
+page and the socket have different hostnames.
 
 Sessions are reaped on a timer. If no socket ever arrives, or one goes away and does not return
 within the grace period, the composition is closed and its memory released.
@@ -284,7 +291,7 @@ runtime of its own to carry.
 cd e2e && npm install && npx playwright test
 ```
 
-15 unit tests and 7 browser tests. The browser tests cover first paint with JavaScript blocked,
+26 unit tests and 7 browser tests. The browser tests cover first paint with JavaScript blocked,
 targeted patching, keyed list add/reorder/remove, updates that originate on the server, typing while
 the server pushes unrelated updates, and reconnection with state preserved.
 

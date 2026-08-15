@@ -26,6 +26,10 @@ public class HtmlApplier(private val owner: HtmlOwner) : AbstractApplier<HtmlNod
 
     override fun insertBottomUp(index: Int, instance: HtmlNode) {
         val parent = currentElement
+        check(!parent.hasUnsafeInnerHtml) {
+            "<${parent.tag}> uses unsafeInnerHtml and cannot also have composable children: " +
+                "the raw HTML and the child nodes would overwrite each other."
+        }
         parent.children.add(index, instance)
         instance.parent = parent
         if (parent.attached) {

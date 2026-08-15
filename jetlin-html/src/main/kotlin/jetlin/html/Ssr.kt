@@ -47,6 +47,7 @@ private fun StringBuilder.appendElement(node: ElementNode) {
     // On first paint there is no DOM yet, so properties have to be expressed as the attributes
     // that seed them. Once the client is connected they travel as Op.SetProp instead.
     for ((name, value) in node.properties) {
+        if (name == INNER_HTML) continue
         when (value) {
             is PropValue.Str -> append(' ').append(name).append("=\"").append(escapeAttribute(value.v)).append('"')
             is PropValue.Bool -> if (value.v) append(' ').append(name)
@@ -61,7 +62,14 @@ private fun StringBuilder.appendElement(node: ElementNode) {
     append('>')
     if (node.tag in VOID_ELEMENTS) return
 
-    node.children.forEach { appendNode(it) }
+    // innerHTML is the one place a caller can bypass escaping, so it is written out verbatim and
+    // takes the place of children entirely. The applier rejects an element that has both.
+    val raw = node.properties[INNER_HTML]
+    if (raw is PropValue.Str) {
+        append(raw.v)
+    } else {
+        node.children.forEach { appendNode(it) }
+    }
     append("</").append(node.tag).append('>')
 }
 

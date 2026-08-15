@@ -20,6 +20,15 @@ import kotlinx.coroutines.launch
 
 public class JetlinConfig {
     public var framePolicy: FramePolicy = FramePolicy.Immediate
+
+    /**
+     * Origins permitted to open a session socket, as full origins (`https://app.example`).
+     *
+     * Empty means same-origin only, checked against the request's `Host`. Set this when the browser
+     * loads the page from a different host than it opens the socket to.
+     */
+    public var allowedOrigins: Set<String> = emptySet()
+
     internal val views: MutableMap<String, ViewRegistration> = LinkedHashMap()
 
     /** Registers a live view at [path]. The composable is re-instantiated per visitor. */
@@ -70,6 +79,19 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         }
 
         webSocket("/jetlin") {
+            // The browser's same-origin policy does not cover WebSockets: any page on any site can
+            // open one to this endpoint. Without this check, a hostile page that got hold of a
+            // token could drive a victim's session.
+            if (!originAllowed(
+                    origin = call.request.headers["Origin"],
+                    host = call.request.headers["Host"],
+                    allowed = config.allowedOrigins,
+                )
+            ) {
+                sendMessage(ServerMessage.Error("Origin not allowed", fatal = true))
+                return@webSocket
+            }
+
             val hello = receiveMessage() as? ClientMessage.Hello ?: return@webSocket
             val session = registry.attach(hello.token)
             if (session == null) {
@@ -99,6 +121,22 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Decides whether a socket may be opened from [origin].
+ *
+ * A missing `Origin` header means the caller is not a browser — a test, a CLI, a service — and is
+ * allowed through, because the header exists to identify the *page* that initiated the request and
+ * only browsers can be trusted to set it honestly. When [allowed] is empty the origin must match the
+ * request's own `Host`, which is the same-origin case.
+ */
+internal fun originAllowed(origin: String?, host: String?, allowed: Set<String>): Boolean {
+    if (origin == null) return true
+    if (allowed.isNotEmpty()) return origin in allowed
+    if (host == null) return false
+    val originAuthority = origin.substringAfter("://", missingDelimiterValue = "")
+    return originAuthority.isNotEmpty() && originAuthority == host
 }
 
 private suspend fun io.ktor.websocket.WebSocketSession.receiveMessage(): ClientMessage? {

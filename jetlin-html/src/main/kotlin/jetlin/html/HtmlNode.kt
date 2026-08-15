@@ -12,6 +12,9 @@ import kotlinx.coroutines.channels.ReceiveChannel
 
 public typealias EventHandler = (EventPayload) -> Unit
 
+/** DOM property carrying unescaped markup; see [jetlin.html.AttrsScope.unsafeInnerHtml]. */
+internal const val INNER_HTML: String = "innerHTML"
+
 /**
  * A node in the server-side virtual DOM.
  *
@@ -65,6 +68,8 @@ public class ElementNode internal constructor(
      * over whatever they need.
      */
     internal var handlers: Map<String, EventHandler> = emptyMap()
+
+    internal val hasUnsafeInnerHtml: Boolean get() = properties.containsKey(INNER_HTML)
 
     /**
      * Reconciles declared state against current state, emitting one op per actual difference.

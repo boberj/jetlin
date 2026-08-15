@@ -42,6 +42,18 @@ public class AttrsScope internal constructor() {
     public fun value(value: String): Unit = prop("value", value)
     public fun checked(value: Boolean): Unit = prop("checked", value)
 
+    /**
+     * Writes [html] into the element without escaping it.
+     *
+     * Everywhere else in Jetlin, text is a node and cannot become markup. This is the one deliberate
+     * exception, for content that is already HTML and already trusted — rendered Markdown, a sanitized
+     * fragment, an inline SVG. Passing anything derived from user input makes the page vulnerable.
+     *
+     * The element may not also have composable children; the applier rejects that combination rather
+     * than letting the two silently overwrite each other.
+     */
+    public fun unsafeInnerHtml(html: String): Unit = prop(INNER_HTML, html)
+
     public fun on(event: String, spec: ListenerSpec = ListenerSpec(), handler: EventHandler) {
         listeners[event] = spec
         handlers[event] = handler
