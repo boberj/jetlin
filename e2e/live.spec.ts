@@ -7,10 +7,22 @@ import { expect, test } from "@playwright/test";
  * views without reloading the page.
  */
 
+/**
+ * The demo's todo store is process-wide — that is the point of it, since two browser windows
+ * showing each other's edits is one of the things worth demonstrating. It also means tests share
+ * it, so each one starts by putting it back to its seeded state rather than assuming whatever the
+ * last test left behind.
+ */
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await page.locator("[data-test=reset]").click();
+  await expect(page.locator("[data-test=todo]")).toHaveCount(3);
+});
+
 test("first paint is server-rendered HTML, before any script runs", async ({ page }) => {
   await page.route("**/jetlin.js", (route) => route.abort());
   await page.goto("/");
-  await expect(page.locator("[data-test=todo]")).not.toHaveCount(0);
+  await expect(page.locator("[data-test=todo]")).toHaveCount(3);
   await expect(page.locator(".todo-text").first()).toHaveText("Read the architecture doc");
 });
 
@@ -22,21 +34,14 @@ test("a deep link renders its own view server-side", async ({ page }) => {
 });
 
 test("checking a box updates state on the server and patches the DOM", async ({ page }) => {
-  await page.goto("/");
   const first = page.locator("[data-test=todo]").first();
-  const checkbox = first.locator("input[type=checkbox]");
-
-  await checkbox.check();
-  await expect(first.locator(".todo-text")).toHaveClass(/done/);
-
-  // Toggled back so the shared store is left as it was found.
-  await checkbox.uncheck();
   await expect(first.locator(".todo-text")).not.toHaveClass(/done/);
+
+  await first.locator("input[type=checkbox]").check();
+  await expect(first.locator(".todo-text")).toHaveClass(/done/);
 });
 
 test("the patch only touches the node that changed", async ({ page }) => {
-  await page.goto("/");
-
   // Wait for a server-pushed tick before tagging anything. The client rebuilds the container when
   // it receives the session's opening snapshot, and a tick can only arrive after that, so this is
   // proof the socket is live and the DOM being tagged is the DOM that patches will update.
@@ -50,42 +55,47 @@ test("the patch only touches the node that changed", async ({ page }) => {
     });
   });
 
-  const checkbox = page.locator("[data-test=todo]").first().locator("input[type=checkbox]");
-  await checkbox.check();
+  await page.locator("[data-test=todo]").first().locator("input[type=checkbox]").check();
   await expect(page.locator(".todo-text").first()).toHaveClass(/done/);
 
   const markers = await page.evaluate(() =>
     Array.from(document.querySelectorAll("[data-marker]")).map((n) => (n as HTMLElement).dataset.marker),
   );
   expect(markers).toEqual(["m0", "m1", "m2"]);
-
-  await checkbox.uncheck();
 });
 
 test("adding, reordering and removing keyed list items", async ({ page }) => {
-  await page.goto("/");
-
   await page.locator("[data-test=draft]").fill("Third thing");
   await page.locator("[data-test=add]").click();
+  await expect(page.locator("[data-test=todo]")).toHaveCount(4);
   await expect(page.locator(".todo-text").last()).toHaveText("Third thing");
+  // Cleared by the server, which means the round-trip completed.
   await expect(page.locator("[data-test=draft]")).toHaveValue("");
 
   await page.locator("li", { hasText: "Third thing" }).getByText("up").click();
   await expect(page.locator(".todo-text").nth(2)).toHaveText("Third thing");
 
   await page.locator("li", { hasText: "Third thing" }).getByText("remove").click();
-  await expect(page.locator(".todo-text", { hasText: "Third thing" })).toHaveCount(0);
+  await expect(page.locator("[data-test=todo]")).toHaveCount(3);
+});
+
+test("resetting is itself a server-driven update", async ({ page }) => {
+  await page.locator("[data-test=draft]").fill("Something extra");
+  await page.locator("[data-test=add]").click();
+  await expect(page.locator("[data-test=todo]")).toHaveCount(4);
+
+  await page.locator("[data-test=reset]").click();
+  await expect(page.locator("[data-test=todo]")).toHaveCount(3);
+  await expect(page.locator(".todo-text").first()).toHaveText("Read the architecture doc");
 });
 
 test("server pushes updates with no client interaction", async ({ page }) => {
-  await page.goto("/");
   const ticks = page.locator("[data-test=ticks]");
   await expect(ticks).toHaveText("0");
   await expect(ticks).toHaveText("2", { timeout: 8000 });
 });
 
 test("a server push does not clobber text the user is typing", async ({ page }) => {
-  await page.goto("/");
   const draft = page.locator("[data-test=draft]");
 
   await draft.click();
@@ -96,8 +106,6 @@ test("a server push does not clobber text the user is typing", async ({ page }) 
 });
 
 test("navigation swaps the view without reloading the page", async ({ page }) => {
-  await page.goto("/");
-
   // Survives a client-side navigation; would be wiped by a real page load.
   await page.evaluate(() => ((window as unknown as { sentinel?: string }).sentinel = "alive"));
 
@@ -110,13 +118,12 @@ test("navigation swaps the view without reloading the page", async ({ page }) =>
 });
 
 test("the back button returns to the previous view", async ({ page }) => {
-  await page.goto("/");
   await page.locator(".todo-text").first().click();
   await expect(page).toHaveURL("/todo/1");
 
   await page.goBack();
   await expect(page).toHaveURL("/");
-  await expect(page.locator("[data-test=todo]")).not.toHaveCount(0);
+  await expect(page.locator("[data-test=todo]")).toHaveCount(3);
 
   await page.goForward();
   await expect(page).toHaveURL("/todo/1");
@@ -124,15 +131,10 @@ test("the back button returns to the previous view", async ({ page }) => {
 });
 
 test("validation runs on the server and blocks the save", async ({ page }) => {
-  // Works on an item it creates, because the demo's store is shared across every session in the
-  // process and a test that edited a fixture would leave the next run looking at its leftovers.
-  await page.goto("/");
-  await page.locator("[data-test=draft]").fill("Item under test");
-  await page.locator("[data-test=add]").click();
-  await page.locator(".todo-text", { hasText: "Item under test" }).click();
-
+  await page.goto("/todo/1");
   const title = page.locator("[data-test=title]");
   const save = page.locator("[data-test=save]");
+
   await expect(save).toBeEnabled();
 
   await title.fill("");
@@ -145,10 +147,7 @@ test("validation runs on the server and blocks the save", async ({ page }) => {
 
   await save.click();
   await expect(page).toHaveURL("/");
-  await expect(page.locator(".todo-text", { hasText: "Renamed on the server" })).toHaveCount(1);
-
-  await page.locator("li", { hasText: "Renamed on the server" }).getByText("remove").click();
-  await expect(page.locator(".todo-text", { hasText: "Renamed on the server" })).toHaveCount(0);
+  await expect(page.locator(".todo-text").first()).toHaveText("Renamed on the server");
 });
 
 test("an unknown path renders a not-found view", async ({ page }) => {
@@ -157,7 +156,6 @@ test("an unknown path renders a not-found view", async ({ page }) => {
 });
 
 test("session state survives a dropped connection", async ({ page }) => {
-  await page.goto("/");
   await page.locator("[data-test=draft]").fill("Typed before the drop");
 
   await page.evaluate(() => (window as unknown as { jetlin: { disconnect(): void } }).jetlin.disconnect());
@@ -167,4 +165,7 @@ test("session state survives a dropped connection", async ({ page }) => {
   // half-finished draft is still there.
   await expect(page.locator("body")).not.toHaveClass(/jl-disconnected/, { timeout: 15_000 });
   await expect(page.locator("[data-test=draft]")).toHaveValue("Typed before the drop");
+
+  await page.locator("[data-test=add]").click();
+  await expect(page.locator(".todo-text").last()).toHaveText("Typed before the drop");
 });

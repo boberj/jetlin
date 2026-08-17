@@ -27,6 +27,22 @@ object TodoStore {
     val todos = mutableStateListOf<Todo>()
 
     init {
+        reset()
+    }
+
+    /**
+     * Returns the demo to the state it starts in.
+     *
+     * Shared state is the point of this store, which also means anyone can leave it in a mess — a
+     * visitor who deleted everything, or a test that just finished. Rather than have callers tidy up
+     * after themselves, there is one button that puts it back.
+     *
+     * Every open session sees this immediately: they read the same state objects, so they all
+     * recompose.
+     */
+    fun reset() {
+        todos.clear()
+        nextId = 1
         add("Read the architecture doc", "Start with the update path in section 1.")
         add("Run the tests", "./gradlew test and the Playwright suite.")
         add("Open this page twice", "Edits in one window show up in the other.")

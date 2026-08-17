@@ -49,6 +49,11 @@ private fun Shell(content: @Composable () -> Unit) {
             Link("/", { classes("brand") }) { Text("Jetlin") }
             Link("/") { Text("Todos") }
             Link("/about") { Text("About") }
+            Button({
+                classes("link")
+                attr("data-test", "reset")
+                onClick { TodoStore.reset() }
+            }) { Text("Reset demo data") }
         }
         content()
     }

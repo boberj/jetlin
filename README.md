@@ -98,7 +98,8 @@ val expanded = remember { mutableStateOf(false) }   // does not; recomputing cos
 
 A three-page app: a keyed todo list, a detail page with server-side validation reached by a real
 `<a href>` that navigates without reloading, and a clock driven from the server. The store is shared
-across sessions, so opening two windows shows edits in one appearing in the other.
+across sessions, so opening two windows shows edits in one appearing in the other — and "Reset demo
+data" puts it back, in every open window at once.
 
 ## Test
 
@@ -106,16 +107,18 @@ across sessions, so opening two windows shows edits in one appearing in the othe
 ./gradlew test                       # 66 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 12 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 13 browser tests (server must be running)
 ```
 
 Unit tests assert on exact op lists rather than `contains`, so an update that touches more of the
 page than it needs to fails the build. Browser tests cover first paint with JavaScript blocked, deep
 links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
 typing while the server sends unrelated updates, navigation without a page load, back and forward,
-validation gating a submit, and reconnection with state preserved. Hibernating and waking a session
-is covered at the integration level instead, driving a real socket, because a browser reconnects on
-its own too quickly to sit out a grace period.
+validation gating a submit, and reconnection with state preserved. Each one resets the demo's shared
+store first, so they assert exact counts and contents rather than working around whatever the
+previous test left. Hibernating and waking a session is covered at the integration level instead,
+driving a real socket, because a browser reconnects on its own too quickly to sit out a grace
+period.
 
 ## Modules
 
