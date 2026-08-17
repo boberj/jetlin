@@ -89,7 +89,7 @@ across sessions, so opening two windows shows edits in one appearing in the othe
 ## Test
 
 ```bash
-./gradlew test                       # 55 unit tests, asserting exact op streams
+./gradlew test                       # 56 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap per session
 
 cd e2e && npm install && npx playwright test    # 12 browser tests (server must be running)
@@ -111,6 +111,7 @@ validation gating a submit, and reconnection with state preserved.
 | `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
 | `samples/demo` | Runnable three-page demo and the memory benchmark |
+| `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
 
 ## CI
 

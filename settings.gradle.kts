@@ -19,4 +19,5 @@ include(
     ":jetlin-html",
     ":jetlin-server-ktor",
     ":samples:demo",
+    ":conventions",
 )

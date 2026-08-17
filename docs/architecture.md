@@ -363,7 +363,7 @@ runtime of its own to carry.
 cd e2e && npm install && npx playwright test
 ```
 
-55 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
+56 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
 deep links rendering server-side, targeted patching, keyed list add/reorder/remove, updates that
 originate on the server, typing while the server pushes unrelated updates, navigation without a page
 load, back and forward, server-side validation gating a submit, and reconnection with state
