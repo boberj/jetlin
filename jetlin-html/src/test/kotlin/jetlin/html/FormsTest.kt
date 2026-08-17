@@ -14,7 +14,7 @@ import kotlinx.coroutines.runBlocking
 class FormsTest {
 
     @Test
-    fun `an untouched field reports no error even when invalid`() = runBlocking {
+    fun `an untouched field reports no error even when invalid`(): Unit = runBlocking {
         lateinit var field: Field<String>
         val view = LiveView { _ ->
             field = rememberField("") { if (it.isBlank()) "Required" else null }
@@ -29,7 +29,7 @@ class FormsTest {
     }
 
     @Test
-    fun `editing marks the field touched and surfaces the error`() = runBlocking {
+    fun `editing marks the field touched and surfaces the error`(): Unit = runBlocking {
         lateinit var field: Field<String>
         val view = LiveView { _ ->
             field = rememberField("ok") { if (it.isBlank()) "Required" else null }
@@ -45,7 +45,7 @@ class FormsTest {
     }
 
     @Test
-    fun `reset returns the field to a pristine state`() = runBlocking {
+    fun `reset returns the field to a pristine state`(): Unit = runBlocking {
         lateinit var field: Field<String>
         val view = LiveView { _ ->
             field = rememberField("") { if (it.isBlank()) "Required" else null }
@@ -63,7 +63,7 @@ class FormsTest {
     }
 
     @Test
-    fun `bind renders the value as a DOM property and debounces input`() = runBlocking {
+    fun `bind renders the value as a DOM property and debounces input`(): Unit = runBlocking {
         val view = LiveView { _ ->
             val field = rememberField("hello")
             Input({ bind(field, debounceMs = 250) })
@@ -79,7 +79,7 @@ class FormsTest {
     }
 
     @Test
-    fun `a server-side value change reaches the input as a property write`() = runBlocking {
+    fun `a server-side value change reaches the input as a property write`(): Unit = runBlocking {
         lateinit var field: Field<String>
         val view = LiveView { _ ->
             field = rememberField("before")

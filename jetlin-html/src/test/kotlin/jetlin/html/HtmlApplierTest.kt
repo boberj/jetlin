@@ -28,7 +28,7 @@ import kotlinx.coroutines.test.runTest
 class HtmlApplierTest {
 
     @Test
-    fun `renders server-side HTML with node ids`() = runTest {
+    fun `renders server-side HTML with node ids`(): Unit = runTest {
         harness {
             Div({ classes("card") }) {
                 H1 { Text("Hello") }
@@ -46,7 +46,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `text change produces exactly one SetText`() = runTest {
+    fun `text change produces exactly one SetText`(): Unit = runTest {
         var count by mutableStateOf(0)
         harness {
             Div {
@@ -60,7 +60,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `attribute change produces exactly one SetAttr and leaves siblings alone`() = runTest {
+    fun `attribute change produces exactly one SetAttr and leaves siblings alone`(): Unit = runTest {
         var active by mutableStateOf(false)
         harness {
             Div {
@@ -74,7 +74,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `appending a list item ships one Insert carrying the whole subtree`() = runTest {
+    fun `appending a list item ships one Insert carrying the whole subtree`(): Unit = runTest {
         val items = mutableStateListOf("one")
         harness {
             Ul {
@@ -96,7 +96,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `removing a list item ships one Remove`() = runTest {
+    fun `removing a list item ships one Remove`(): Unit = runTest {
         val items = mutableStateListOf("one", "two", "three")
         harness {
             Ul { items.forEach { item -> key(item) { Li { Text(item) } } } }
@@ -107,7 +107,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `reordering keyed items moves nodes instead of rebuilding them`() = runTest {
+    fun `reordering keyed items moves nodes instead of rebuilding them`(): Unit = runTest {
         val items = mutableStateListOf("a", "b", "c")
         harness {
             Ul { items.forEach { item -> key(item) { Li { Text(item) } } } }
@@ -126,7 +126,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `unchanged content produces no ops at all`() = runTest {
+    fun `unchanged content produces no ops at all`(): Unit = runTest {
         var unrelated by mutableStateOf(0)
         harness {
             Div { Text("constant") }
@@ -137,7 +137,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `events route to the handler that is current, not the one that was captured first`() = runTest {
+    fun `events route to the handler that is current, not the one that was captured first`(): Unit = runTest {
         var count by mutableStateOf(0)
         val seen = mutableListOf<Int>()
         harness {
@@ -151,7 +151,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `value is set as a DOM property rather than an attribute`() = runTest {
+    fun `value is set as a DOM property rather than an attribute`(): Unit = runTest {
         var text by mutableStateOf("a")
         harness {
             Input({ value(text); onInput { } })
@@ -162,7 +162,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `unsafeInnerHtml writes markup through verbatim`() = runTest {
+    fun `unsafeInnerHtml writes markup through verbatim`(): Unit = runTest {
         harness {
             Div({ unsafeInnerHtml("<b>bold</b>") })
         }.use { h ->
@@ -171,7 +171,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `unsafeInnerHtml updates travel as a property write`() = runTest {
+    fun `unsafeInnerHtml updates travel as a property write`(): Unit = runTest {
         var markup by mutableStateOf("<b>one</b>")
         harness {
             Div({ unsafeInnerHtml(markup) })
@@ -182,7 +182,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `an element cannot have both unsafeInnerHtml and children`() = runTest {
+    fun `an element cannot have both unsafeInnerHtml and children`(): Unit = runTest {
         val failure = runCatching {
             harness {
                 Div({ unsafeInnerHtml("<b>raw</b>") }) { Text("child") }
@@ -197,7 +197,7 @@ class HtmlApplierTest {
     }
 
     @Test
-    fun `text content is escaped rather than interpolated`() = runTest {
+    fun `text content is escaped rather than interpolated`(): Unit = runTest {
         harness {
             Div { Text("<script>alert('xss')</script>") }
         }.use { h ->

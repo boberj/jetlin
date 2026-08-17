@@ -176,9 +176,54 @@ public class HtmlOwner {
 
     internal fun register(node: ElementNode) { byId[node.id] = node }
     internal fun unregister(node: ElementNode) { byId.remove(node.id) }
+
+    /**
+     * Whether edits are worth writing down.
+     *
+     * With no client attached they are not: the composition keeps running — a timer keeps ticking,
+     * a shared store keeps changing — but whoever connects next is sent the whole tree anyway, so
+     * recording those edits would grow memory to describe a page nobody will ever be shown.
+     */
+    private var recording = true
+
+    private var overflowed = false
+
+    /**
+     * Ceiling on buffered edits before falling back to resending the tree.
+     *
+     * A client that stops reading, or reads far slower than the session produces updates, would
+     * otherwise pin unbounded memory. Past this point the buffer is dropped and the next message is
+     * a full snapshot: the session degrades to coarser updates rather than to an outage.
+     */
+    public var maxBufferedOps: Int = 10_000
+
     internal fun record(op: Op) {
+        if (!recording || overflowed) return
+        if (ops.size >= maxBufferedOps) {
+            ops.clear()
+            overflowed = true
+            dirty.trySend(Unit)
+            return
+        }
         ops += op
         dirty.trySend(Unit)
+    }
+
+    /** True once the buffer was dropped; the next message must be a full tree, not a patch. */
+    internal val hasOverflowed: Boolean get() = overflowed
+
+    /** Starts recording edits again from a known-good baseline. */
+    internal fun startRecording() {
+        recording = true
+        overflowed = false
+        ops.clear()
+    }
+
+    /** Stops recording and discards what is buffered. Called when the last client goes away. */
+    internal fun stopRecording() {
+        recording = false
+        overflowed = false
+        ops.clear()
     }
 
     /**

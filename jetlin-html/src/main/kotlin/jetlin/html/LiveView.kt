@@ -70,6 +70,14 @@ public class LiveView(
     public suspend fun renderHtml(): String = host.confined { renderToHtml(owner) }
 
     /**
+     * Suspends until every pending recomposition has been applied.
+     *
+     * Needed by anything driving a view without a browser — a test, a renderer, a screenshot tool —
+     * to know that state written from outside has finished taking effect.
+     */
+    public suspend fun awaitIdle(): Unit = host.awaitIdle()
+
+    /**
      * The whole tree as a single message, for a client attaching or rejoining.
      *
      * Buffered ops are discarded first. A composition keeps running while no client is attached, so
@@ -78,10 +86,20 @@ public class LiveView(
      * twice.
      */
     public suspend fun reset(): ServerMessage.Reset = host.confined {
-        owner.drainOps()
         pendingNavigations.clear()
+        owner.startRecording()
         ServerMessage.Reset(++rev, owner.snapshotChildren())
     }
+
+    /**
+     * Tells the view that nobody is listening any more.
+     *
+     * The composition stays alive — a reconnecting client should find its session where it left it —
+     * but edits stop being recorded, because the next client to attach is sent the whole tree
+     * regardless. Without this, a session with a running timer would accumulate updates for a page
+     * that will never be shown.
+     */
+    public suspend fun clientDetached(): Unit = host.confined { owner.stopRecording() }
 
     /**
      * Applies one client message and waits for the resulting recomposition to settle. Anything it
@@ -124,9 +142,16 @@ public class LiveView(
         for (signal in owner.dirtySignals) {
             host.awaitIdle()
             val batch = host.confined {
-                val ops = owner.drainOps()
                 buildList {
-                    if (ops.isNotEmpty()) add(ServerMessage.Patch(++rev, ack, ops))
+                    if (owner.hasOverflowed) {
+                        // Too far behind to patch incrementally. Resending the tree costs more
+                        // bytes once, but bounds what one slow client can make the server hold.
+                        owner.startRecording()
+                        add(ServerMessage.Reset(++rev, owner.snapshotChildren()))
+                    } else {
+                        val ops = owner.drainOps()
+                        if (ops.isNotEmpty()) add(ServerMessage.Patch(++rev, ack, ops))
+                    }
                     while (pendingNavigations.isNotEmpty()) add(pendingNavigations.removeFirst())
                 }
             }

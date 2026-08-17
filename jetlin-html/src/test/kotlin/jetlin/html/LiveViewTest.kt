@@ -22,7 +22,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class LiveViewTest {
 
     @Test
-    fun `navigating swaps the view and tells the browser where it went`() = withNavigatingView { view, received ->
+    fun `navigating swaps the view and tells the browser where it went`(): Unit = withNavigatingView { view, received ->
         // Node 1 is the button; clicking it calls navigator.push("/b").
         view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1))
         received.awaitAtLeast(2)
@@ -37,7 +37,7 @@ class LiveViewTest {
     }
 
     @Test
-    fun `the patch arrives before the address bar changes`() = withNavigatingView { view, received ->
+    fun `the patch arrives before the address bar changes`(): Unit = withNavigatingView { view, received ->
         view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1))
         received.awaitAtLeast(2)
 
@@ -47,7 +47,7 @@ class LiveViewTest {
     }
 
     @Test
-    fun `a browser-initiated navigation is followed, not echoed back`() = withNavigatingView { view, received ->
+    fun `a browser-initiated navigation is followed, not echoed back`(): Unit = withNavigatingView { view, received ->
         // The user pressed back, so the address bar has already moved.
         view.dispatch(ClientMessage.Navigate("/b"))
         received.awaitAtLeast(1)
@@ -61,7 +61,7 @@ class LiveViewTest {
     }
 
     @Test
-    fun `navigating to the current location does nothing`() = withNavigatingView(start = "/b") { view, received ->
+    fun `navigating to the current location does nothing`(): Unit = withNavigatingView(start = "/b") { view, received ->
         view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1))
         delay(200)
 
@@ -69,7 +69,7 @@ class LiveViewTest {
     }
 
     @Test
-    fun `the request is readable from any depth of the composition`() = runBlocking {
+    fun `the request is readable from any depth of the composition`(): Unit = runBlocking {
         val view = LiveView(RequestContext(path = "/todo/7", pathParams = mapOf("id" to "7"))) { _ ->
             Div {
                 Div {

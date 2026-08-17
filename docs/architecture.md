@@ -300,10 +300,23 @@ control's initial value and is ignored once the user has interacted with it.
 
 ---
 
-## 9. Memory
+## 9. Memory and back-pressure
 
 Holding UI state on the server means memory scales with connected users, so per-session cost sets
 the ceiling on how many sessions a node can carry.
+
+A composition outlives its socket, which is what lets a reconnecting user find their session where
+they left it. That also means a session with a running timer or a subscription to a shared store
+keeps producing updates whether or not anyone is listening, and those updates must not accumulate.
+Two limits apply:
+
+- **With no client attached, edits are not recorded at all.** Whoever connects next is sent the whole
+  tree anyway, so writing down the intervening edits would grow memory to describe a page nobody will
+  be shown. The composition keeps running; only the recording stops.
+- **With a client attached but too far behind, the buffer is dropped** once it passes
+  `maxBufferedOps` (10,000 by default) and the next message is a full snapshot instead of a patch.
+  Resending the tree costs more bytes once, but it bounds what a single slow reader can make the
+  server hold. The session degrades to coarser updates rather than to an outage.
 
 Measured with `./gradlew :samples:demo:benchmark` — 1000 concurrent sessions of a 111-node view:
 
@@ -350,7 +363,7 @@ runtime of its own to carry.
 cd e2e && npm install && npx playwright test
 ```
 
-51 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
+55 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
 deep links rendering server-side, targeted patching, keyed list add/reorder/remove, updates that
 originate on the server, typing while the server pushes unrelated updates, navigation without a page
 load, back and forward, server-side validation gating a submit, and reconnection with state
@@ -379,8 +392,6 @@ Two bugs came out of the browser tests rather than from reasoning about the code
   first load. The scheme is worked out — `data-jl` ids are already emitted, text nodes need
   `data-jl-t="index:id"` on their parent, and adjacent text nodes need separator comments because
   browsers merge them — but the reset path was needed for rehydration anyway and was built first.
-- **Back-pressure.** A slow or absent client currently buffers ops without bound. The frame clock is
-  the right place to apply pressure: stop granting frames while the socket's send buffer is full.
 - **Client-only interactivity.** Toggles, dropdowns and tooltips should not need a round trip. A
   `clientOnly {}` escape hatch is the missing piece.
 - File uploads, a testing module, a Spring Boot adapter, telemetry, and CI.

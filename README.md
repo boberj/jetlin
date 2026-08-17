@@ -71,7 +71,7 @@ boundary to design — a handler closes over the objects it needs and calls stra
 **Early.** The core is built and tested end to end in a browser, with routing, request context,
 live navigation and forms on top of it. [`docs/architecture.md`](docs/architecture.md) has the full
 design: the update path, the protocol, sessions, input handling, design decisions, and what is
-designed but not yet built (hibernation, adopting server-rendered DOM, back-pressure, uploads).
+designed but not yet built (hibernation, adopting server-rendered DOM, uploads).
 
 Measured at **134 kB of retained heap per live session**, 1000 concurrent sessions in 131 MB. Since
 session state lives on the server, this is the number that sets how many users a node can carry.
@@ -89,7 +89,7 @@ across sessions, so opening two windows shows edits in one appearing in the othe
 ## Test
 
 ```bash
-./gradlew test                       # 51 unit tests, asserting exact op streams
+./gradlew test                       # 55 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap per session
 
 cd e2e && npm install && npx playwright test    # 12 browser tests (server must be running)
@@ -111,6 +111,12 @@ validation gating a submit, and reconnection with state preserved.
 | `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
 | `samples/demo` | Runnable three-page demo and the memory benchmark |
+
+## CI
+
+The pipeline lives in [`ci/github-actions.yml`](ci/github-actions.yml) and is **not active yet** —
+move it to `.github/workflows/ci.yml` to enable it. See [`ci/README.md`](ci/README.md) for why it is
+parked there and what it checks.
 
 ## Building the client
 

@@ -14,7 +14,7 @@ import kotlinx.coroutines.test.runTest
 class CompositionHostTest {
 
     @Test
-    fun `initial composition reaches the applier before setContent returns`() = runTest {
+    fun `initial composition reaches the applier before setContent returns`(): Unit = runTest {
         val root = TestNode("root")
         val applier = TestApplier(root)
         CompositionHost(applier).use { host ->
@@ -28,7 +28,7 @@ class CompositionHostTest {
     }
 
     @Test
-    fun `state change recomposes and mutates the tree`() = runTest {
+    fun `state change recomposes and mutates the tree`(): Unit = runTest {
         val root = TestNode("root")
         var showSecond by mutableStateOf(false)
         CompositionHost(TestApplier(root)).use { host ->
@@ -47,7 +47,7 @@ class CompositionHostTest {
     }
 
     @Test
-    fun `writes batched into one snapshot produce one recomposition pass`() = runTest {
+    fun `writes batched into one snapshot produce one recomposition pass`(): Unit = runTest {
         val root = TestNode("root")
         var first by mutableStateOf(0)
         var second by mutableStateOf(0)
@@ -66,7 +66,7 @@ class CompositionHostTest {
     }
 
     @Test
-    fun `state written outside the composition still recomposes`() = runTest {
+    fun `state written outside the composition still recomposes`(): Unit = runTest {
         val root = TestNode("root")
         val label = mutableStateOf("before")
         CompositionHost(TestApplier(root)).use { host ->
@@ -83,7 +83,7 @@ class CompositionHostTest {
     }
 
     @Test
-    fun `composition failure surfaces to the caller`() = runTest {
+    fun `composition failure surfaces to the caller`(): Unit = runTest {
         val root = TestNode("root")
         var boom by mutableStateOf(false)
         CompositionHost(TestApplier(root)).use { host ->

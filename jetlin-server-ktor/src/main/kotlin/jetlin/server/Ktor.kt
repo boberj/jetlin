@@ -151,6 +151,9 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                 }
                 sender.cancel()
             } finally {
+                // Stop recording before releasing the session: the composition keeps running during
+                // the grace period, and whoever reconnects is sent the whole tree anyway.
+                session.view.clientDetached()
                 registry.detach(session)
             }
         }
