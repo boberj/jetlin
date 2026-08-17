@@ -28,6 +28,8 @@ import jetlin.protocol.ClientMessage
 import jetlin.protocol.JetlinJson
 import jetlin.protocol.ServerMessage
 import jetlin.runtime.FramePolicy
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -49,6 +51,17 @@ public class JetlinConfig {
      * and never re-runs the document head.
      */
     public var head: String = ""
+
+    /** Where hibernated sessions are kept. Swap for a shared store to survive restarts. */
+    public var sessionStore: SessionStore = InMemorySessionStore()
+
+    /**
+     * How long a composition stays up after its socket goes away.
+     *
+     * Long enough that a tunnel or a sleeping laptop reattaches to a running composition; past it,
+     * the session hibernates into [sessionStore].
+     */
+    public var disconnectGrace: Duration = 30.seconds
 
     internal val views: MutableList<ViewRegistration> = mutableListOf()
     internal var attributeFactory: (suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>)? = null
@@ -91,7 +104,12 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
     val config = JetlinConfig().apply(configure)
     val router = Router(config.views.map { it.pattern to it })
     install(WebSockets)
-    val registry = SessionRegistry(this)
+    val registry = SessionRegistry(
+        scope = this,
+        store = config.sessionStore,
+        framePolicy = config.framePolicy,
+        disconnectGrace = config.disconnectGrace,
+    ) { current -> RouteHost(router, current) }
 
     routing {
         get("/jetlin/jetlin.js") {
@@ -103,10 +121,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
 
         for (registration in config.views) {
             get(registration.pattern.pattern) {
-                val request = call.toRequestContext(config)
-                val session = registry.create(config.framePolicy, request) { current ->
-                    RouteHost(router, current)
-                }
+                val session = registry.create(call.toRequestContext(config))
                 call.respondText(
                     renderPage(config, registration.title, session),
                     ContentType.Text.Html,
@@ -129,7 +144,9 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             }
 
             val hello = receiveMessage() as? ClientMessage.Hello ?: return@webSocket
-            val session = registry.attach(hello.token)
+            // The socket's own request supplies headers and any attributes derived from them, so a
+            // session woken from storage recomputes its principal instead of trusting a stale one.
+            val session = registry.attach(hello.token, call.toRequestContext(config), hello.url)
             if (session == null) {
                 sendMessage(ServerMessage.Error("Unknown or already-attached session", fatal = true))
                 return@webSocket

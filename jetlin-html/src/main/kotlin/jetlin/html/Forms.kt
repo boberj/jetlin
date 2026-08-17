@@ -1,10 +1,11 @@
 package jetlin.html
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import jetlin.runtime.rememberSaved
+import kotlinx.serialization.builtins.serializer
 
 /**
  * One editable value, its validity, and whether the user has interacted with it yet.
@@ -17,13 +18,15 @@ import androidx.compose.runtime.setValue
  * reports no [error] even when it is invalid, while [isValid] always reflects the real state.
  */
 public class Field<T> internal constructor(
-    initial: T,
+    private val state: MutableState<T>,
+    private val touchedState: MutableState<Boolean>,
     private val validate: (T) -> String?,
 ) {
-    public var value: T by mutableStateOf(initial)
+    public var value: T
+        get() = state.value
+        set(newValue) { state.value = newValue }
 
-    public var touched: Boolean by mutableStateOf(false)
-        private set
+    public val touched: Boolean get() = touchedState.value
 
     /** Validation message to show, or null while the field is untouched or valid. */
     public val error: String? get() = if (touched) validate(value) else null
@@ -33,14 +36,14 @@ public class Field<T> internal constructor(
 
     /** Records an edit. Callers using [bind] get this for free. */
     public fun edit(newValue: T) {
-        value = newValue
-        touched = true
+        state.value = newValue
+        touchedState.value = true
     }
 
     /** Returns to a pristine state, e.g. after a successful submit. */
     public fun reset(newValue: T) {
-        value = newValue
-        touched = false
+        state.value = newValue
+        touchedState.value = false
     }
 }
 
@@ -49,10 +52,35 @@ public class Field<T> internal constructor(
  *
  * [validate] returns the message to show, or null when the value is acceptable. It runs on the
  * server on every read of [Field.error], so it may consult whatever it needs.
+ *
+ * The `Field` wrapper is rebuilt on each pass while its state is remembered, so [validate] is
+ * always the lambda from the current composition rather than one captured on the first.
  */
 @Composable
 public fun <T> rememberField(initial: T, validate: (T) -> String? = { null }): Field<T> =
-    remember { Field(initial, validate) }
+    Field(
+        state = remember { mutableStateOf(initial) },
+        touchedState = remember { mutableStateOf(false) },
+        validate = validate,
+    )
+
+/**
+ * A form field whose value survives the session hibernating.
+ *
+ * For input worth more than it costs to store — a half-written message, a long form partly filled
+ * in — so that a dropped connection or a deploy does not throw the user's typing away. [touched] is
+ * deliberately not saved: a restored form should show the text again, not the errors.
+ */
+@Composable
+public fun rememberSavedField(
+    initial: String,
+    key: String? = null,
+    validate: (String) -> String? = { null },
+): Field<String> = Field(
+    state = rememberSaved(String.serializer(), key) { initial },
+    touchedState = remember { mutableStateOf(false) },
+    validate = validate,
+)
 
 /**
  * Binds a text input to [field]: renders the current value and reports edits back.

@@ -48,12 +48,18 @@ public sealed interface ServerMessage {
 public sealed interface ClientMessage {
 
     /**
-     * Sent once on connect. [token] identifies the session created by the initial page render, so
-     * the server can adopt the composition it already has warm instead of rendering a second time.
+     * Sent once on connect.
+     *
+     * [token] identifies the session created by the initial page render, so the server can adopt
+     * the composition it already has warm instead of rendering a second time.
+     *
+     * [url] is where the browser currently is. It matters when the session had to be woken from
+     * storage: the user may have navigated with the back button while disconnected, in which case
+     * the address bar is right and the stored location is stale.
      */
     @Serializable
     @SerialName("hello")
-    public data class Hello(val token: String) : ClientMessage
+    public data class Hello(val token: String, val url: String? = null) : ClientMessage
 
     @Serializable
     @SerialName("event")

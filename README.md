@@ -69,12 +69,26 @@ boundary to design — a handler closes over the objects it needs and calls stra
 ## Status
 
 **Early.** The core is built and tested end to end in a browser, with routing, request context,
-live navigation and forms on top of it. [`docs/architecture.md`](docs/architecture.md) has the full
-design: the update path, the protocol, sessions, input handling, design decisions, and what is
-designed but not yet built (hibernation, adopting server-rendered DOM, uploads).
+live navigation, forms and hibernation on top of it. [`docs/architecture.md`](docs/architecture.md)
+has the full design: the update path, the protocol, sessions, input handling, design decisions, and
+what is designed but not yet built (a shared session store, adopting server-rendered DOM, uploads).
 
-Measured at **134 kB of retained heap per live session**, 1000 concurrent sessions in 131 MB. Since
-session state lives on the server, this is the number that sets how many users a node can carry.
+Session state lives on the server, so per-session cost sets how many users a node can carry:
+
+| | per session | 1000 sessions |
+|---|---|---|
+| live | 136 kB | 133 MB |
+| hibernated | 346 bytes | 338 kB |
+
+A session whose socket has gone stays live briefly — most disconnections are a tunnel or a sleeping
+laptop — then hibernates: whatever was declared `rememberSaved` is stored and the composition is
+destroyed. `remember` is scratch space and is deliberately not kept, which is what holds the saved
+payload down.
+
+```kotlin
+val draft = rememberSavedField("", key = "draft")   // survives; the user typed it
+val expanded = remember { mutableStateOf(false) }   // does not; recomputing costs nothing
+```
 
 ## Try it
 
@@ -89,8 +103,8 @@ across sessions, so opening two windows shows edits in one appearing in the othe
 ## Test
 
 ```bash
-./gradlew test                       # 56 unit tests, asserting exact op streams
-./gradlew :samples:demo:benchmark    # retained heap per session
+./gradlew test                       # 66 unit tests, asserting exact op streams
+./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
 cd e2e && npm install && npx playwright test    # 12 browser tests (server must be running)
 ```
@@ -99,7 +113,9 @@ Unit tests assert on exact op lists rather than `contains`, so an update that to
 page than it needs to fails the build. Browser tests cover first paint with JavaScript blocked, deep
 links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
 typing while the server sends unrelated updates, navigation without a page load, back and forward,
-validation gating a submit, and reconnection with state preserved.
+validation gating a submit, and reconnection with state preserved. Hibernating and waking a session
+is covered at the integration level instead, driving a real socket, because a browser reconnects on
+its own too quickly to sit out a grace period.
 
 ## Modules
 

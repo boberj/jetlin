@@ -15,6 +15,7 @@ import jetlin.html.LiveView
 import jetlin.html.Span
 import jetlin.html.Text
 import jetlin.html.Ul
+import jetlin.runtime.rememberSaved
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -42,15 +43,29 @@ fun main() = runBlocking {
     val after = usedHeap()
 
     val perSession = (after - before) / sessionCount
-    println("sessions:           $sessionCount")
-    println("nodes per session:  ${views.first().owner.snapshotChildren().let { countNodes(it) }}")
-    println("heap before:        ${before / 1024 / 1024} MB")
-    println("heap after:         ${after / 1024 / 1024} MB")
-    println("per session:        ${perSession / 1024} kB ($perSession bytes)")
+    val nodes = countNodes(views.first().owner.snapshotChildren())
 
-    // Keep the views reachable until after the measurement.
-    check(views.size == sessionCount)
-    views.forEach { it.close() }
+    // Now hibernate every one of them and measure what an idle session actually costs. This is the
+    // whole argument for hibernation: a session nobody is looking at should stop costing what a
+    // live one costs.
+    val snapshots = views.map { it.hibernate() }
+    // Dropping the references is part of what hibernation is: in production the registry forgets
+    // the session and only the snapshot stays reachable. Measuring with the closed views still held
+    // would report the cost of the composition we just destroyed.
+    views.clear()
+    val hibernated = usedHeap()
+    val perHibernated = (hibernated - before) / sessionCount
+
+    println("sessions:           $sessionCount")
+    println("nodes per session:  $nodes")
+    println("heap before:        ${before / 1024 / 1024} MB")
+    println("live:               ${perSession / 1024} kB per session (${(after - before) / 1024 / 1024} MB total)")
+    println("hibernated:         $perHibernated bytes per session (${(hibernated - before) / 1024} kB total)")
+    println("ratio:              ${perSession / perHibernated.coerceAtLeast(1)}x cheaper idle")
+    println("saved keys:         ${snapshots.first().keys}")
+
+    // Keep them reachable until after the measurement.
+    check(snapshots.size == sessionCount)
 }
 
 private fun countNodes(specs: List<jetlin.protocol.NodeSpec>): Int = specs.sumOf { spec ->
@@ -72,12 +87,15 @@ private fun usedHeap(): Long {
 /** A deliberately unremarkable page: a header, some state, and a 20-row list. */
 @Composable
 private fun BenchmarkView() {
+    // One saved value, as a realistic page would have; the rest is recomputable.
+    val draft = rememberSaved(key = "draft") { "a half-typed line of user input" }
     var count by remember { mutableStateOf(0) }
     val rows = remember { mutableStateListOf(*Array(20) { "Row $it" }) }
 
     Div({ classes("page") }) {
         H2 { Text("Session") }
         Div({ classes("row") }) {
+            Span { Text(draft.value) }
             Button({ onClick { count-- } }) { Text("−") }
             Span { Text("$count") }
             Button({ onClick { count++ } }) { Text("+") }

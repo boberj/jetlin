@@ -1,5 +1,6 @@
 package jetlin.html
 
+import androidx.compose.runtime.mutableStateOf
 import jetlin.protocol.ClientMessage
 import jetlin.protocol.EventPayload
 import jetlin.protocol.Op
@@ -99,12 +100,16 @@ class FormsTest {
 
     @Test
     fun `allValid reports the weakest field`() {
-        val good = Field("x") { null }
-        val bad = Field("") { "Required" }
+        val good = field("x") { null }
+        val bad = field("") { "Required" }
         assertTrue(allValid(good))
         assertFalse(allValid(good, bad))
     }
 }
+
+/** Builds a field outside a composition, for the parts that need no session. */
+private fun field(initial: String, validate: (String) -> String?): Field<String> =
+    Field(mutableStateOf(initial), mutableStateOf(false), validate)
 
 /** Routes an input event through the session, the way the transport would. */
 private suspend fun LiveView.typeInto(node: Int, value: String) {

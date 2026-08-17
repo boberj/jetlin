@@ -26,6 +26,7 @@ import jetlin.html.Ul
 import jetlin.html.bind
 import jetlin.html.pathParam
 import jetlin.html.rememberField
+import jetlin.html.rememberSavedField
 import jetlin.server.jetlin
 import kotlinx.coroutines.delay
 
@@ -55,7 +56,11 @@ private fun Shell(content: @Composable () -> Unit) {
 
 @Composable
 private fun TodoListPage() = Shell {
-    val draft = rememberField("") { if (it.isBlank()) "Enter something to do" else null }
+    // Saved rather than remembered: a half-typed todo is worth carrying across a dropped
+    // connection or a deploy, and it is the one piece of state on this page the user authored.
+    val draft = rememberSavedField("", key = "draft") {
+        if (it.isBlank()) "Enter something to do" else null
+    }
 
     Div({ classes("card") }) {
         H1 { Text("Todos") }
@@ -88,7 +93,10 @@ private fun TodoListPage() = Shell {
             }
         }
         P({ classes("hint") }) {
-            Text("${TodoStore.todos.count { !it.done }} left. This list is shared: open a second window.")
+            Text(
+                "${TodoStore.todos.count { !it.done }} left. The list is shared across sessions, " +
+                    "and what you type above survives a disconnect.",
+            )
         }
     }
     ServerClock()

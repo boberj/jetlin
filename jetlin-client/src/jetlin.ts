@@ -63,6 +63,8 @@ class Jetlin {
 
   private socket: WebSocket | null = null;
   private reconnectAttempt = 0;
+  /** Set when the server says the session is unrecoverable; stops the reconnect loop. */
+  private fatal = false;
 
   /** Server node id -> DOM node. */
   private nodes = new Map<number, Node>();
@@ -129,7 +131,15 @@ class Jetlin {
     socket.onopen = () => {
       this.reconnectAttempt = 0;
       document.body.classList.remove("jl-disconnected");
-      socket.send(JSON.stringify({ t: "hello", token: this.token }));
+      // The address bar is authoritative: if the session had to be woken from storage, the user may
+      // have moved with the back button while this socket was down.
+      socket.send(
+        JSON.stringify({
+          t: "hello",
+          token: this.token,
+          url: location.pathname + location.search,
+        }),
+      );
       const pending = this.outbox;
       this.outbox = [];
       for (const frame of pending) socket.send(frame);
@@ -149,6 +159,7 @@ class Jetlin {
   }
 
   private scheduleReconnect(): void {
+    if (this.fatal) return;
     const delay = Math.min(1000 * 2 ** this.reconnectAttempt, 10000);
     this.reconnectAttempt += 1;
     setTimeout(() => this.open(), delay);
@@ -171,6 +182,13 @@ class Jetlin {
         break;
       case "error":
         console.error("[jetlin]", message.message);
+        // The session is gone for good — hibernated past its expiry, or never existed. Reconnecting
+        // cannot help, so start a clean one rather than leaving a page that looks live but is not.
+        if (message.fatal) {
+          this.fatal = true;
+          this.socket?.close();
+          location.reload();
+        }
         break;
     }
   }

@@ -9,8 +9,12 @@ import jetlin.protocol.ClientMessage
 import jetlin.protocol.ServerMessage
 import jetlin.runtime.CompositionHost
 import jetlin.runtime.FramePolicy
+import jetlin.runtime.LocalSaveableStateRegistry
+import jetlin.runtime.SaveableStateRegistry
+import jetlin.runtime.rememberSaved
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonElement
 
 /**
  * One live server-side view: a composition, its virtual DOM, its current location, and the messages
@@ -22,11 +26,15 @@ import kotlinx.coroutines.flow.flow
 public class LiveView(
     initialRequest: RequestContext = RequestContext(path = "/"),
     framePolicy: FramePolicy = FramePolicy.Immediate,
+    restored: Map<String, JsonElement> = emptyMap(),
     private val content: @Composable (RequestContext) -> Unit,
 ) : AutoCloseable {
 
     public val owner: HtmlOwner = HtmlOwner()
     private val host = CompositionHost(HtmlApplier(owner), framePolicy)
+
+    /** Holds state that survives this composition being torn down; see [rememberSaved]. */
+    private val stateRegistry = SaveableStateRegistry(restored)
 
     /**
      * The location this session is currently showing.
@@ -59,6 +67,7 @@ public class LiveView(
                 LocalHtmlOwner provides owner,
                 LocalNavigator provides navigator,
                 LocalRequest provides request,
+                LocalSaveableStateRegistry provides stateRegistry,
             ) {
                 content(request)
             }
@@ -100,6 +109,27 @@ public class LiveView(
      * that will never be shown.
      */
     public suspend fun clientDetached(): Unit = host.confined { owner.stopRecording() }
+
+    /**
+     * Captures the state worth keeping, then shuts the composition down.
+     *
+     * This is what makes an idle session cheap: the slot table, the node tree and the coroutines
+     * all go away, and what remains is a map small enough to hold in memory for thousands of
+     * sessions, or to write somewhere another server can read. The view is unusable afterwards.
+     *
+     * Only values registered through [rememberSaved] survive. Everything in `remember` is
+     * deliberately not captured — it is scratch space, and recomputing it is the point.
+     */
+    public suspend fun hibernate(): Map<String, JsonElement> {
+        awaitIdle()
+        // Closed even if saving fails: a session that cannot be captured still has to release its
+        // composition, or a bad key would leak the very memory hibernation exists to reclaim.
+        return try {
+            host.confined { stateRegistry.performSave() }
+        } finally {
+            close()
+        }
+    }
 
     /**
      * Applies one client message and waits for the resulting recomposition to settle. Anything it

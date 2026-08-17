@@ -7,7 +7,8 @@ server sends and reports events back.
 Phoenix LiveView and Livewire were the inspirations for the idea.
 
 Status: **early**. The core is built and tested end to end in a real browser, with routing, request
-context, navigation and forms on top of it. Section 12 lists what is designed but not yet built.
+context, navigation, forms and hibernation on top of it. Section 12 lists what is designed but not
+yet built.
 
 ---
 
@@ -300,15 +301,63 @@ control's initial value and is ignored once the user has interacted with it.
 
 ---
 
-## 9. Memory and back-pressure
+## 9. Memory, hibernation and back-pressure
 
 Holding UI state on the server means memory scales with connected users, so per-session cost sets
 the ceiling on how many sessions a node can carry.
 
-A composition outlives its socket, which is what lets a reconnecting user find their session where
-they left it. That also means a session with a running timer or a subscription to a shared store
-keeps producing updates whether or not anyone is listening, and those updates must not accumulate.
-Two limits apply:
+Measured with `./gradlew :samples:demo:benchmark` — 1000 concurrent sessions of a 113-node view:
+
+```
+live:               136 kB per session (133 MB total)
+hibernated:         346 bytes per session (338 kB total)
+```
+
+### Hibernation
+
+A session passes through three states. **Live**: the composition is in memory with a socket
+attached. **Orphaned**: the socket has gone, but the composition stays up for a grace period,
+because most disconnections are a tunnel or a sleeping laptop and reattaching to a running
+composition is instant and lossless. **Hibernated**: the grace ran out, so what was declared with
+`rememberSaved` is written to a `SessionStore` and the composition is destroyed — slot table, node
+tree and coroutines all released.
+
+That is where the 400x in the numbers above comes from: an idle session stops costing what a live
+one costs, and starts costing what its saved state costs.
+
+The contract is deliberately visible in the code. `remember` is scratch space and does not survive;
+`rememberSaved` does. Keeping the line explicit means the saved payload stays small by default, and
+an author decides what is worth carrying rather than discovering it.
+
+```kotlin
+val draft = rememberSavedField("", key = "draft")   // survives; the user typed it
+val expanded = remember { mutableStateOf(false) }   // does not; recomputing costs nothing
+```
+
+Which `SessionStore` is in use decides how much a session can survive. The in-memory default covers
+a dropped connection. A shared store — Redis, a table, anything with a TTL — also covers the server
+that created the session going away, which is what lets a rolling deploy happen without logging
+everyone out.
+
+Two details worth knowing:
+
+- **Keys.** `rememberSaved` derives a key from the composable's position, which distinguishes saved
+  values in *different* composables. Two calls side by side in the *same* composable are
+  indistinguishable on the pinned Compose runtime, so they need explicit keys. That case is detected
+  when state is captured and reported, rather than allowed to silently overwrite one value with the
+  other.
+- **Old snapshots.** Stored state outlives deployments, so a snapshot written by a previous version
+  of the code is a normal thing to encounter. A value that no longer deserializes falls back to its
+  initializer instead of failing the session.
+
+On waking, the client's address bar wins over the stored location: the user may have used the back
+button while disconnected. If nothing was saved, nothing is stored — a session with no saved state
+has nothing to come back to, and the client is told plainly so it can start a fresh one.
+
+### Back-pressure
+
+A composition outlives its socket, so a session with a running timer keeps producing updates whether
+or not anyone is listening. Two limits apply:
 
 - **With no client attached, edits are not recorded at all.** Whoever connects next is sent the whole
   tree anyway, so writing down the intervening edits would grow memory to describe a page nobody will
@@ -317,20 +366,6 @@ Two limits apply:
   `maxBufferedOps` (10,000 by default) and the next message is a full snapshot instead of a patch.
   Resending the tree costs more bytes once, but it bounds what a single slow reader can make the
   server hold. The session degrades to coarser updates rather than to an outage.
-
-Measured with `./gradlew :samples:demo:benchmark` — 1000 concurrent sessions of a 111-node view:
-
-```
-sessions:           1000
-nodes per session:  111
-per session:        134 kB
-total:              131 MB
-```
-
-At that rate 10k sessions is roughly 1.3 GB. The benchmark is in the walking skeleton rather than a
-later performance pass because this number determines whether the approach works at all.
-
----
 
 ## 10. Design decisions
 
@@ -363,7 +398,7 @@ runtime of its own to carry.
 cd e2e && npm install && npx playwright test
 ```
 
-56 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
+66 unit tests and 12 browser tests. The browser tests cover first paint with JavaScript blocked,
 deep links rendering server-side, targeted patching, keyed list add/reorder/remove, updates that
 originate on the server, typing while the server pushes unrelated updates, navigation without a page
 load, back and forward, server-side validation gating a submit, and reconnection with state
@@ -383,10 +418,8 @@ Two bugs came out of the browser tests rather than from reasoning about the code
 
 ## 12. Not built yet
 
-- **Hibernation.** `SessionRegistry` is the place for it: instead of closing a disconnected session,
-  capture its saveable state, drop the composition, store the snapshot under the same token. Needs a
-  `SaveableStateRegistry` with kotlinx.serialization savers and a `SessionStore` interface with
-  in-memory and Redis implementations.
+- **A shared `SessionStore`.** The interface and an in-memory implementation exist; a Redis or
+  database-backed one is what makes hibernated sessions survive the node that created them.
 - **Adopting the server-rendered DOM.** The client currently receives a full `reset` when it
   connects instead of binding to the markup already on the page, so the tree is transmitted twice on
   first load. The scheme is worked out — `data-jl` ids are already emitted, text nodes need
