@@ -42,9 +42,11 @@ public class JetlinSession internal constructor(
  *
  * **Hibernated.** The grace ran out. Whatever was declared with `rememberSaved` is written to the
  * [SessionStore] and the composition is destroyed, releasing its slot table, node tree and
- * coroutines. What remains costs a small map instead of a live session, and with a shared store it
- * can be picked up by a different server than the one that created it — which is what lets a
- * rolling deploy happen without logging everyone out.
+ * coroutines. What remains costs a few hundred bytes instead of a live session.
+ *
+ * All of this assumes a single node. Only the hibernated state is ever written anywhere another
+ * process could read it, so a second node could not pick up a session that is live, waiting for its
+ * socket, or inside its grace period — a shared [SessionStore] alone would not change that.
  */
 public class SessionRegistry(
     private val scope: CoroutineScope,
@@ -86,8 +88,17 @@ public class SessionRegistry(
             return live
         }
 
-        val snapshot = store.load(token) ?: return null
-        store.remove(token)
+        // One atomic step, so concurrent reconnects for one token cannot both come away with the
+        // snapshot. The loser sees null and falls through to the caller's unknown-session path.
+        val snapshot = try {
+            store.take(token)
+        } catch (t: Throwable) {
+            // A store that is unreachable should cost this reconnect, not the connection. Treating
+            // it as a miss lands the client on a fresh session, which is what an expired snapshot
+            // already does.
+            logger.warn("Could not read stored session state; treating as a new session", t)
+            null
+        } ?: return null
 
         val restored = JetlinSession(
             token = token,
@@ -119,20 +130,20 @@ public class SessionRegistry(
 
     private suspend fun hibernate(session: JetlinSession) {
         val url = session.view.currentUrl
-        val state = try {
-            session.view.hibernate()
+        try {
+            val state = session.view.hibernate()
+            // A session with nothing declared saveable has nothing to come back to. Storing it
+            // would fill the store with entries whose only content is a URL the client already
+            // knows.
+            if (state.isNotEmpty()) {
+                store.save(session.token, SessionSnapshot(url, state))
+            }
         } catch (t: Throwable) {
-            // Capturing state can fail on a key collision, which is a bug in the application's
-            // composables rather than anything this user did. The composition is already torn down
-            // by then; losing the snapshot costs them their draft, and taking down the reaper
-            // coroutine would cost every other session on this node its hibernation.
-            logger.warn("Could not capture session state; it will not be restorable", t)
-            return
-        }
-        // A session with nothing declared saveable has nothing to come back to. Storing it would
-        // fill the store with entries whose only content is a URL the client already knows.
-        if (state.isNotEmpty()) {
-            store.save(session.token, SessionSnapshot(url, state))
+            // Capturing can fail on a key collision, and saving can fail on an unreachable store.
+            // Neither is this user's doing, and neither may escape: the reaper runs in a coroutine
+            // shared with every other session, so an exception thrown here would cost all of them
+            // their hibernation rather than just this one. The composition is torn down either way.
+            logger.warn("Could not store session state; it will not be restorable", t)
         }
     }
 

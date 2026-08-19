@@ -310,7 +310,7 @@ Measured with `./gradlew :samples:demo:benchmark` — 1000 concurrent sessions o
 
 ```
 live:               136 kB per session (133 MB total)
-hibernated:         346 bytes per session (338 kB total)
+hibernated:         351 bytes per session (343 kB total)
 ```
 
 ### Hibernation
@@ -334,10 +334,32 @@ val draft = rememberSavedField("", key = "draft")   // survives; the user typed 
 val expanded = remember { mutableStateOf(false) }   // does not; recomputing costs nothing
 ```
 
-Which `SessionStore` is in use decides how much a session can survive. The in-memory default covers
-a dropped connection. A shared store — Redis, a table, anything with a TTL — also covers the server
-that created the session going away, which is what lets a rolling deploy happen without logging
-everyone out.
+Sessions are stored through a `SessionStore`. The in-memory default covers a dropped connection and
+a closed laptop lid, but not a restart.
+
+Waking is a transfer of ownership rather than a read, so the interface offers `take` — return and
+remove, atomically — instead of separate load and delete steps. Two sockets can quote one token at
+the same time, a reconnect racing a retry or two tabs restored from the same saved page, and exactly
+one has to end up owning the session; otherwise both build a composition from the same snapshot and
+one is left live, attached, and invisible to the reaper meant to collect it. The contract is
+executable: `SessionStoreContract` includes a test that fails against any implementation reading and
+deleting separately.
+
+### On more than one node
+
+**Jetlin assumes a single node.** A shared store would be the obvious next step and would let
+sessions survive a restart, but on its own it would not make Jetlin multi-node, which is worth being
+precise about because it is the natural assumption.
+
+A store only ever holds *hibernated* sessions. Three windows are node-local regardless of where
+snapshots live: while a socket is attached; between the page render and that socket connecting; and
+throughout the disconnect grace period, when the composition is deliberately still up. A request
+landing on another node during any of them finds nothing.
+
+Closing those needs a policy, not storage — sticky routing, hibernating immediately on disconnect and
+paying a re-render for every brief blip, or a handoff protocol where the receiving node asks the
+owner to release the session. Each is a different trade, and picking one is the prerequisite for a
+shared store rather than a consequence of it.
 
 Two details worth knowing:
 
@@ -398,7 +420,7 @@ runtime of its own to carry.
 cd e2e && npm install && npx playwright test
 ```
 
-66 unit tests and 13 browser tests. The browser tests cover first paint with JavaScript blocked,
+74 unit tests and 13 browser tests. The browser tests cover first paint with JavaScript blocked,
 deep links rendering server-side, targeted patching, keyed list add/reorder/remove, updates that
 originate on the server, typing while the server pushes unrelated updates, navigation without a page
 load, back and forward, server-side validation gating a submit, and reconnection with state
@@ -418,8 +440,12 @@ Two bugs came out of the browser tests rather than from reasoning about the code
 
 ## 12. Not built yet
 
-- **A shared `SessionStore`.** The interface and an in-memory implementation exist; a Redis or
-  database-backed one is what makes hibernated sessions survive the node that created them.
+- **Running on more than one node.** `SessionStore` is shaped for a shared implementation and its
+  behaviour is pinned by `SessionStoreContract`, so a Redis or database-backed one is mostly a matter
+  of passing that suite. The blocker is not storage but the policy for the node-local windows
+  described in section 9, which has to be decided first. Two changes go with it whenever it happens:
+  a generation counter on the snapshot so two processes cannot resurrect each other's state, and
+  moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
 - **Adopting the server-rendered DOM.** The client currently receives a full `reset` when it
   connects instead of binding to the markup already on the page, so the tree is transmitted twice on
   first load. The scheme is worked out — `data-jl` ids are already emitted, text nodes need
