@@ -40,16 +40,45 @@ type Op =
 
 type ServerMessage =
   | { t: "patch"; rev: number; ack: number; ops: Op[] }
+  | { t: "ready"; rev: number }
   | { t: "reset"; rev: number; children: NodeSpec[] }
   | { t: "nav"; url: string; replace?: boolean; title?: string }
   | { t: "error"; message: string; fatal?: boolean };
 
 const ROOT_ID = 0;
 
+/**
+ * Marks where a text child with no content belongs.
+ *
+ * The server writes two kinds of comment. This one stands in for a node the parser would otherwise
+ * not produce at all, so the client has to turn it back into a text node. The other separates two
+ * adjacent text children, and needs no name here: its whole job was done by the HTML parser, which
+ * kept them as two nodes instead of merging them into one.
+ */
+const EMPTY_TEXT_MARKER = "0";
+
+/** `index:id` pairs naming the text children of an element, which carry no attributes of their own. */
+function parseTextMarkers(value: string | null): Map<number, number> {
+  const markers = new Map<number, number>();
+  if (!value) return markers;
+  for (const entry of value.split(",")) {
+    const [index, id] = entry.split(":");
+    markers.set(Number(index), Number(id));
+  }
+  return markers;
+}
+
 export interface JetlinOptions {
   url?: string;
   token: string;
   container?: HTMLElement;
+  /**
+   * Whether to keep the server-rendered markup instead of asking for the tree again.
+   *
+   * On by default. Setting it to false forces the full-render path, which is worth having when
+   * diagnosing a suspected adoption bug: it is one flag to determine whether adoption is implicated.
+   */
+  adopt?: boolean;
 }
 
 export function connect(options: JetlinOptions): Jetlin {
@@ -63,6 +92,13 @@ class Jetlin {
 
   private socket: WebSocket | null = null;
   private reconnectAttempt = 0;
+  /**
+   * Whether the next hello should ask to keep the markup already on the page.
+   *
+   * True for at most one socket: only the browser holding markup this composition rendered can
+   * adopt it, and after a disconnect the server stops recording, so its tree moves on unseen.
+   */
+  private pendingAdopt = false;
   /** Set when the server says the session is unrecoverable; stops the reconnect loop. */
   private fatal = false;
 
@@ -111,6 +147,9 @@ class Jetlin {
       this.sendRaw(JSON.stringify({ t: "nav", url: location.pathname + location.search }));
     });
 
+    // Before connecting, so the hello can say whether the tree still needs sending.
+    this.pendingAdopt = options.adopt !== false && this.adoptMarkup();
+
     this.open();
   }
 
@@ -138,8 +177,11 @@ class Jetlin {
           t: "hello",
           token: this.token,
           url: location.pathname + location.search,
+          adopt: this.pendingAdopt,
         }),
       );
+      // Spent: a later socket is holding markup the server has since edited without watching.
+      this.pendingAdopt = false;
       const pending = this.outbox;
       this.outbox = [];
       for (const frame of pending) socket.send(frame);
@@ -173,6 +215,10 @@ class Jetlin {
       case "patch":
         for (const op of message.ops) this.apply(op, message.ack);
         break;
+      case "ready":
+        // The markup we adopted stands. Anything that changed while we were connecting follows as
+        // an ordinary patch, so there is nothing to do here.
+        break;
       case "nav":
         // The DOM for this location arrived in the patch immediately before, so the address bar is
         // updated last and never points at content that is not on screen yet.
@@ -191,6 +237,103 @@ class Jetlin {
         }
         break;
     }
+  }
+
+  // ----------------------------------------------------------------- adoption
+
+  /**
+   * Indexes the markup the server already sent instead of waiting to be given the tree again.
+   *
+   * The DOM the browser parsed, laid out and painted is kept as it is. That saves transmitting the
+   * tree twice, but more importantly it leaves alone whatever happened to the page in the meantime —
+   * focus, a text selection, a scroll position, an element another script inserted — all of which a
+   * rebuild would throw away.
+   *
+   * Best-effort by design. Any disagreement with the markup abandons the attempt and asks for a full
+   * render, so a marker the server never wrote or a proxy that rewrote the HTML costs an
+   * optimization rather than correctness.
+   */
+  private adoptMarkup(): boolean {
+    try {
+      this.adoptElement(this.container, ROOT_ID);
+      return true;
+    } catch (error) {
+      console.warn("[jetlin] could not adopt the server-rendered markup; asking for a full render", error);
+      this.nodes.clear();
+      this.ids = new WeakMap();
+      this.children.clear();
+      this.listeners.clear();
+      this.register(ROOT_ID, this.container);
+      this.children.set(ROOT_ID, []);
+      return false;
+    }
+  }
+
+  private adoptElement(element: Element, id: number): void {
+    this.register(id, element);
+
+    const specs = element.getAttribute("data-jl-on");
+    if (specs) {
+      const parsed = JSON.parse(specs) as Record<string, ListenerSpec>;
+      this.listeners.set(id, parsed);
+      for (const event of Object.keys(parsed)) this.delegate(event);
+    }
+
+    // Raw markup belongs to whoever wrote it. The composition has no children here to index, and
+    // walking in would try to claim nodes the server has never heard of.
+    if (element.hasAttribute("data-jl-raw")) {
+      this.children.set(id, []);
+      return;
+    }
+
+    const textIds = parseTextMarkers(element.getAttribute("data-jl-t"));
+    const logical: Node[] = [];
+
+    // Snapshotted, because materializing an empty text node mutates the list being walked.
+    for (const node of Array.from(element.childNodes)) {
+      if (node.nodeType === Node.COMMENT_NODE) {
+        if ((node as Comment).data === EMPTY_TEXT_MARKER) {
+          // A text child with no content leaves nothing behind for the parser to produce, so the
+          // server wrote a marker where the node should be and we put one there.
+          const empty = document.createTextNode("");
+          element.replaceChild(empty, node);
+          logical.push(empty);
+        }
+        // Separators have already served their purpose, and other comments are not ours. Neither
+        // is a child.
+        continue;
+      }
+      logical.push(node);
+    }
+
+    let textCount = 0;
+    for (let index = 0; index < logical.length; index++) {
+      const child = logical[index];
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const childId = (child as Element).getAttribute("data-jl");
+        if (childId === null) {
+          throw new Error(`<${(child as Element).tagName.toLowerCase()}> under node ${id} has no data-jl`);
+        }
+        this.adoptElement(child as Element, Number(childId));
+      } else if (child.nodeType === Node.TEXT_NODE) {
+        const textId = textIds.get(index);
+        if (textId === undefined) {
+          throw new Error(`node ${id} has unexpected text at index ${index}`);
+        }
+        this.register(textId, child);
+        textCount += 1;
+      } else {
+        throw new Error(`node ${id} has an unexpected child of type ${child.nodeType}`);
+      }
+    }
+
+    // Every declared text child has to have been found. A mismatch means the markup and the server's
+    // idea of this element have diverged, and every index below would be suspect.
+    if (textCount !== textIds.size) {
+      throw new Error(`node ${id} declares ${textIds.size} text children but ${textCount} are present`);
+    }
+
+    this.children.set(id, logical);
   }
 
   // ------------------------------------------------------------------ patches

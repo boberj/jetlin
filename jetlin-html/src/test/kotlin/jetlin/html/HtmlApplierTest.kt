@@ -37,8 +37,8 @@ class HtmlApplierTest {
         }.use { h ->
             assertEquals(
                 """<div data-jl="1" class="card">""" +
-                    """<h1 data-jl="2">Hello</h1>""" +
-                    """<button data-jl="4" data-jl-on="{&quot;click&quot;:{}}">Go</button>""" +
+                    """<h1 data-jl="2" data-jl-t="0:3">Hello</h1>""" +
+                    """<button data-jl="4" data-jl-t="0:5" data-jl-on="{&quot;click&quot;:{}}">Go</button>""" +
                     "</div>",
                 h.html(),
             )
@@ -166,7 +166,7 @@ class HtmlApplierTest {
         harness {
             Div({ unsafeInnerHtml("<b>bold</b>") })
         }.use { h ->
-            assertEquals("""<div data-jl="1"><b>bold</b></div>""", h.html())
+            assertEquals("""<div data-jl="1" data-jl-raw><b>bold</b></div>""", h.html())
         }
     }
 
@@ -202,7 +202,7 @@ class HtmlApplierTest {
             Div { Text("<script>alert('xss')</script>") }
         }.use { h ->
             assertEquals(
-                """<div data-jl="1">&lt;script&gt;alert('xss')&lt;/script&gt;</div>""",
+                """<div data-jl="1" data-jl-t="0:2">&lt;script&gt;alert('xss')&lt;/script&gt;</div>""",
                 h.html(),
             )
         }

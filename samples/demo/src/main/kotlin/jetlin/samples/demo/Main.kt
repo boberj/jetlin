@@ -38,6 +38,7 @@ fun main() {
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
             view("/about", title = "About · Jetlin") { AboutPage() }
+            view("/shapes", title = "Shapes · Jetlin") { ShapesPage() }
         }
     }.start(wait = true)
 }
@@ -49,6 +50,7 @@ private fun Shell(content: @Composable () -> Unit) {
             Link("/", { classes("brand") }) { Text("Jetlin") }
             Link("/") { Text("Todos") }
             Link("/about") { Text("About") }
+            Link("/shapes") { Text("Shapes") }
             Button({
                 classes("link")
                 attr("data-test", "reset")
@@ -190,6 +192,75 @@ private fun TodoDetailPage() = Shell {
             P({ classes("hint") }) {
                 Text("Validation runs on the server. The Save button is disabled from there too.")
             }
+        }
+    }
+}
+
+/**
+ * Markup that is awkward to hand back to a browser and take up again.
+ *
+ * Every shape here is one the HTML parser would blur: two text nodes it would merge into one, a text
+ * node with nothing in it to produce, text sitting either side of an element, and markup that is not
+ * the composition's to touch. The page exists so those cases are exercised rather than reasoned
+ * about, since a mistake in any of them shows up not on load but several interactions later.
+ */
+@Composable
+private fun ShapesPage() = Shell {
+    var first by remember { mutableStateOf("alpha") }
+    var second by remember { mutableStateOf("beta") }
+    var middle by remember { mutableStateOf("") }
+    var markup by remember { mutableStateOf("<b>bold</b>") }
+
+    Div({ classes("card") }) {
+        H1 { Text("Markup shapes") }
+
+        Div({ classes("field") }) {
+            Span({ classes("label") }) { Text("Two text nodes side by side") }
+            P({ attr("data-test", "adjacent") }) {
+                Text(first)
+                Text(second)
+            }
+            Div({ classes("row") }) {
+                Button({
+                    classes("btn"); attr("data-test", "edit-first")
+                    onClick { first = "ALPHA" }
+                }) { Text("Edit the first") }
+                Button({
+                    classes("btn"); attr("data-test", "edit-second")
+                    onClick { second = "BETA" }
+                }) { Text("Edit the second") }
+            }
+        }
+
+        Div({ classes("field") }) {
+            Span({ classes("label") }) { Text("A text node that starts with nothing in it") }
+            P({ attr("data-test", "empty") }) {
+                Text("[")
+                Text(middle)
+                Text("]")
+            }
+            Button({
+                classes("btn"); attr("data-test", "fill")
+                onClick { middle = "filled" }
+            }) { Text("Fill it") }
+        }
+
+        Div({ classes("field") }) {
+            Span({ classes("label") }) { Text("Text either side of an element") }
+            P({ attr("data-test", "interleaved") }) {
+                Text("before ")
+                Span({ classes("count") }) { Text(first) }
+                Text(" after")
+            }
+        }
+
+        Div({ classes("field") }) {
+            Span({ classes("label") }) { Text("Markup the composition does not own") }
+            Div({ attr("data-test", "raw"); unsafeInnerHtml(markup) })
+            Button({
+                classes("btn"); attr("data-test", "swap-raw")
+                onClick { markup = "<i>italic</i>" }
+            }) { Text("Swap it") }
         }
     }
 }

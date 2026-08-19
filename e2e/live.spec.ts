@@ -42,9 +42,8 @@ test("checking a box updates state on the server and patches the DOM", async ({ 
 });
 
 test("the patch only touches the node that changed", async ({ page }) => {
-  // Wait for a server-pushed tick before tagging anything. The client rebuilds the container when
-  // it receives the session's opening snapshot, and a tick can only arrive after that, so this is
-  // proof the socket is live and the DOM being tagged is the DOM that patches will update.
+  // Wait for a server-pushed tick before tagging anything: it can only arrive once the socket is
+  // live and its opening message has been dealt with, so the DOM being tagged is settled.
   await expect(page.locator("[data-test=ticks]")).toHaveText("1", { timeout: 8000 });
 
   // Tag the surrounding DOM. The markers live only on the JavaScript objects, so they survive only
@@ -168,4 +167,107 @@ test("session state survives a dropped connection", async ({ page }) => {
 
   await page.locator("[data-test=add]").click();
   await expect(page.locator(".todo-text").last()).toHaveText("Typed before the drop");
+});
+
+/**
+ * Adoption: keeping the server-rendered markup instead of being sent the tree a second time.
+ *
+ * The DOM the browser parsed and painted is the thing under test, so these check node identity
+ * rather than content — anything asserting only on text would pass just as happily against a page
+ * that had been thrown away and rebuilt.
+ */
+
+test("the server-rendered DOM is kept rather than rebuilt", async ({ page }) => {
+  await page.goto("/");
+
+  // Marked immediately, before the socket has had time to deliver anything. A reset would replace
+  // every node and take the markers with it; adoption leaves these exact objects in place.
+  // Tagged and counted in one pass, so a rebuild landing between two calls cannot be mistaken for
+  // a page that never had any nodes to tag.
+  const before = await page.evaluate(() => {
+    const nodes = document.querySelectorAll("#jetlin-root *");
+    nodes.forEach((node, index) => ((node as HTMLElement).dataset.survivor = String(index)));
+    return nodes.length;
+  });
+  expect(before).toBeGreaterThan(10);
+
+  // A server-pushed tick can only arrive after the connection is established and its opening
+  // message applied, so this is proof the socket is live rather than a guess at timing.
+  await expect(page.locator("[data-test=ticks]")).toHaveText("1", { timeout: 8000 });
+
+  const after = await page.evaluate(() => document.querySelectorAll("[data-survivor]").length);
+  expect(after).toBe(before);
+});
+
+test("changes made before the socket connected are caught up", async ({ page }) => {
+  await page.goto("/");
+  // The clock starts ticking when the page is rendered, not when the socket opens, so the markup
+  // the browser holds is already behind by the time it connects. Adoption keeps that markup, which
+  // only works if the difference arrives as an ordinary patch.
+  await expect(page.locator("[data-test=ticks]")).toHaveText("2", { timeout: 8000 });
+});
+
+test("adoption is silent when it succeeds", async ({ page }) => {
+  const warnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") warnings.push(message.text());
+  });
+
+  await page.goto("/shapes");
+  await expect(page.locator("[data-test=adjacent]")).toHaveText("alphabeta");
+
+  expect(warnings.filter((w) => w.includes("adopt"))).toEqual([]);
+});
+
+test("awkward markup shapes update the right node after adoption", async ({ page }) => {
+  await page.goto("/shapes");
+
+  // Two text nodes the HTML parser would happily have merged into one.
+  const adjacent = page.locator("[data-test=adjacent]");
+  await expect(adjacent).toHaveText("alphabeta");
+  await page.locator("[data-test=edit-first]").click();
+  await expect(adjacent).toHaveText("ALPHAbeta");
+  await page.locator("[data-test=edit-second]").click();
+  await expect(adjacent).toHaveText("ALPHABETA");
+
+  // A text node that rendered to nothing at all, then gained content.
+  const empty = page.locator("[data-test=empty]");
+  await expect(empty).toHaveText("[]");
+  await page.locator("[data-test=fill]").click();
+  await expect(empty).toHaveText("[filled]");
+
+  // Text either side of an element, where a miscounted index would put the update in the wrong place.
+  await expect(page.locator("[data-test=interleaved]")).toHaveText("before ALPHA after");
+
+  // Markup the composition does not own: replaced wholesale, never walked into.
+  const raw = page.locator("[data-test=raw]");
+  await expect(raw.locator("b")).toHaveText("bold");
+  await page.locator("[data-test=swap-raw]").click();
+  await expect(raw.locator("i")).toHaveText("italic");
+});
+
+test("markup that cannot be adopted falls back to a full render", async ({ page }) => {
+  const warnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") warnings.push(message.text());
+  });
+
+  // Strip a marker on the way through, the way a rewriting proxy might. The client should notice
+  // that the markup and the ids it was given disagree, and ask for the tree instead of guessing.
+  await page.route(
+    (url) => url.pathname === "/shapes",
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace(/ data-jl-t="[^"]*"/, "");
+      await route.fulfill({ response, body });
+    },
+  );
+
+  await page.goto("/shapes");
+
+  expect(warnings.some((w) => w.includes("could not adopt"))).toBe(true);
+  // And the page is fully working, because a full render is exactly what used to happen.
+  await expect(page.locator("[data-test=adjacent]")).toHaveText("alphabeta");
+  await page.locator("[data-test=edit-first]").click();
+  await expect(page.locator("[data-test=adjacent]")).toHaveText("ALPHAbeta");
 });

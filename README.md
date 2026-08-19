@@ -1,7 +1,7 @@
 # Jetlin
 
 Interactive web UI written as Kotlin `@Composable` functions that run **on the server**. The browser
-gets HTML plus a 4.9 kB runtime that applies the DOM changes the server sends and reports events
+gets HTML plus a 6.6 kB runtime that applies the DOM changes the server sends and reports events
 back.
 
 Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and
@@ -71,14 +71,14 @@ boundary to design — a handler closes over the objects it needs and calls stra
 **Early.** The core is built and tested end to end in a browser, with routing, request context,
 live navigation, forms and hibernation on top of it. [`docs/architecture.md`](docs/architecture.md)
 has the full design: the update path, the protocol, sessions, input handling, design decisions, and
-what is designed but not yet built (multi-node, adopting server-rendered DOM, uploads).
+what is designed but not yet built (multi-node, client-only interactivity, uploads).
 
 Session state lives on the server, so per-session cost sets how many users a node can carry:
 
 | | per session | 1000 sessions |
 |---|---|---|
 | live | 136 kB | 133 MB |
-| hibernated | 351 bytes | 343 kB |
+| hibernated | 364 bytes | 356 kB |
 
 A session whose socket has gone stays live briefly — most disconnections are a tunnel or a sleeping
 laptop — then hibernates: whatever was declared `rememberSaved` is stored and the composition is
@@ -96,25 +96,27 @@ val expanded = remember { mutableStateOf(false) }   // does not; recomputing cos
 ./gradlew :samples:demo:run          # http://localhost:8080
 ```
 
-A three-page app: a keyed todo list, a detail page with server-side validation reached by a real
-`<a href>` that navigates without reloading, and a clock driven from the server. The store is shared
-across sessions, so opening two windows shows edits in one appearing in the other — and "Reset demo
-data" puts it back, in every open window at once.
+A small app: a keyed todo list, a detail page with server-side validation reached by a real
+`<a href>` that navigates without reloading, a clock driven from the server, and a page of markup
+shapes that are awkward to hand back to a browser. The store is shared across sessions, so opening
+two windows shows edits in one appearing in the other — and "Reset demo data" puts it back, in every
+open window at once.
 
 ## Test
 
 ```bash
-./gradlew test                       # 74 unit tests, asserting exact op streams
+./gradlew test                       # 83 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 13 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 18 browser tests (server must be running)
 ```
 
 Unit tests assert on exact op lists rather than `contains`, so an update that touches more of the
 page than it needs to fails the build. Browser tests cover first paint with JavaScript blocked, deep
 links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
 typing while the server sends unrelated updates, navigation without a page load, back and forward,
-validation gating a submit, and reconnection with state preserved. Each one resets the demo's shared
+validation gating a submit, reconnection with state preserved, and that the server-rendered DOM is
+kept rather than rebuilt on connect. Each one resets the demo's shared
 store first, so they assert exact counts and contents rather than working around whatever the
 previous test left. Hibernating and waking a session is covered at the integration level instead,
 driving a real socket, because a browser reconnects on its own too quickly to sit out a grace

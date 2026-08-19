@@ -19,6 +19,16 @@ public sealed interface ServerMessage {
     @SerialName("patch")
     public data class Patch(val rev: Long, val ack: Long, val ops: List<Op>) : ServerMessage
 
+    /**
+     * The server accepted the client's adoption of the server-rendered markup.
+     *
+     * Carries no tree: the client already has one, in the HTML it was served. Anything that changed
+     * between rendering that HTML and the socket connecting follows as an ordinary [Patch].
+     */
+    @Serializable
+    @SerialName("ready")
+    public data class Ready(val rev: Long) : ServerMessage
+
     /** Replaces the entire tree. Sent after rehydrating a session whose composition was dropped. */
     @Serializable
     @SerialName("reset")
@@ -59,7 +69,16 @@ public sealed interface ClientMessage {
      */
     @Serializable
     @SerialName("hello")
-    public data class Hello(val token: String, val url: String? = null) : ClientMessage
+    public data class Hello(
+        val token: String,
+        val url: String? = null,
+        /**
+         * The client has indexed the server-rendered markup and would rather keep it than be sent
+         * the tree again. A request, not an assertion: the server refuses whenever its own tree may
+         * have moved on from what the browser is holding.
+         */
+        val adopt: Boolean = false,
+    ) : ClientMessage
 
     @Serializable
     @SerialName("event")

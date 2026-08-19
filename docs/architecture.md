@@ -7,8 +7,8 @@ server sends and reports events back.
 Phoenix LiveView and Livewire were the inspirations for the idea.
 
 Status: **early**. The core is built and tested end to end in a real browser, with routing, request
-context, navigation, forms and hibernation on top of it. Section 12 lists what is designed but not
-yet built.
+context, navigation, forms, hibernation and adoption of the server-rendered DOM on top of it.
+Section 12 lists what is designed but not yet built.
 
 ---
 
@@ -54,7 +54,7 @@ that read it, and a patch follows. Sending updates to a connected client needs n
 
 ```
 ┌─ Browser ──────────────────────────────────────────────────────────────────┐
-│  jetlin.js (4.9 kB minified)                                               │
+│  jetlin.js (6.6 kB minified)                                               │
 │  applies ops · delegates events · guards in-flight input · reconnects      │
 └───────────────▲──────────────────────────────────────┬─────────────────────┘
                 │ patch { rev, ack, ops }              │ event { node, seq }
@@ -172,7 +172,7 @@ or CBOR would be a drop-in change; readable frames are more useful at this stage
 
 ## 6. The browser runtime
 
-4.9 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
+6.6 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
 children per element, and the listener specs.
 
 The child array exists because the DOM's own `childNodes` cannot be trusted for indexing — browsers
@@ -191,8 +191,44 @@ registration survives any amount of subtree churn.
 ## 7. Sessions and transport
 
 A `GET` renders the composition to HTML and returns it with a session token. The composition stays
-alive in `SessionRegistry`; when the WebSocket connects with that token it adopts the composition
+alive in `SessionRegistry`; when the WebSocket connects with that token it takes over the composition
 that is already there, so a page is composed once per session rather than once per request.
+
+### Keeping the markup the browser already has
+
+That socket then keeps the DOM it was served rather than being sent the tree a second time. The
+client walks the markup, indexes it, and tells the server it has done so; the server replies with
+`Ready` instead of `Reset`, and anything that changed between rendering the HTML and the socket
+connecting — a `LaunchedEffect` that already fired, a shared store someone else edited — arrives as
+an ordinary patch. On the demo's shapes page that turns a 3213-byte opening message into 21 bytes,
+and first-load traffic from 8520 bytes to 5328.
+
+The bytes are the smaller half. A rebuild would discard the DOM the browser had already parsed, laid
+out and painted, taking with it whatever happened to the page in the meantime: focus, a selection, a
+scroll position, an element another script inserted.
+
+Elements name themselves with `data-jl`, but text nodes are the problem — they carry no attributes,
+an HTML parser merges two adjacent ones into a single node, and one with no content produces no node
+at all. So the markup states what the parser cannot:
+
+| Marker | Meaning |
+|---|---|
+| `data-jl-t="0:3,2:7"` | which child indices are text, and the id of each |
+| `<!--\|-->` | a boundary between two text children, so they survive parsing as two nodes |
+| `<!--0-->` | a text child with no content, which the client turns back into an empty text node |
+| `data-jl-raw` | content from `unsafeInnerHtml`; not the composition's, so not indexed |
+
+Adoption applies only to the first socket reaching the composition that rendered the page, and the
+server decides that rather than trusting the client's request. A reconnecting browser is holding
+markup the server has since edited without watching — it stopped recording when the previous socket
+went away — and a woken session has composed afresh, with node ids bearing no relation to the
+`data-jl` values still in the page. Both get a `Reset`.
+
+The walk is best-effort. Any disagreement with the markup — an element with no id, a text child the
+markers do not account for — abandons it and asks for the full tree, so a marker that never arrived
+or a proxy that rewrote the HTML costs an optimization rather than correctness. `Jetlin.connect({
+adopt: false })` forces the old path, which makes it one flag to determine whether adoption is
+implicated in a bug.
 
 A session is bound to the **whole route table**, not to one view. `RouteHost` resolves the current
 path against the registered patterns and composes whatever matched, keyed on the pattern, so moving
@@ -310,7 +346,7 @@ Measured with `./gradlew :samples:demo:benchmark` — 1000 concurrent sessions o
 
 ```
 live:               136 kB per session (133 MB total)
-hibernated:         351 bytes per session (343 kB total)
+hibernated:         364 bytes per session (356 kB total)
 ```
 
 ### Hibernation
@@ -405,7 +441,7 @@ rather than a requirement.
 **Ktor first, with a portable core.** `LiveView` knows nothing about WebSockets or Ktor and can be
 driven straight from a test with no server involved. Adapters for other servers are additive.
 
-**The client is TypeScript.** About 600 lines of DOM manipulation, which ships as 4.9 kB with no
+**The client is TypeScript.** About 600 lines of DOM manipulation, which ships as 6.6 kB with no
 runtime of its own to carry.
 
 ---
@@ -420,7 +456,7 @@ runtime of its own to carry.
 cd e2e && npm install && npx playwright test
 ```
 
-74 unit tests and 13 browser tests. The browser tests cover first paint with JavaScript blocked,
+83 unit tests and 18 browser tests. The browser tests cover first paint with JavaScript blocked,
 deep links rendering server-side, targeted patching, keyed list add/reorder/remove, updates that
 originate on the server, typing while the server pushes unrelated updates, navigation without a page
 load, back and forward, server-side validation gating a submit, and reconnection with state
@@ -446,11 +482,6 @@ Two bugs came out of the browser tests rather than from reasoning about the code
   described in section 9, which has to be decided first. Two changes go with it whenever it happens:
   a generation counter on the snapshot so two processes cannot resurrect each other's state, and
   moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
-- **Adopting the server-rendered DOM.** The client currently receives a full `reset` when it
-  connects instead of binding to the markup already on the page, so the tree is transmitted twice on
-  first load. The scheme is worked out — `data-jl` ids are already emitted, text nodes need
-  `data-jl-t="index:id"` on their parent, and adjacent text nodes need separator comments because
-  browsers merge them — but the reset path was needed for rehydration anyway and was built first.
 - **Client-only interactivity.** Toggles, dropdowns and tooltips should not need a round trip. A
   `clientOnly {}` escape hatch is the missing piece.
 - File uploads, a testing module, a Spring Boot adapter, telemetry, and CI.

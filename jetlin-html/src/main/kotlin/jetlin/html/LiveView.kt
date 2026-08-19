@@ -79,6 +79,14 @@ public class LiveView(
     public suspend fun renderHtml(): String = host.confined { renderToHtml(owner) }
 
     /**
+     * Attributes for the element [renderHtml]'s output is placed inside.
+     *
+     * The container is the root of the tree, but its markup is written by the page shell rather than
+     * by the serializer, so its identity has to be handed over separately.
+     */
+    public suspend fun rootAttributes(): String = host.confined { rootAttributes(owner) }
+
+    /**
      * Suspends until every pending recomposition has been applied.
      *
      * Needed by anything driving a view without a browser — a test, a renderer, a screenshot tool —
@@ -98,6 +106,20 @@ public class LiveView(
         pendingNavigations.clear()
         owner.startRecording()
         ServerMessage.Reset(++rev, owner.snapshotChildren())
+    }
+
+    /**
+     * Accepts a client that has indexed the server-rendered markup instead of sending it the tree.
+     *
+     * The buffer is deliberately left alone, which is the whole difference from [reset]. This
+     * composition has been live since the HTML was rendered, so anything that happened in between —
+     * a `LaunchedEffect` firing, a shared store changing — is sitting in that buffer, and it is
+     * exactly the delta between the markup the browser holds and the tree as it now stands. Clearing
+     * it would leave the two quietly out of step.
+     */
+    public suspend fun adopt(): ServerMessage.Ready = host.confined {
+        pendingNavigations.clear()
+        ServerMessage.Ready(++rev)
     }
 
     /**

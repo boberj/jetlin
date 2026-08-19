@@ -22,6 +22,7 @@ import jetlin.html.LocalRequest
 import jetlin.html.P
 import jetlin.html.RequestContext
 import jetlin.html.RoutePattern
+import jetlin.html.rootAttributes
 import jetlin.html.Router
 import jetlin.html.Text
 import jetlin.protocol.ClientMessage
@@ -153,9 +154,12 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             }
 
             try {
-                // The composition is already built and warm from the page render; the client just
-                // needs the tree it describes.
-                sendMessage(session.view.reset())
+                // The composition is already built and warm from the page render. If this is the
+                // socket that page opened, the browser is holding markup this very composition
+                // produced and can keep it; anything that changed since follows as a normal patch.
+                // Claimed unconditionally so the right to adopt is spent either way.
+                val mayAdopt = session.claimAdoption()
+                sendMessage(if (mayAdopt && hello.adopt) session.view.adopt() else session.view.reset())
 
                 val sender = launch {
                     session.view.messages.collect { sendMessage(it.withTitle(router)) }
@@ -260,7 +264,7 @@ private suspend fun renderPage(config: JetlinConfig, title: String, session: Jet
         ${config.head}
         </head>
         <body>
-        <div id="jetlin-root">$body</div>
+        <div id="jetlin-root"${rootAttributes(session.view.owner)}>$body</div>
         <script src="/jetlin/jetlin.js"></script>
         <script>window.jetlin = Jetlin.connect({ token: "${session.token}" });</script>
         </body>

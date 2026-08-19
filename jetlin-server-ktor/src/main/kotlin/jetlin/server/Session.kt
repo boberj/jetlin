@@ -19,10 +19,28 @@ import org.slf4j.LoggerFactory
 public class JetlinSession internal constructor(
     public val token: String,
     public val view: LiveView,
+    adoptable: Boolean,
 ) : AutoCloseable {
 
     /** Set while a socket is attached; guards against two sockets driving one composition. */
     internal var attached: Boolean = false
+
+    private var adoptable: Boolean = adoptable
+
+    /**
+     * Whether this socket may keep the markup the browser already has, asked once and answered once.
+     *
+     * True for exactly the first socket to reach a composition that rendered a page, because only
+     * that browser is holding markup this composition produced. A reconnecting one is not: the
+     * server stopped recording edits when the previous socket went away, so its tree has moved on in
+     * ways the browser never saw. Deciding this here rather than trusting the client's request means
+     * a confused or malicious one cannot talk the server into leaving it with a stale page.
+     */
+    internal fun claimAdoption(): Boolean {
+        val allowed = adoptable
+        adoptable = false
+        return allowed
+    }
 
     override fun close(): Unit = view.close()
 }
@@ -63,7 +81,13 @@ public class SessionRegistry(
     public val liveCount: Int get() = sessions.size
 
     public suspend fun create(request: RequestContext): JetlinSession {
-        val session = JetlinSession(newToken(), LiveView(request, framePolicy, emptyMap(), content))
+        val session = JetlinSession(
+            token = newToken(),
+            view = LiveView(request, framePolicy, emptyMap(), content),
+            // This composition rendered the page the browser is about to receive, so the socket that
+            // follows may adopt what it was served.
+            adoptable = true,
+        )
         session.view.start()
         sessions[session.token] = session
         scheduleReap(session.token, handoffTimeout)
@@ -103,6 +127,9 @@ public class SessionRegistry(
         val restored = JetlinSession(
             token = token,
             view = LiveView(base.forUrl(url ?: snapshot.url), framePolicy, snapshot.state, content),
+            // Composed afresh, so its node ids bear no relation to the data-jl values in whatever
+            // markup the browser is still holding. It has to be sent the tree.
+            adoptable = false,
         )
         restored.view.start()
         restored.attached = true
