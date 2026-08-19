@@ -18,6 +18,7 @@ include(
     ":jetlin-runtime",
     ":jetlin-html",
     ":jetlin-server-ktor",
+    ":jetlin-testing",
     ":samples:demo",
     ":conventions",
 )

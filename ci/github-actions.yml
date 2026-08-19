@@ -32,7 +32,8 @@ jobs:
         if: failure()
         with:
           name: test-results
-          path: "*/build/reports/tests/test"
+          # Two levels deep as well, so the sample's application tests are included.
+          path: "**/build/reports/tests/test"
 
   client:
     name: Client bundle is current

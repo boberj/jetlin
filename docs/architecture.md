@@ -474,7 +474,50 @@ Two bugs came out of the browser tests rather than from reasoning about the code
 
 ---
 
-## 12. Not built yet
+## 12. Testing application views
+
+`jetlin-testing` drives a view headlessly — no browser, no server, no socket — so that an
+application's own tests describe behaviour rather than protocol.
+
+```kotlin
+@Test
+fun `clearing the title blocks the save`(): Unit = runViewTest(url = "/todo/1") {
+    setRoutes { view("/todo/{id}") { TodoDetailPage() } }
+
+    onNode(hasAttr("data-test", "title")).type("")
+
+    onNode(hasAttr("data-test", "title-error")).assertText("A title is required")
+    onNode(hasAttr("data-test", "save")).assertDisabled()
+}
+```
+
+Nodes are addressed by matcher rather than by id, and an interaction names a node and an event —
+there is no geometry to hit-test, because that is not how input reaches a Jetlin view in the first
+place. Events bubble to the nearest ancestor listening, as they would in a browser, and an
+interaction on something nothing listens to fails rather than doing nothing.
+
+Two things it covers that a client-side test kit has no equivalent for:
+
+**How much of the page moved.** `recordUpdate { }` reports which nodes an interaction changed, so a
+test can assert that checking one box patched one row and left the list alone. This catches a class
+of defect that is invisible to every other kind of assertion: keying a list by a value that changes
+renders exactly the same HTML and costs the whole list on every edit. Breaking `key(todo.id)` in the
+sample leaves fifteen of its sixteen tests passing; the one that fails is this one.
+
+**Whether the right state was declared saveable.** `hibernateAndRestore()` puts the session through
+the cycle in section 9, so a test can pin down that a half-typed draft survives and that scratch
+state does not.
+
+Matchers hide the places where HTML is inconsistent about where state lives: `hasValue` reads the
+`value` *property*, which is where `bind` writes, while `isDisabled` reads the `disabled`
+*attribute*. Reaching for the wrong one is the mistake those matchers exist to prevent.
+
+The module deliberately depends on no test framework. Its assertions throw `AssertionError`
+directly, so it works under whichever runner the consuming project already uses.
+
+---
+
+## 13. Not built yet
 
 - **Running on more than one node.** `SessionStore` is shaped for a shared implementation and its
   behaviour is pinned by `SessionStoreContract`, so a Redis or database-backed one is mostly a matter
@@ -484,14 +527,14 @@ Two bugs came out of the browser tests rather than from reasoning about the code
   moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
 - **Client-only interactivity.** Toggles, dropdowns and tooltips should not need a round trip. A
   `clientOnly {}` escape hatch is the missing piece.
-- File uploads, a testing module, a Spring Boot adapter, telemetry, and CI.
+- File uploads, a Spring Boot adapter, telemetry, and CI.
 
 Known limitation: `ack` can be set slightly early when a background patch overlaps an inbound event,
 which could let one stale property write through. The fix is to capture the ack at drain time.
 
 ---
 
-## 13. Notes and risks
+## 14. Notes and risks
 
 **Compose runtime API drift.** `Applier` and `Recomposer` are stable, but hosting the runtime
 outside a UI toolkit is not a first-class supported use case. Mitigated by pinning versions, keeping

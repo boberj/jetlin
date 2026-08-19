@@ -44,7 +44,7 @@ fun main() {
 }
 
 @Composable
-private fun Shell(content: @Composable () -> Unit) {
+internal fun Shell(content: @Composable () -> Unit) {
     Div({ classes("page") }) {
         Nav({ classes("nav") }) {
             Link("/", { classes("brand") }) { Text("Jetlin") }
@@ -62,7 +62,7 @@ private fun Shell(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun TodoListPage() = Shell {
+internal fun TodoListPage() = Shell {
     // Saved rather than remembered: a half-typed todo is worth carrying across a dropped
     // connection or a deploy, and it is the one piece of state on this page the user authored.
     val draft = rememberSavedField("", key = "draft") {
@@ -110,7 +110,7 @@ private fun TodoListPage() = Shell {
 }
 
 @Composable
-private fun TodoRow(todo: Todo) {
+internal fun TodoRow(todo: Todo) {
     Li({ attr("data-test", "todo") }) {
         Input({
             type("checkbox")
@@ -126,7 +126,7 @@ private fun TodoRow(todo: Todo) {
 }
 
 @Composable
-private fun TodoDetailPage() = Shell {
+internal fun TodoDetailPage() = Shell {
     val id = pathParam("id").toIntOrNull()
     val todo = id?.let { TodoStore.find(it) }
     val navigator = LocalNavigator.current
@@ -205,7 +205,7 @@ private fun TodoDetailPage() = Shell {
  * about, since a mistake in any of them shows up not on load but several interactions later.
  */
 @Composable
-private fun ShapesPage() = Shell {
+internal fun ShapesPage() = Shell {
     var first by remember { mutableStateOf("alpha") }
     var second by remember { mutableStateOf("beta") }
     var middle by remember { mutableStateOf("") }
@@ -266,7 +266,7 @@ private fun ShapesPage() = Shell {
 }
 
 @Composable
-private fun AboutPage() = Shell {
+internal fun AboutPage() = Shell {
     Div({ classes("card") }) {
         H1 { Text("About") }
         P {
@@ -289,7 +289,7 @@ private fun AboutPage() = Shell {
  * composable reads, which recomposes it, which produces a patch.
  */
 @Composable
-private fun ServerClock() {
+internal fun ServerClock() {
     var ticks by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {

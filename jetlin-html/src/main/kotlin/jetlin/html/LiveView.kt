@@ -79,6 +79,18 @@ public class LiveView(
     public suspend fun renderHtml(): String = host.confined { renderToHtml(owner) }
 
     /**
+     * Reads the node tree once it has settled, on the thread that owns it.
+     *
+     * The tree belongs to the composition and is mutated by the applier on a confined dispatcher,
+     * so anything examining it — a test asserting on what was rendered, a debug endpoint — has to
+     * do so from there rather than from whatever thread it happens to be on.
+     */
+    public suspend fun <T> inspect(block: (HtmlOwner) -> T): T {
+        awaitIdle()
+        return host.confined { block(owner) }
+    }
+
+    /**
      * Attributes for the element [renderHtml]'s output is placed inside.
      *
      * The container is the root of the tree, but its markup is written by the page shell rather than

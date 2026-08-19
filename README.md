@@ -102,17 +102,58 @@ shapes that are awkward to hand back to a browser. The store is shared across se
 two windows shows edits in one appearing in the other — and "Reset demo data" puts it back, in every
 open window at once.
 
+## Testing your own views
+
+`jetlin-testing` runs a view with no browser, no server and no socket, so an application's tests
+describe what a user does and sees rather than how the framework carries it:
+
+```kotlin
+@Test
+fun `clearing the title blocks the save`(): Unit = runViewTest(url = "/todo/1") {
+    setRoutes { view("/todo/{id}") { TodoDetail() } }
+
+    onNode(hasAttr("data-test", "title")).type("")
+
+    onNode(hasAttr("data-test", "title-error")).assertText("A title is required")
+    onNode(hasAttr("data-test", "save")).assertDisabled()
+}
+```
+
+Because state lives on the server, a test can also ask questions a client-side one cannot. Which
+nodes an interaction actually changed:
+
+```kotlin
+val update = recordUpdate { onAll(hasAttr("data-test", "todo"))[0].check() }
+update.assertUntouched(hasTag("ul"))     // one row patched, the list left alone
+```
+
+That catches a defect nothing else can see. Keying a list by a value that changes renders exactly
+the same page and re-sends the whole list on every edit; break `key(todo.id)` in the sample and
+fifteen of its sixteen tests still pass — the one that fails is this one.
+
+And whether the right state was declared saveable:
+
+```kotlin
+onNode(hasAttr("data-test", "draft")).type("half-typed")
+hibernateAndRestore()
+onNode(hasAttr("data-test", "draft")).assertValue("half-typed")
+```
+
+The module depends on no test framework — assertions throw `AssertionError` — so it works with
+whichever runner you already use.
+
 ## Test
 
 ```bash
-./gradlew test                       # 83 unit tests, asserting exact op streams
+./gradlew test                       # 127 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
 cd e2e && npm install && npx playwright test    # 18 browser tests (server must be running)
 ```
 
-Unit tests assert on exact op lists rather than `contains`, so an update that touches more of the
-page than it needs to fails the build. Browser tests cover first paint with JavaScript blocked, deep
+The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
+more of the page than it needs to fails the build. The sample's tests are written against
+`jetlin-testing` instead, and are the worked example of what an application's tests look like. Browser tests cover first paint with JavaScript blocked, deep
 links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
 typing while the server sends unrelated updates, navigation without a page load, back and forward,
 validation gating a submit, reconnection with state preserved, and that the server-rendered DOM is
@@ -131,6 +172,7 @@ period.
 | `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, routing, forms, HTML serializer |
 | `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
+| `jetlin-testing` | Driving a view headlessly, for testing an application's own UI logic |
 | `samples/demo` | Runnable three-page demo and the memory benchmark |
 | `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
 

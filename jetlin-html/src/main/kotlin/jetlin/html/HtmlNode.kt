@@ -1,5 +1,6 @@
 package jetlin.html
 
+import java.util.Collections
 import jetlin.protocol.EventPayload
 import jetlin.protocol.ListenerSpec
 import jetlin.protocol.NodeId
@@ -70,6 +71,33 @@ public class ElementNode internal constructor(
     internal var handlers: Map<String, EventHandler> = emptyMap()
 
     internal val hasUnsafeInnerHtml: Boolean get() = properties.containsKey(INNER_HTML)
+
+    /**
+     * Read-only views of this node, for code that inspects the tree rather than building it.
+     *
+     * A server-side virtual DOM is worth being able to look at: a test asserting on what a view
+     * rendered, a debug endpoint, an alternative serializer. Reading is all that is offered, and
+     * these are unmodifiable views rather than the collections themselves: the tree is owned by the
+     * composition, and the only thing allowed to change it is the applier.
+     */
+    public val childNodes: List<HtmlNode> get() = Collections.unmodifiableList(children)
+
+    /** Value of an HTML attribute, or null when the element does not carry it. */
+    public fun attribute(name: String): String? = attributes[name]
+
+    public val attributeNames: Set<String> get() = Collections.unmodifiableSet(attributes.keys)
+
+    /**
+     * Value of a DOM property, or null when unset.
+     *
+     * Distinct from [attribute] and not interchangeable with it: `value` and `checked` are written
+     * as properties, because setting the attribute only changes a control's default and stops
+     * having any effect once the user has touched it.
+     */
+    public fun property(name: String): PropValue? = properties[name]
+
+    /** Events this element is listening for. Handlers themselves stay private to the composition. */
+    public val eventNames: Set<String> get() = Collections.unmodifiableSet(listeners.keys)
 
     /**
      * Reconciles declared state against current state, emitting one op per actual difference.

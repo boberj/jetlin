@@ -8,6 +8,9 @@ dependencies {
     implementation(project(":jetlin-server-ktor"))
     implementation(libs.ktor.server.netty)
     implementation(libs.slf4j.simple)
+
+    testImplementation(project(":jetlin-testing"))
+    testImplementation(libs.kotlin.test)
 }
 
 application {
