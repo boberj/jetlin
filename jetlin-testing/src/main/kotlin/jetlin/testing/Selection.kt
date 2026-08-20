@@ -18,6 +18,8 @@ public class NodeSelection internal constructor(
     internal val test: ViewTest,
     private val matcher: NodeMatcher,
     private val index: Int? = null,
+    /** The subtree this query is confined to, captured from the enclosing [within] block. */
+    private val scope: NodeSelection? = null,
 ) {
     private val description: String =
         if (index == null) matcher.description else "${matcher.description} at index $index"
@@ -29,7 +31,7 @@ public class NodeSelection internal constructor(
 
     public suspend fun assertDoesNotExist(): NodeSelection = apply {
         test.inspect { owner ->
-            val found = owner.find(matcher)
+            val found = owner.find(matcher, from = scope?.resolveIn(owner) ?: owner.root)
             if (found.isNotEmpty()) {
                 fail("Expected no node matching $description, found ${found.size}.", owner)
             }
@@ -82,8 +84,8 @@ public class NodeSelection internal constructor(
     internal suspend fun <T> withPath(block: (List<ElementNode>) -> T): T =
         test.inspect { owner -> block(owner.pathTo(resolveIn(owner))) }
 
-    private fun resolveIn(owner: HtmlOwner): ElementNode {
-        val found = owner.find(matcher)
+    internal fun resolveIn(owner: HtmlOwner): ElementNode {
+        val found = owner.find(matcher, from = scope?.resolveIn(owner) ?: owner.root)
         if (index != null) {
             return found.getOrNull(index)
                 ?: fail(
@@ -116,8 +118,12 @@ public class NodeSelection internal constructor(
 public class NodeCollection internal constructor(
     private val test: ViewTest,
     private val matcher: NodeMatcher,
+    private val scope: NodeSelection? = null,
 ) {
-    public suspend fun fetch(): List<ElementNode> = test.inspect { owner -> owner.find(matcher) }
+    public suspend fun fetch(): List<ElementNode> = test.inspect { owner -> owner.matches() }
+
+    private fun HtmlOwner.matches(): List<ElementNode> =
+        find(matcher, from = scope?.resolveIn(this) ?: root)
 
     public suspend fun size(): Int = fetch().size
 
@@ -126,7 +132,7 @@ public class NodeCollection internal constructor(
 
     public suspend fun assertCount(expected: Int): NodeCollection = apply {
         test.inspect { owner ->
-            val nodes = owner.find(matcher)
+            val nodes = owner.matches()
             if (nodes.size != expected) {
                 fail(
                     "Expected $expected nodes matching ${matcher.description}, found ${nodes.size}.",
@@ -147,7 +153,7 @@ public class NodeCollection internal constructor(
      * "the first row" and wrong for following one particular row across a reorder — match on
      * something stable when you mean the latter.
      */
-    public operator fun get(index: Int): NodeSelection = NodeSelection(test, matcher, index)
+    public operator fun get(index: Int): NodeSelection = NodeSelection(test, matcher, index, scope)
 
     public fun first(): NodeSelection = get(0)
 }
@@ -160,9 +166,12 @@ public class NodeCollection internal constructor(
  * the `<a>` is the one a test means. Interactions bubble from there up to whichever ancestor is
  * actually listening, so selecting the inner node does not stop it being clickable.
  */
-internal fun HtmlOwner.find(matcher: NodeMatcher): List<ElementNode> {
+internal fun HtmlOwner.find(matcher: NodeMatcher, from: ElementNode = root): List<ElementNode> =
+    from.find(matcher)
+
+internal fun ElementNode.find(matcher: NodeMatcher): List<ElementNode> {
     val matches = mutableListOf<ElementNode>()
-    collectMatches(root, matcher, matches, includeSelf = false)
+    collectMatches(this, matcher, matches, includeSelf = false)
     return matches.filter { candidate -> matches.none { it !== candidate && candidate.contains(it) } }
 }
 
@@ -228,6 +237,9 @@ internal fun HtmlNode.describe(indent: String = ""): String = when (this) {
     is TextNode -> "$indent\"$text\"  #$id\n"
     is ElementNode -> buildString {
         append(indent).append('<').append(tag)
+        // Not an attribute, so it has to be printed explicitly — otherwise the tree dump omits the
+        // one thing a failing query was most likely looking for.
+        testTag?.let { append(" testTag=").append(it) }
         for (name in attributeNames) append(' ').append(name).append("=\"").append(attribute(name)).append('"')
         for (name in listOf("value", "checked")) {
             when (val prop = property(name)) {

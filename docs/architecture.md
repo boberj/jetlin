@@ -482,14 +482,42 @@ application's own tests describe behaviour rather than protocol.
 ```kotlin
 @Test
 fun `clearing the title blocks the save`(): Unit = runViewTest(url = "/todo/1") {
-    setRoutes { view("/todo/{id}") { TodoDetailPage() } }
+    setContent(route = "/todo/{id}") { TodoDetailPage() }
 
-    onNode(hasAttr("data-test", "title")).type("")
+    onNode(hasTestTag("title")).type("")
 
-    onNode(hasAttr("data-test", "title-error")).assertText("A title is required")
-    onNode(hasAttr("data-test", "save")).assertDisabled()
+    onNode(hasTestTag("title-error")).assertText("A title is required")
+    onNode(hasTestTag("save")).assertDisabled()
 }
 ```
+
+### Naming a node without marking up the page
+
+`AttrsScope.testTag` names an element for tests. The name is stored on the node and, unlike an
+ordinary `data-` attribute, is never serialized: it does not appear in the HTML, does not travel in
+`NodeSpec`, and never becomes a `SetAttr`. A page a user is served carries nothing that exists only
+for tests.
+
+Browser tests are the exception, because Playwright can only select on what is really in the DOM.
+`JetlinConfig.exposeTestTags` writes tags out as `data-test` as well — and does so by putting them
+into the ordinary attribute map at composition time rather than conjuring them up in the serializer.
+That is what keeps the feature to one decision: serialization, `NodeSpec`, attribute diffing and the
+client's adoption walk all keep working untouched, so an exposed tag reaches nodes inserted long
+after first paint and is patched normally when it changes. Writing it only at render time would have
+left an attribute in the DOM that the server had no model of, and none at all on anything arriving
+through `Op.Insert`.
+
+### Saying where, not what
+
+Queries can be confined to a subtree, which is how a test says "the up button *in this row*" instead
+of taking an index across every button on the page:
+
+```kotlin
+within(onAll(hasTestTag("todo"))[2]) { onNode(hasText("up")).click() }
+```
+
+The scope is a query rather than a resolved node, so it is re-resolved on each use and blocks nest.
+`Update.assertOnlyWithin` follows the same idea: every change lay inside these subtrees.
 
 Nodes are addressed by matcher rather than by id, and an interaction names a node and an event —
 there is no geometry to hit-test, because that is not how input reaches a Jetlin view in the first
@@ -507,6 +535,10 @@ sample leaves fifteen of its sixteen tests passing; the one that fails is this o
 **Whether the right state was declared saveable.** `hibernateAndRestore()` puts the session through
 the cycle in section 9, so a test can pin down that a half-typed draft survives and that scratch
 state does not.
+
+A view reached by a route declares its pattern — `setContent(route = "/todo/{id}")` — and the path
+parameters are resolved by matching the session's URL against it, so the id is written once instead
+of twice. Tests that navigate use `setRoutes` instead, which follows the session between views.
 
 Matchers hide the places where HTML is inconsistent about where state lives: `hasValue` reads the
 `value` *property*, which is where `bind` writes, while `isDisabled` reads the `disabled`

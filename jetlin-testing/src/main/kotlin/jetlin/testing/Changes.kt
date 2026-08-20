@@ -44,6 +44,30 @@ public class Update internal constructor(
         }
     }
 
+    /**
+     * Asserts that everything the update changed lies inside one of the subtrees matched.
+     *
+     * Usually what "only that row changed" means, and sturdier than [assertOnly]: it does not
+     * require the test to know that ticking a checkbox writes both the row's class and the input's
+     * `checked` property, only that neither of them was outside the row.
+     */
+    public suspend fun assertOnlyWithin(vararg matchers: NodeMatcher) {
+        val allowed = test.inspect { owner ->
+            matchers.flatMap { owner.find(it) }.flatMapTo(mutableSetOf()) { subtree ->
+                subtree.find(anyNode()).map { it.id } + subtree.id
+            }
+        }
+        val outside = changedNodes - allowed
+        if (outside.isNotEmpty()) {
+            throw AssertionError(
+                "Expected every change to be inside " +
+                    matchers.joinToString { it.description } +
+                    ", but these were not: " + describeIds(outside) +
+                    "\n\nThe tree was:\n" + test.debugTree(),
+            )
+        }
+    }
+
     /** Asserts that none of the nodes matched by [matchers] were touched. */
     public suspend fun assertUntouched(vararg matchers: NodeMatcher) {
         val touched = idsOf(matchers.toList()) intersect changedNodes
@@ -81,9 +105,10 @@ public class Update internal constructor(
  * Runs [block] and reports which nodes it changed.
  *
  * ```kotlin
- * val update = recordUpdate { onAll(hasAttr("data-test", "todo"))[0].check() }
- * update.assertOnly(hasClass("todo-text") and hasText("Buy milk"), hasTag("input") and isChecked())
- * update.assertUntouched(hasTag("ul"))
+ * val update = recordUpdate {
+ *     within(onAll(hasTestTag("todo"))[0]) { onNode(hasTag("input")).check() }
+ * }
+ * update.assertOnlyWithin(hasTestTag("todo"), hasTestTag("remaining"))
  * ```
  */
 public suspend fun ViewTest.recordUpdate(block: suspend () -> Unit): Update {

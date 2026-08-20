@@ -73,6 +73,15 @@ public class ElementNode internal constructor(
     internal val hasUnsafeInnerHtml: Boolean get() = properties.containsKey(INNER_HTML)
 
     /**
+     * The name this element was given for tests; see [AttrsScope.testTag].
+     *
+     * Held here rather than among the attributes so that it never reaches the browser, and read by
+     * whatever is inspecting the tree rather than by the page.
+     */
+    public var testTag: String? = null
+        internal set
+
+    /**
      * Read-only views of this node, for code that inspects the tree rather than building it.
      *
      * A server-side virtual DOM is worth being able to look at: a test asserting on what a view
@@ -106,6 +115,11 @@ public class ElementNode internal constructor(
      * so an unchanged element costs a single equality check and no traversal.
      */
     internal fun applyData(data: ElementData) {
+        // No op is recorded: the client has no use for a test tag, which is the whole point of
+        // keeping it off the attributes. When tags are exposed it is in data.attributes as well,
+        // and gets patched from there like anything else.
+        testTag = data.testTag
+
         for ((name, value) in data.attributes) {
             if (attributes.put(name, value) != value && attached) {
                 owner.record(Op.SetAttr(id, name, value))
@@ -176,6 +190,7 @@ internal data class ElementData(
     val attributes: Map<String, String>,
     val properties: Map<String, PropValue>,
     val listeners: Map<String, ListenerSpec>,
+    val testTag: String? = null,
 )
 
 /**

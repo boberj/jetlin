@@ -5,6 +5,7 @@ import jetlin.testing.click
 import jetlin.testing.hasAttr
 import jetlin.testing.hasClass
 import jetlin.testing.hasTag
+import jetlin.testing.hasTestTag
 import jetlin.testing.hasText
 import jetlin.testing.isDisabled
 import jetlin.testing.recordUpdate
@@ -38,7 +39,7 @@ class TodoAppTest {
     fun `the list opens with the seeded items`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        onAll(hasAttr("data-test", "todo")).assertCount(3)
+        onAll(hasTestTag("todo")).assertCount(3)
         onNode(hasClass("todo-text") and hasText("Read the architecture doc")).assertExists()
     }
 
@@ -46,13 +47,13 @@ class TodoAppTest {
     fun `adding a todo appends a row and clears the draft`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        onNode(hasAttr("data-test", "draft")).type("Third thing")
-        onNode(hasAttr("data-test", "add")).click()
+        onNode(hasTestTag("draft")).type("Third thing")
+        onNode(hasTestTag("add")).click()
 
-        onAll(hasAttr("data-test", "todo")).assertCount(4)
+        onAll(hasTestTag("todo")).assertCount(4)
         onNode(hasClass("todo-text") and hasText("Third thing")).assertExists()
         // Cleared by the server, which is how the round trip shows up from the client's side.
-        onNode(hasAttr("data-test", "draft")).assertValue("")
+        onNode(hasTestTag("draft")).assertValue("")
     }
 
     @Test
@@ -60,14 +61,14 @@ class TodoAppTest {
         setContent { TodoListPage() }
 
         // Untouched and invalid: the form should not open covered in red.
-        onNode(hasAttr("data-test", "draft-error")).assertDoesNotExist()
-        onNode(hasAttr("data-test", "add")).assertDisabled()
+        onNode(hasTestTag("draft-error")).assertDoesNotExist()
+        onNode(hasTestTag("add")).assertDisabled()
 
-        onNode(hasAttr("data-test", "draft")).type("something")
-        onNode(hasAttr("data-test", "add")).assertEnabled()
+        onNode(hasTestTag("draft")).type("something")
+        onNode(hasTestTag("add")).assertEnabled()
 
-        onNode(hasAttr("data-test", "draft")).type("")
-        onNode(hasAttr("data-test", "draft-error")).assertText("Enter something to do")
+        onNode(hasTestTag("draft")).type("")
+        onNode(hasTestTag("draft-error")).assertText("Enter something to do")
     }
 
     @Test
@@ -75,26 +76,23 @@ class TodoAppTest {
         setContent { TodoListPage() }
 
         val update = recordUpdate {
-            onAll(hasTag("input") and hasAttr("type", "checkbox"))[0].check()
+            within(onAll(hasTestTag("todo"))[0]) { onNode(hasTag("input")).check() }
         }
 
         onNode(hasClass("todo-text") and hasText("Read the architecture doc")).assertMatches(hasClass("done"))
-        // The row's link restyled and its checkbox took the new state; the list, the other rows and
-        // the surrounding page did not move. This is the assertion the browser suite can only
-        // approximate by tagging DOM nodes and checking the tags survived.
-        update.assertUntouched(
-            hasTag("ul"),
-            hasClass("todo-text") and hasText("Run the tests"),
-            hasClass("todo-text") and hasText("Open this page twice"),
-        )
+        onNode(hasTestTag("remaining")).assertTextContains("2 left")
+
+        // Exactly two places moved: the row that was ticked, and the counter that depends on it. The
+        // list itself and the other two rows were left where they were. This is the assertion the
+        // browser suite can only approximate, by tagging DOM nodes and checking the tags survived.
+        update.assertOnlyWithin(hasTestTag("todo"), hasTestTag("remaining"))
     }
 
     @Test
     fun `moving a row up reorders without rebuilding the list`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        // The "up" button in the third row.
-        onAll(hasTag("button") and hasText("up"))[2].click()
+        within(onAll(hasTestTag("todo"))[2]) { onNode(hasText("up")).click() }
 
         onAll(hasClass("todo-text")).assertTexts(
             "Read the architecture doc",
@@ -107,9 +105,9 @@ class TodoAppTest {
     fun `removing a row drops it from the list`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        onAll(hasTag("button") and hasText("remove"))[1].click()
+        within(onAll(hasTestTag("todo"))[1]) { onNode(hasText("remove")).click() }
 
-        onAll(hasAttr("data-test", "todo")).assertCount(2)
+        onAll(hasTestTag("todo")).assertCount(2)
         onNode(hasClass("todo-text") and hasText("Run the tests")).assertDoesNotExist()
     }
 
@@ -117,25 +115,25 @@ class TodoAppTest {
     fun `resetting restores the seeded list`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        onNode(hasAttr("data-test", "draft")).type("Something extra")
-        onNode(hasAttr("data-test", "add")).click()
-        onAll(hasAttr("data-test", "todo")).assertCount(4)
+        onNode(hasTestTag("draft")).type("Something extra")
+        onNode(hasTestTag("add")).click()
+        onAll(hasTestTag("todo")).assertCount(4)
 
-        onNode(hasAttr("data-test", "reset")).click()
+        onNode(hasTestTag("reset")).click()
 
-        onAll(hasAttr("data-test", "todo")).assertCount(3)
+        onAll(hasTestTag("todo")).assertCount(3)
     }
 
     @Test
     fun `a half-typed draft survives hibernation`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        onNode(hasAttr("data-test", "draft")).type("Typed before the drop")
+        onNode(hasTestTag("draft")).type("Typed before the drop")
 
         hibernateAndRestore()
 
-        onNode(hasAttr("data-test", "draft")).assertValue("Typed before the drop")
-        onNode(hasAttr("data-test", "add")).click()
+        onNode(hasTestTag("draft")).assertValue("Typed before the drop")
+        onNode(hasTestTag("add")).click()
         onNode(hasClass("todo-text") and hasText("Typed before the drop")).assertExists()
     }
 
@@ -147,7 +145,7 @@ class TodoAppTest {
         TodoStore.add("Added from elsewhere")
         awaitIdle()
 
-        onAll(hasAttr("data-test", "todo")).assertCount(4)
+        onAll(hasTestTag("todo")).assertCount(4)
         onNode(hasClass("todo-text") and hasText("Added from elsewhere")).assertExists()
     }
 }
@@ -164,37 +162,37 @@ class TodoDetailTest {
 
     @Test
     fun `a deep link renders the item named by the path`(): Unit =
-        runViewTest(url = "/todo/2", pathParams = mapOf("id" to "2")) {
-            setContent { TodoDetailPage() }
+        runViewTest(url = "/todo/2") {
+            setContent(route = "/todo/{id}") { TodoDetailPage() }
 
-            onNode(hasAttr("data-test", "title")).assertValue("Run the tests")
+            onNode(hasTestTag("title")).assertValue("Run the tests")
         }
 
     @Test
     fun `clearing the title shows the error and disables save`(): Unit =
-        runViewTest(url = "/todo/1", pathParams = mapOf("id" to "1")) {
-            setContent { TodoDetailPage() }
+        runViewTest(url = "/todo/1") {
+            setContent(route = "/todo/{id}") { TodoDetailPage() }
 
-            onNode(hasAttr("data-test", "save")).assertEnabled()
+            onNode(hasTestTag("save")).assertEnabled()
 
-            onNode(hasAttr("data-test", "title")).type("")
-            onNode(hasAttr("data-test", "title-error")).assertText("A title is required")
-            onNode(hasAttr("data-test", "save")).assertDisabled()
+            onNode(hasTestTag("title")).type("")
+            onNode(hasTestTag("title-error")).assertText("A title is required")
+            onNode(hasTestTag("save")).assertDisabled()
 
-            onNode(hasAttr("data-test", "title")).type("Renamed on the server")
-            onNode(hasAttr("data-test", "title-error")).assertDoesNotExist()
-            onNode(hasAttr("data-test", "save")).assertEnabled()
+            onNode(hasTestTag("title")).type("Renamed on the server")
+            onNode(hasTestTag("title-error")).assertDoesNotExist()
+            onNode(hasTestTag("save")).assertEnabled()
         }
 
     @Test
     fun `an over-long title is rejected with its own message`(): Unit =
-        runViewTest(url = "/todo/1", pathParams = mapOf("id" to "1")) {
-            setContent { TodoDetailPage() }
+        runViewTest(url = "/todo/1") {
+            setContent(route = "/todo/{id}") { TodoDetailPage() }
 
-            onNode(hasAttr("data-test", "title")).type("x".repeat(61))
+            onNode(hasTestTag("title")).type("x".repeat(61))
 
-            onNode(hasAttr("data-test", "title-error")).assertText("Keep it under 60 characters")
-            onNode(hasAttr("data-test", "save")).assertMatches(isDisabled())
+            onNode(hasTestTag("title-error")).assertText("Keep it under 60 characters")
+            onNode(hasTestTag("save")).assertMatches(isDisabled())
         }
 
     @Test
@@ -207,8 +205,8 @@ class TodoDetailTest {
                 view("/todo/{id}") { TodoDetailPage() }
             }
 
-            onNode(hasAttr("data-test", "title")).type("Renamed on the server")
-            onNode(hasAttr("data-test", "save")).click()
+            onNode(hasTestTag("title")).type("Renamed on the server")
+            onNode(hasTestTag("save")).click()
 
             assertUrl("/")
             assertEquals("Renamed on the server", TodoStore.find(1)?.title)
@@ -227,7 +225,7 @@ class TodoDetailTest {
             onAll(hasClass("todo-text"))[0].click()
 
             assertUrl("/todo/1")
-            onNode(hasAttr("data-test", "title")).assertValue("Read the architecture doc")
+            onNode(hasTestTag("title")).assertValue("Read the architecture doc")
         }
 
     @Test
@@ -246,13 +244,13 @@ class TodoDetailTest {
             navigate("/")
 
             assertUrl("/")
-            onAll(hasAttr("data-test", "todo")).assertCount(3)
+            onAll(hasTestTag("todo")).assertCount(3)
         }
 
     @Test
     fun `an unknown id renders the not-found view`(): Unit =
-        runViewTest(url = "/todo/999", pathParams = mapOf("id" to "999")) {
-            setContent { TodoDetailPage() }
+        runViewTest(url = "/todo/999") {
+            setContent(route = "/todo/{id}") { TodoDetailPage() }
 
             onNode(hasTag("h1")).assertText("No such todo")
         }

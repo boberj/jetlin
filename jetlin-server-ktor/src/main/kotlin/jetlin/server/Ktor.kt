@@ -57,6 +57,15 @@ public class JetlinConfig {
     public var sessionStore: SessionStore = InMemorySessionStore()
 
     /**
+     * Writes every `testTag` into the markup as `data-test` as well.
+     *
+     * Off by default, because those names are for tests and cost bytes on every element for every
+     * user. Turn it on outside production so that browser tests, which can only select on what is
+     * really in the DOM, have something to select on.
+     */
+    public var exposeTestTags: Boolean = false
+
+    /**
      * How long a composition stays up after its socket goes away.
      *
      * Long enough that a tunnel or a sleeping laptop reattaches to a running composition; past it,
@@ -110,6 +119,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         store = config.sessionStore,
         framePolicy = config.framePolicy,
         disconnectGrace = config.disconnectGrace,
+        exposeTestTags = config.exposeTestTags,
     ) { current -> RouteHost(router, current) }
 
     routing {

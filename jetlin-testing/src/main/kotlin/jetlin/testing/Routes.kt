@@ -33,9 +33,9 @@ public class RoutesBuilder internal constructor() {
  *         view("/todo/{id}") { TodoDetailPage() }
  *     }
  *
- *     onNode(hasAttr("data-test", "save")).click()
+ *     onNode(hasTestTag("save")).click()
  *     assertUrl("/")
- *     onAll(hasAttr("data-test", "todo")).assertCount(3)
+ *     onAll(hasTestTag("todo")).assertCount(3)
  * }
  * ```
  *

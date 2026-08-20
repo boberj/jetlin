@@ -108,23 +108,44 @@ open window at once.
 describe what a user does and sees rather than how the framework carries it:
 
 ```kotlin
+@Composable
+fun TodoDetail() {
+    Input({ testTag("title"); bind(title) })      // names the node for tests, and nothing else
+    Button({ testTag("save"); disabled(!title.isValid) }) { Text("Save") }
+}
+
 @Test
 fun `clearing the title blocks the save`(): Unit = runViewTest(url = "/todo/1") {
-    setRoutes { view("/todo/{id}") { TodoDetail() } }
+    setContent(route = "/todo/{id}") { TodoDetail() }
 
-    onNode(hasAttr("data-test", "title")).type("")
+    onNode(hasTestTag("title")).type("")
 
-    onNode(hasAttr("data-test", "title-error")).assertText("A title is required")
-    onNode(hasAttr("data-test", "save")).assertDisabled()
+    onNode(hasTestTag("title-error")).assertText("A title is required")
+    onNode(hasTestTag("save")).assertDisabled()
 }
+```
+
+A `testTag` is held on the server's node, not written into the page, so it costs the browser
+nothing — unlike a `data-test` attribute, which ships to every user forever. Browser tests are the
+exception, since Playwright can only select on what is really in the DOM; `jetlin { exposeTestTags
+= true }` writes them out as `data-test` as well, for use outside production.
+
+Queries can be confined to part of the page, which is how to say *where* something is rather than
+what it is:
+
+```kotlin
+within(onAll(hasTestTag("todo"))[2]) { onNode(hasText("up")).click() }
 ```
 
 Because state lives on the server, a test can also ask questions a client-side one cannot. Which
 nodes an interaction actually changed:
 
 ```kotlin
-val update = recordUpdate { onAll(hasAttr("data-test", "todo"))[0].check() }
-update.assertUntouched(hasTag("ul"))     // one row patched, the list left alone
+val update = recordUpdate {
+    within(onAll(hasTestTag("todo"))[0]) { onNode(hasTag("input")).check() }
+}
+// The row that was ticked and the counter that depends on it — and nothing else.
+update.assertOnlyWithin(hasTestTag("todo"), hasTestTag("remaining"))
 ```
 
 That catches a defect nothing else can see. Keying a list by a value that changes renders exactly
@@ -134,9 +155,9 @@ fifteen of its sixteen tests still pass — the one that fails is this one.
 And whether the right state was declared saveable:
 
 ```kotlin
-onNode(hasAttr("data-test", "draft")).type("half-typed")
+onNode(hasTestTag("draft")).type("half-typed")
 hibernateAndRestore()
-onNode(hasAttr("data-test", "draft")).assertValue("half-typed")
+onNode(hasTestTag("draft")).assertValue("half-typed")
 ```
 
 The module depends on no test framework — assertions throw `AssertionError` — so it works with
@@ -145,7 +166,7 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 127 unit tests, asserting exact op streams
+./gradlew test                       # 142 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
 cd e2e && npm install && npx playwright test    # 18 browser tests (server must be running)

@@ -27,6 +27,8 @@ public class LiveView(
     initialRequest: RequestContext = RequestContext(path = "/"),
     framePolicy: FramePolicy = FramePolicy.Immediate,
     restored: Map<String, JsonElement> = emptyMap(),
+    /** Writes `testTag` out as `data-test` as well, so browser tests can select on it. */
+    private val exposeTestTags: Boolean = false,
     private val content: @Composable (RequestContext) -> Unit,
 ) : AutoCloseable {
 
@@ -68,6 +70,7 @@ public class LiveView(
                 LocalNavigator provides navigator,
                 LocalRequest provides request,
                 LocalSaveableStateRegistry provides stateRegistry,
+                LocalTestTagsExposed provides exposeTestTags,
             ) {
                 content(request)
             }

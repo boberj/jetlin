@@ -72,6 +72,7 @@ public class SessionRegistry(
     private val framePolicy: FramePolicy = FramePolicy.Immediate,
     private val handoffTimeout: Duration = 30.seconds,
     private val disconnectGrace: Duration = 30.seconds,
+    private val exposeTestTags: Boolean = false,
     private val content: @Composable (RequestContext) -> Unit,
 ) {
     private val sessions = ConcurrentHashMap<String, JetlinSession>()
@@ -83,7 +84,7 @@ public class SessionRegistry(
     public suspend fun create(request: RequestContext): JetlinSession {
         val session = JetlinSession(
             token = newToken(),
-            view = LiveView(request, framePolicy, emptyMap(), content),
+            view = LiveView(request, framePolicy, emptyMap(), exposeTestTags, content),
             // This composition rendered the page the browser is about to receive, so the socket that
             // follows may adopt what it was served.
             adoptable = true,
@@ -126,7 +127,7 @@ public class SessionRegistry(
 
         val restored = JetlinSession(
             token = token,
-            view = LiveView(base.forUrl(url ?: snapshot.url), framePolicy, snapshot.state, content),
+            view = LiveView(base.forUrl(url ?: snapshot.url), framePolicy, snapshot.state, exposeTestTags, content),
             // Composed afresh, so its node ids bear no relation to the data-jl values in whatever
             // markup the browser is still holding. It has to be sent the tree.
             adoptable = false,

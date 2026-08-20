@@ -25,31 +25,31 @@ class RestoreTest {
             val draft = rememberSavedField("", key = "draft")
             val scratch = remember { mutableStateOf("recomputed") }
             Div {
-                Input({ attr("data-test", "draft"); bind(draft) })
-                Span({ attr("data-test", "scratch") }) { Text(scratch.value) }
+                Input({ testTag("draft"); bind(draft) })
+                Span({ testTag("scratch") }) { Text(scratch.value) }
             }
         }
 
-        onNode(hasAttr("data-test", "draft")).type("half-typed message")
+        onNode(hasTestTag("draft")).type("half-typed message")
 
         hibernateAndRestore()
 
-        onNode(hasAttr("data-test", "draft")).assertValue("half-typed message")
+        onNode(hasTestTag("draft")).assertValue("half-typed message")
         // remember is scratch space; recomputing it is the point, and it is what keeps a hibernated
         // session small.
-        onNode(hasAttr("data-test", "scratch")).assertText("recomputed")
+        onNode(hasTestTag("scratch")).assertText("recomputed")
     }
 
     @Test
     fun `queries and interactions keep working against the restored view`(): Unit = runViewTest {
         setContent {
             val draft = rememberSavedField("", key = "draft")
-            Div { Input({ attr("data-test", "draft"); bind(draft) }) }
+            Div { Input({ testTag("draft"); bind(draft) }) }
         }
 
         hibernateAndRestore()
 
-        onNode(hasAttr("data-test", "draft")).type("typed after waking")
-        onNode(hasAttr("data-test", "draft")).assertValue("typed after waking")
+        onNode(hasTestTag("draft")).type("typed after waking")
+        onNode(hasTestTag("draft")).assertValue("typed after waking")
     }
 }

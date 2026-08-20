@@ -12,15 +12,48 @@ import jetlin.protocol.PropValue
 public val LocalHtmlOwner: ProvidableCompositionLocal<HtmlOwner> =
     staticCompositionLocalOf { error("No HtmlOwner in composition; use JetlinView to host content") }
 
+/**
+ * Whether [AttrsScope.testTag] should also be written into the markup as `data-test`.
+ *
+ * Off by default, so tags cost nothing in production. Static because it is fixed for the life of a
+ * session, which keeps reading it in every element free of invalidation tracking.
+ */
+public val LocalTestTagsExposed: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { false }
+
+/** The attribute a [AttrsScope.testTag] takes when tags are exposed. */
+internal const val TEST_TAG_ATTRIBUTE: String = "data-test"
+
 /** Declares attributes, DOM properties and event handlers for one element. */
-public class AttrsScope internal constructor() {
+public class AttrsScope internal constructor(private val exposeTestTags: Boolean = false) {
     private val attributes = LinkedHashMap<String, String>()
     private val properties = LinkedHashMap<String, PropValue>()
     private val listeners = LinkedHashMap<String, ListenerSpec>()
     private val handlers = LinkedHashMap<String, EventHandler>()
 
+    private var testTag: String? = null
+
     public fun attr(name: String, value: String?) {
         if (value == null) attributes.remove(name) else attributes[name] = value
+    }
+
+    /**
+     * Names this element for tests, without putting anything in the page.
+     *
+     * A test finds the element by this name rather than by a class or a wording, so it keeps working
+     * when the design or the copy changes and breaks only when the behaviour does. The tag is held
+     * on the node and never serialized, so unlike an ordinary `data-` attribute it costs nothing on
+     * the wire and tells a reader of the page source nothing about the internals.
+     *
+     * Browser tests are the exception, since Playwright can only select on what is really in the
+     * DOM. Setting `exposeTestTags` on the server writes tags out as `data-test` as well, and an
+     * application turns that on outside production.
+     */
+    public fun testTag(value: String) {
+        testTag = value
+        // Written as a real attribute rather than added by the serializer, so that it travels in
+        // NodeSpec, is patched by Op.SetAttr when it changes, and reaches nodes that arrive after
+        // first paint — none of which would be true of markup conjured up at render time.
+        if (exposeTestTags) attr(TEST_TAG_ATTRIBUTE, value)
     }
 
     public fun classes(value: String?): Unit = attr("class", value)
@@ -85,7 +118,7 @@ public class AttrsScope internal constructor() {
     /** Marks a `<option>` as chosen. A property rather than an attribute, like `value`. */
     public fun selected(value: Boolean): Unit = prop("selected", value)
 
-    internal fun data(): ElementData = ElementData(attributes, properties, listeners)
+    internal fun data(): ElementData = ElementData(attributes, properties, listeners, testTag)
     internal fun handlers(): Map<String, EventHandler> = handlers
 }
 
@@ -96,7 +129,7 @@ public fun Element(
     content: @Composable () -> Unit = {},
 ) {
     val owner = LocalHtmlOwner.current
-    val scope = AttrsScope()
+    val scope = AttrsScope(exposeTestTags = LocalTestTagsExposed.current)
     attrs?.invoke(scope)
     val data = scope.data()
     val handlers = scope.handlers()

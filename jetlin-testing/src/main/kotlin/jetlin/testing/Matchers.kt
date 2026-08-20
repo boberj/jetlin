@@ -42,12 +42,21 @@ public fun hasAttr(name: String): NodeMatcher =
 /**
  * Matches an element whose [name] attribute equals [value].
  *
- * The usual way to address a node from a test, paired with `attr("data-test", "...")` in the view.
- * A test-only attribute is deliberate: it survives restyling and rewording, so a test breaks when
- * behaviour changes rather than when a class name does.
+ * For attributes the page genuinely has. To address a node from a test, prefer [hasTestTag], which
+ * matches a name the view declared for that purpose and which never reaches the browser.
  */
 public fun hasAttr(name: String, value: String): NodeMatcher =
     NodeMatcher("attribute '$name'='$value'") { it is ElementNode && it.attribute(name) == value }
+
+/**
+ * Matches an element named [value] by `testTag`.
+ *
+ * The usual way to address a node from a test. The tag lives on the node rather than in the markup,
+ * so this matches whether or not the server is configured to write tags out as `data-test`, and the
+ * page a user is served carries nothing that exists only for tests.
+ */
+public fun hasTestTag(value: String): NodeMatcher =
+    NodeMatcher("testTag '$value'") { it is ElementNode && it.testTag == value }
 
 /** Matches an element whose `id` attribute equals [value]. */
 public fun hasId(value: String): NodeMatcher = hasAttr("id", value)

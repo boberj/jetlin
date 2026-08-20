@@ -22,7 +22,7 @@ class SelectionTest {
     fun `nesting resolves to the innermost match`(): Unit = runViewTest {
         setContent {
             Ul {
-                Li({ attr("data-test", "row") }) {
+                Li({ testTag("row") }) {
                     Span({ classes("label") }) { Text("Buy milk") }
                 }
             }
@@ -36,12 +36,12 @@ class SelectionTest {
     fun `two matches fail rather than picking one`(): Unit = runViewTest {
         setContent {
             Div {
-                Span({ attr("data-test", "item") }) { Text("a") }
-                Span({ attr("data-test", "item") }) { Text("b") }
+                Span({ testTag("item") }) { Text("a") }
+                Span({ testTag("item") }) { Text("b") }
             }
         }
 
-        val error = assertFailsWith<AssertionError> { onNode(hasAttr("data-test", "item")).fetch() }
+        val error = assertFailsWith<AssertionError> { onNode(hasTestTag("item")).fetch() }
         val message = error.message.orEmpty()
         assertTrue(message.contains("found 2"), message)
         assertTrue(message.contains("onAll"), "the failure should point at the way out: $message")
@@ -62,20 +62,20 @@ class SelectionTest {
     fun `a collection counts and indexes in document order`(): Unit = runViewTest {
         setContent {
             Ul {
-                listOf("one", "two", "three").forEach { Li({ attr("data-test", "row") }) { Text(it) } }
+                listOf("one", "two", "three").forEach { Li({ testTag("row") }) { Text(it) } }
             }
         }
 
-        onAll(hasAttr("data-test", "row")).assertCount(3)
-        onAll(hasAttr("data-test", "row")).assertTexts("one", "two", "three")
-        onAll(hasAttr("data-test", "row"))[1].assertText("two")
+        onAll(hasTestTag("row")).assertCount(3)
+        onAll(hasTestTag("row")).assertTexts("one", "two", "three")
+        onAll(hasTestTag("row"))[1].assertText("two")
     }
 
     @Test
     fun `an index past the end names how many there were`(): Unit = runViewTest {
-        setContent { Ul { Li({ attr("data-test", "row") }) { Text("only") } } }
+        setContent { Ul { Li({ testTag("row") }) { Text("only") } } }
 
-        val error = assertFailsWith<AssertionError> { onAll(hasAttr("data-test", "row"))[3].fetch() }
+        val error = assertFailsWith<AssertionError> { onAll(hasTestTag("row"))[3].fetch() }
         assertTrue(error.message.orEmpty().contains("at least 4"), error.message)
         assertTrue(error.message.orEmpty().contains("found 1"), error.message)
     }

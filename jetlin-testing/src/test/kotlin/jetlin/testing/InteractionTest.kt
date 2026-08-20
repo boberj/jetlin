@@ -30,19 +30,19 @@ class InteractionTest {
                 // The text lives in a span, so a text query resolves to the span rather than to the
                 // button holding the handler. A browser would bubble; so does this.
                 Button({ onClick { clicks++ } }) { Span { Text("Save") } }
-                P({ attr("data-test", "count") }) { Text("$clicks") }
+                P({ testTag("count") }) { Text("$clicks") }
             }
         }
 
         onNode(hasText("Save")).click()
-        onNode(hasAttr("data-test", "count")).assertText("1")
+        onNode(hasTestTag("count")).assertText("1")
     }
 
     @Test
     fun `clicking something nobody wired up fails`(): Unit = runViewTest {
-        setContent { Button({ attr("data-test", "dead") }) { Text("Does nothing") } }
+        setContent { Button({ testTag("dead") }) { Text("Does nothing") } }
 
-        val error = assertFailsWith<AssertionError> { onNode(hasAttr("data-test", "dead")).click() }
+        val error = assertFailsWith<AssertionError> { onNode(hasTestTag("dead")).click() }
         val message = error.message.orEmpty()
         assertTrue(message.contains("Nothing listens for 'click'"), message)
         assertTrue(message.contains("no listeners"), message)
@@ -53,17 +53,17 @@ class InteractionTest {
         setContent {
             val field = rememberField("") { if (it.isBlank()) "Required" else null }
             Div {
-                Input({ attr("data-test", "name"); bind(field) })
-                field.error?.let { P({ attr("data-test", "error") }) { Text(it) } }
+                Input({ testTag("name"); bind(field) })
+                field.error?.let { P({ testTag("error") }) { Text(it) } }
             }
         }
 
-        onNode(hasAttr("data-test", "name")).type("Ada")
-        onNode(hasAttr("data-test", "error")).assertDoesNotExist()
-        onNode(hasAttr("data-test", "name")).assertValue("Ada")
+        onNode(hasTestTag("name")).type("Ada")
+        onNode(hasTestTag("error")).assertDoesNotExist()
+        onNode(hasTestTag("name")).assertValue("Ada")
 
-        onNode(hasAttr("data-test", "name")).type("")
-        onNode(hasAttr("data-test", "error")).assertText("Required")
+        onNode(hasTestTag("name")).type("")
+        onNode(hasTestTag("error")).assertText("Required")
     }
 
     @Test
@@ -72,15 +72,15 @@ class InteractionTest {
             var done by remember { mutableStateOf(false) }
             Div {
                 Input({ type("checkbox"); checked(done); onChecked { done = it } })
-                Span({ attr("data-test", "state") }) { Text(if (done) "done" else "todo") }
+                Span({ testTag("state") }) { Text(if (done) "done" else "todo") }
             }
         }
 
         onNode(hasTag("input")).check()
-        onNode(hasAttr("data-test", "state")).assertText("done")
+        onNode(hasTestTag("state")).assertText("done")
 
         onNode(hasTag("input")).check(false)
-        onNode(hasAttr("data-test", "state")).assertText("todo")
+        onNode(hasTestTag("state")).assertText("todo")
     }
 
     @Test
@@ -91,12 +91,12 @@ class InteractionTest {
                 Form({ onSubmit { submitted = it["email"].orEmpty() } }) {
                     Input({ name("email") })
                 }
-                P({ attr("data-test", "submitted") }) { Text(submitted) }
+                P({ testTag("submitted") }) { Text(submitted) }
             }
         }
 
         onNode(hasTag("form")).submit(mapOf("email" to "ada@example.com"))
-        onNode(hasAttr("data-test", "submitted")).assertText("ada@example.com")
+        onNode(hasTestTag("submitted")).assertText("ada@example.com")
     }
 
     @Test
@@ -105,11 +105,11 @@ class InteractionTest {
             var lastKey by remember { mutableStateOf("none") }
             Div {
                 Input({ onKeyDown { lastKey = it } })
-                Span({ attr("data-test", "key") }) { Text(lastKey) }
+                Span({ testTag("key") }) { Text(lastKey) }
             }
         }
 
         onNode(hasTag("input")).pressKey("Enter")
-        onNode(hasAttr("data-test", "key")).assertText("Enter")
+        onNode(hasTestTag("key")).assertText("Enter")
     }
 }

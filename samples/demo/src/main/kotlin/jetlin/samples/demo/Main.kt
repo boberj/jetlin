@@ -34,6 +34,10 @@ fun main() {
     val port = System.getenv("PORT")?.toInt() ?: 8080
     embeddedServer(Netty, port = port) {
         jetlin {
+            // This app exists to be tested, so its test tags are written into the markup for
+            // Playwright to select on. A real application would set this only outside production,
+            // where the default keeps them off the wire entirely.
+            exposeTestTags = true
             head = STYLES
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
@@ -53,7 +57,7 @@ internal fun Shell(content: @Composable () -> Unit) {
             Link("/shapes") { Text("Shapes") }
             Button({
                 classes("link")
-                attr("data-test", "reset")
+                testTag("reset")
                 onClick { TodoStore.reset() }
             }) { Text("Reset demo data") }
         }
@@ -74,13 +78,13 @@ internal fun TodoListPage() = Shell {
         Div({ classes("row") }) {
             Input({
                 classes("input")
-                attr("data-test", "draft")
+                testTag("draft")
                 attr("placeholder", "What needs doing?")
                 bind(draft)
             })
             Button({
                 classes("btn")
-                attr("data-test", "add")
+                testTag("add")
                 disabled(!draft.isValid)
                 onClick {
                     TodoStore.add(draft.value.trim())
@@ -89,7 +93,7 @@ internal fun TodoListPage() = Shell {
             }) { Text("Add") }
         }
         draft.error?.let { message ->
-            P({ classes("error"); attr("data-test", "draft-error") }) { Text(message) }
+            P({ classes("error"); testTag("draft-error") }) { Text(message) }
         }
 
         Ul({ classes("todos") }) {
@@ -99,7 +103,7 @@ internal fun TodoListPage() = Shell {
                 key(todo.id) { TodoRow(todo) }
             }
         }
-        P({ classes("hint") }) {
+        P({ classes("hint"); testTag("remaining") }) {
             Text(
                 "${TodoStore.todos.count { !it.done }} left. The list is shared across sessions, " +
                     "and what you type above survives a disconnect.",
@@ -111,7 +115,7 @@ internal fun TodoListPage() = Shell {
 
 @Composable
 internal fun TodoRow(todo: Todo) {
-    Li({ attr("data-test", "todo") }) {
+    Li({ testTag("todo") }) {
         Input({
             type("checkbox")
             checked(todo.done)
@@ -158,18 +162,18 @@ internal fun TodoDetailPage() = Shell {
                 Span({ classes("label") }) { Text("Title") }
                 Input({
                     classes(if (title.error != null) "input invalid" else "input")
-                    attr("data-test", "title")
+                    testTag("title")
                     bind(title)
                 })
                 title.error?.let { message ->
-                    P({ classes("error"); attr("data-test", "title-error") }) { Text(message) }
+                    P({ classes("error"); testTag("title-error") }) { Text(message) }
                 }
             }
             Div({ classes("field") }) {
                 Span({ classes("label") }) { Text("Notes") }
                 TextArea({
                     classes("input")
-                    attr("data-test", "notes")
+                    testTag("notes")
                     attr("rows", "4")
                     bind(notes)
                 })
@@ -177,7 +181,7 @@ internal fun TodoDetailPage() = Shell {
             Div({ classes("row") }) {
                 Button({
                     classes("btn")
-                    attr("data-test", "save")
+                    testTag("save")
                     disabled(!title.isValid)
                     onClick {
                         if (title.isValid) {
@@ -216,17 +220,17 @@ internal fun ShapesPage() = Shell {
 
         Div({ classes("field") }) {
             Span({ classes("label") }) { Text("Two text nodes side by side") }
-            P({ attr("data-test", "adjacent") }) {
+            P({ testTag("adjacent") }) {
                 Text(first)
                 Text(second)
             }
             Div({ classes("row") }) {
                 Button({
-                    classes("btn"); attr("data-test", "edit-first")
+                    classes("btn"); testTag("edit-first")
                     onClick { first = "ALPHA" }
                 }) { Text("Edit the first") }
                 Button({
-                    classes("btn"); attr("data-test", "edit-second")
+                    classes("btn"); testTag("edit-second")
                     onClick { second = "BETA" }
                 }) { Text("Edit the second") }
             }
@@ -234,20 +238,20 @@ internal fun ShapesPage() = Shell {
 
         Div({ classes("field") }) {
             Span({ classes("label") }) { Text("A text node that starts with nothing in it") }
-            P({ attr("data-test", "empty") }) {
+            P({ testTag("empty") }) {
                 Text("[")
                 Text(middle)
                 Text("]")
             }
             Button({
-                classes("btn"); attr("data-test", "fill")
+                classes("btn"); testTag("fill")
                 onClick { middle = "filled" }
             }) { Text("Fill it") }
         }
 
         Div({ classes("field") }) {
             Span({ classes("label") }) { Text("Text either side of an element") }
-            P({ attr("data-test", "interleaved") }) {
+            P({ testTag("interleaved") }) {
                 Text("before ")
                 Span({ classes("count") }) { Text(first) }
                 Text(" after")
@@ -256,9 +260,9 @@ internal fun ShapesPage() = Shell {
 
         Div({ classes("field") }) {
             Span({ classes("label") }) { Text("Markup the composition does not own") }
-            Div({ attr("data-test", "raw"); unsafeInnerHtml(markup) })
+            Div({ testTag("raw"); unsafeInnerHtml(markup) })
             Button({
-                classes("btn"); attr("data-test", "swap-raw")
+                classes("btn"); testTag("swap-raw")
                 onClick { markup = "<i>italic</i>" }
             }) { Text("Swap it") }
         }
@@ -303,7 +307,7 @@ internal fun ServerClock() {
         H2 { Text("Server push") }
         P {
             Text("Session uptime: ")
-            Span({ classes("count"); attr("data-test", "ticks") }) { Text("$ticks") }
+            Span({ classes("count"); testTag("ticks") }) { Text("$ticks") }
             Text("s")
         }
     }

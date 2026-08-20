@@ -34,7 +34,7 @@ class ChangesTest {
     fun `editing one row of a keyed list leaves the others alone`(): Unit = runViewTest {
         setContent { RowList() }
 
-        val update = recordUpdate { onNode(hasAttr("data-test", "edit-2")).click() }
+        val update = recordUpdate { onNode(hasTestTag("edit-2")).click() }
 
         update.assertOnly(hasText("TWO"))
         update.assertUntouched(hasTag("ul"), hasText("one"), hasText("three"))
@@ -46,9 +46,9 @@ class ChangesTest {
         // every assertion about contents still passes; only the traffic gives it away.
         setContent { RowList(keyByText = true) }
 
-        val update = recordUpdate { onNode(hasAttr("data-test", "edit-2")).click() }
+        val update = recordUpdate { onNode(hasTestTag("edit-2")).click() }
 
-        onNode(hasAttr("data-test", "label-2")).assertText("TWO")
+        onNode(hasTestTag("label-2")).assertText("TWO")
         val error = assertFailsWith<AssertionError> { update.assertUntouched(hasTag("ul")) }
         assertTrue(error.message.orEmpty().contains("<ul>"), error.message)
     }
@@ -58,18 +58,18 @@ class ChangesTest {
         setContent {
             val items = remember { mutableStateListOf("one") }
             Div {
-                Button({ attr("data-test", "add"); onClick { items += "two" } }) { Text("add") }
-                Ul({ attr("data-test", "list") }) {
+                Button({ testTag("add"); onClick { items += "two" } }) { Text("add") }
+                Ul({ testTag("list") }) {
                     items.forEach { key(it) { Li { Text(it) } } }
                 }
             }
         }
 
-        val update = recordUpdate { onNode(hasAttr("data-test", "add")).click() }
+        val update = recordUpdate { onNode(hasTestTag("add")).click() }
 
         // Both the list and the row that arrived: a structural change belongs to the parent, and the
         // new subtree is named too so it can be asserted on directly.
-        update.assertOnly(hasAttr("data-test", "list"), hasText("two"))
+        update.assertOnly(hasTestTag("list"), hasText("two"))
     }
 
     @Test
@@ -78,12 +78,12 @@ class ChangesTest {
             val items = remember { mutableStateListOf("one") }
             Div {
                 // Writes the value it already holds, so the runtime has nothing to send.
-                Button({ attr("data-test", "noop"); onClick { items[0] = "one" } }) { Text("noop") }
+                Button({ testTag("noop"); onClick { items[0] = "one" } }) { Text("noop") }
                 Span { Text(items[0]) }
             }
         }
 
-        recordUpdate { onNode(hasAttr("data-test", "noop")).click() }.assertNothingChanged()
+        recordUpdate { onNode(hasTestTag("noop")).click() }.assertNothingChanged()
     }
 
     @Test
@@ -91,8 +91,8 @@ class ChangesTest {
         setContent { RowList() }
 
         val update = recordUpdate {
-            onNode(hasAttr("data-test", "edit-1")).click()
-            onNode(hasAttr("data-test", "edit-3")).click()
+            onNode(hasTestTag("edit-1")).click()
+            onNode(hasTestTag("edit-3")).click()
         }
 
         val error = assertFailsWith<AssertionError> { update.assertOnly(hasText("ONE")) }
@@ -110,9 +110,9 @@ private fun RowList(keyByText: Boolean = false) {
         rows.forEach { row ->
             key(if (keyByText) row.text else row.id) {
                 Li {
-                    Span({ attr("data-test", "label-${row.id}") }) { Text(row.text) }
+                    Span({ testTag("label-${row.id}") }) { Text(row.text) }
                     Button({
-                        attr("data-test", "edit-${row.id}")
+                        testTag("edit-${row.id}")
                         onClick { row.text = row.text.uppercase() }
                     }) { Text("edit") }
                 }
