@@ -24,6 +24,7 @@ import jetlin.html.Text
 import jetlin.html.TextArea
 import jetlin.html.Ul
 import jetlin.html.bind
+import jetlin.html.closest
 import jetlin.html.pathParam
 import jetlin.html.rememberField
 import jetlin.html.rememberSavedField
@@ -284,6 +285,35 @@ internal fun AboutPage() = Shell {
             Text("Try the back button, then reload — a reload starts a fresh session on this path.")
         }
     }
+    Disclosure()
+}
+
+/**
+ * A panel that opens without asking the server.
+ *
+ * Everything else on these pages is a round trip, which is right when the server has an opinion —
+ * it owns the todos, the validation and the routing. It has no opinion about whether a panel is
+ * open, so paying a network hop to find out would be latency spent on nothing. The button declares
+ * what the browser should do and the browser does it, with the socket idle or even disconnected.
+ */
+@Composable
+internal fun Disclosure() {
+    Div({ classes("card disclosure"); testTag("disclosure") }) {
+        H2 { Text("No round trip") }
+        Button({
+            classes("btn")
+            testTag("disclosure-toggle")
+            clientOnly { toggleClass("open", on = closest("disclosure")) }
+        }) { Text("How this one works") }
+        Div({ classes("panel"); testTag("disclosure-panel") }) {
+            P {
+                Text(
+                    "This panel is shown by a class the browser toggles for itself. The server " +
+                        "was not asked, and does not know. Disconnect the socket and it still works.",
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -337,6 +367,8 @@ private val STYLES = """
       .btn { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid #d1d5db;
              background: #fff; cursor: pointer; text-decoration: none; color: inherit; }
       .btn:hover { background: #f3f4f6; }
+      .disclosure .panel { display: none; }
+      .disclosure.open .panel { display: block; margin-top: .9rem; }
       .btn[disabled] { opacity: .5; cursor: not-allowed; }
       .link { font: inherit; font-size: .85rem; background: none; border: 0;
               color: #2563eb; cursor: pointer; padding: 0 .35rem; text-decoration: none; }

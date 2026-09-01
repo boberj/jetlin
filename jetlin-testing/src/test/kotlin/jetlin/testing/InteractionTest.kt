@@ -12,6 +12,9 @@ import jetlin.html.P
 import jetlin.html.Span
 import jetlin.html.Text
 import jetlin.html.bind
+import jetlin.html.closest
+import jetlin.protocol.ClientCommand
+import jetlin.protocol.ClientTarget
 import jetlin.html.rememberField
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -46,6 +49,54 @@ class InteractionTest {
         val message = error.message.orEmpty()
         assertTrue(message.contains("Nothing listens for 'click'"), message)
         assertTrue(message.contains("no listeners"), message)
+    }
+
+    @Test
+    fun `a client-only listener says why it cannot be dispatched`(): Unit = runViewTest {
+        setContent {
+            Button({ testTag("toggle"); clientOnly { toggleClass("open", on = closest("card")) } }) {
+                Text("Details")
+            }
+        }
+
+        // It really does listen, so "nothing listens for click" would be a lie. What it does happens
+        // in the browser, and a headless test has to be told that rather than left wondering.
+        val error = assertFailsWith<AssertionError> { onNode(hasTestTag("toggle")).click() }
+        val message = error.message.orEmpty()
+        assertTrue(message.contains("client-only"), message)
+        assertTrue(message.contains("assertClientCommands"), message)
+    }
+
+    @Test
+    fun `what the browser will do is pinned down even though it cannot be run`(): Unit = runViewTest {
+        setContent {
+            Button({ testTag("toggle"); clientOnly { toggleClass("open", on = closest("card")) } }) {
+                Text("Details")
+            }
+        }
+
+        onNode(hasTestTag("toggle")).assertClientCommands(
+            "click",
+            ClientCommand.ToggleClass("open", ClientTarget.Closest("card")),
+        )
+    }
+
+    @Test
+    fun `an element that both acts and reports is still dispatchable`(): Unit = runViewTest {
+        setContent {
+            var clicks by remember { mutableStateOf(0) }
+            Div {
+                Button({
+                    testTag("save")
+                    clientOnly { addClass("busy") }
+                    onClick { clicks++ }
+                }) { Text("Save") }
+                P({ testTag("count") }) { Text("$clicks") }
+            }
+        }
+
+        onNode(hasTestTag("save")).click()
+        onNode(hasTestTag("count")).assertText("1")
     }
 
     @Test

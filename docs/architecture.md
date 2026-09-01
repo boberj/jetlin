@@ -54,7 +54,7 @@ that read it, and a patch follows. Sending updates to a connected client needs n
 
 ```
 ┌─ Browser ──────────────────────────────────────────────────────────────────┐
-│  jetlin.js (6.6 kB minified)                                               │
+│  jetlin.js (7.0 kB minified)                                               │
 │  applies ops · delegates events · guards in-flight input · reconnects      │
 └───────────────▲──────────────────────────────────────┬─────────────────────┘
                 │ patch { rev, ack, ops }              │ event { node, seq }
@@ -172,7 +172,7 @@ or CBOR would be a drop-in change; readable frames are more useful at this stage
 
 ## 6. The browser runtime
 
-6.6 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
+7.0 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
 children per element, and the listener specs.
 
 The child array exists because the DOM's own `childNodes` cannot be trusted for indexing — browsers
@@ -441,7 +441,7 @@ rather than a requirement.
 **Ktor first, with a portable core.** `LiveView` knows nothing about WebSockets or Ktor and can be
 driven straight from a test with no server involved. Adapters for other servers are additive.
 
-**The client is TypeScript.** About 600 lines of DOM manipulation, which ships as 6.6 kB with no
+**The client is TypeScript.** About 650 lines of DOM manipulation, which ships as 7.0 kB with no
 runtime of its own to carry.
 
 ---
@@ -507,6 +507,39 @@ after first paint and is patched normally when it changes. Writing it only at re
 left an attribute in the DOM that the server had no model of, and none at all on anything arriving
 through `Op.Insert`.
 
+### Work the browser does for itself
+
+Every interaction described so far is a round trip, which is right whenever the server has an
+opinion: it owns the data, the validation and the routing. It has no opinion about whether a menu is
+open, and paying a network hop to find out is latency spent on nothing.
+
+`AttrsScope.clientOnly` declares what the browser should do when an event fires:
+
+```kotlin
+Button({ clientOnly { toggleClass("open", on = closest("card")) } }) { Text("Details") }
+```
+
+The commands are a closed vocabulary — toggle, add and remove a class, focus, blur — not a script.
+That limit is the design. Arbitrary client code would be a second application to keep in step with
+the first, which is the thing this framework exists to avoid; a fixed set of verbs cannot grow into
+one.
+
+They cost no new machinery. `ListenerSpec` already travels to the browser, inside `data-jl-on` in
+the first paint and as `Op.Listen` afterwards, so commands ride along and a page is interactive
+before a socket exists. `ListenerSpec.notify` says whether the server wants to hear about the event
+at all, and is **derived** from whether a handler was declared rather than stated by the author, so
+the two cannot disagree. An element with commands and no handler acts and stays quiet; one with both
+acts immediately and still reports, which is how a button shows a spinner before the work it
+triggers has happened.
+
+The classes named this way belong to the browser. If the composition also writes `class` on the same
+element, the composition wins and the next patch overwrites whatever was toggled.
+
+What a headless test can say about this is that it was declared, and declared exactly —
+`assertClientCommands` pins the list. Whether the class actually toggles is a question for a browser,
+and `jetlin-testing` says so rather than dispatching into nothing: clicking a client-only node fails
+with an explanation instead of quietly doing nothing.
+
 ### Saying where, not what
 
 Queries can be confined to a subtree, which is how a test says "the up button *in this row*" instead
@@ -557,8 +590,15 @@ directly, so it works under whichever runner the consuming project already uses.
   described in section 9, which has to be decided first. Two changes go with it whenever it happens:
   a generation counter on the snapshot so two processes cannot resurrect each other's state, and
   moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
-- **Client-only interactivity.** Toggles, dropdowns and tooltips should not need a round trip. A
-  `clientOnly {}` escape hatch is the missing piece.
+- **Enclaves.** A subtree the composition renders once and then hands over entirely — a map, a
+  chart, a rich-text editor, anything with its own lifecycle. `clientOnly` covers behaviour the
+  server has no opinion about; an enclave covers markup the server does not own at all, which is a
+  different and harder problem. `unsafeInnerHtml` already carries `data-jl-raw` and the client
+  already refuses to index into it, so the boundary exists; what does not exist is identity across a
+  `Reset`. Every reconnect past the grace period rebuilds the whole tree, and an enclave that loses
+  its scroll position, its editor buffer or its half-drawn canvas on every dropped connection is
+  worse than not having one. Surviving a reset — not ignoring patches — is the feature, and it needs
+  deciding before any of it is built.
 - File uploads, a Spring Boot adapter, telemetry, and CI.
 
 Known limitation: `ack` can be set slightly early when a background patch overlaps an inbound event,

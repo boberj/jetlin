@@ -1,7 +1,7 @@
 # Jetlin
 
 Interactive web UI written as Kotlin `@Composable` functions that run **on the server**. The browser
-gets HTML plus a 6.6 kB runtime that applies the DOM changes the server sends and reports events
+gets HTML plus a 7.0 kB runtime that applies the DOM changes the server sends and reports events
 back.
 
 Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and
@@ -66,12 +66,23 @@ LaunchedEffect(Unit) { while (true) { delay(1000); ticks++ } }
 Because UI state lives on the server, there is no client cache to invalidate and no serialization
 boundary to design — a handler closes over the objects it needs and calls straight into your code.
 
+Not everything deserves a round trip, though. The server has no opinion about whether a panel is
+open, so it is not asked:
+
+```kotlin
+Button({ clientOnly { toggleClass("open", on = closest("card")) } }) { Text("Details") }
+```
+
+A closed set of verbs — toggle, add and remove a class, focus, blur — not a script, because
+arbitrary client code would be a second application to keep in step with the first. They travel in
+the markup, so the button works before a socket exists and keeps working while one is down.
+
 ## Status
 
 **Early.** The core is built and tested end to end in a browser, with routing, request context,
 live navigation, forms and hibernation on top of it. [`docs/architecture.md`](docs/architecture.md)
 has the full design: the update path, the protocol, sessions, input handling, design decisions, and
-what is designed but not yet built (multi-node, client-only interactivity, uploads).
+what is designed but not yet built (multi-node, enclaves, uploads).
 
 Session state lives on the server, so per-session cost sets how many users a node can carry:
 
@@ -166,10 +177,10 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 142 unit tests, asserting exact op streams
+./gradlew test                       # 151 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 18 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 21 browser tests (server must be running)
 ```
 
 The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
@@ -177,8 +188,9 @@ more of the page than it needs to fails the build. The sample's tests are writte
 `jetlin-testing` instead, and are the worked example of what an application's tests look like. Browser tests cover first paint with JavaScript blocked, deep
 links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
 typing while the server sends unrelated updates, navigation without a page load, back and forward,
-validation gating a submit, reconnection with state preserved, and that the server-rendered DOM is
-kept rather than rebuilt on connect. Each one resets the demo's shared
+validation gating a submit, reconnection with state preserved, that the server-rendered DOM is
+kept rather than rebuilt on connect, and that a `clientOnly` disclosure still opens with the socket
+deliberately disconnected. Each one resets the demo's shared
 store first, so they assert exact counts and contents rather than working around whatever the
 previous test left. Hibernating and waking a session is covered at the integration level instead,
 driving a real socket, because a browser reconnects on its own too quickly to sit out a grace

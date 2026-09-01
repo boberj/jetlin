@@ -109,6 +109,12 @@ public class ElementNode internal constructor(
     public val eventNames: Set<String> get() = Collections.unmodifiableSet(listeners.keys)
 
     /**
+     * What the element declared for [event]: what to extract, how to debounce, what the browser does
+     * for itself, and whether the server hears about it at all.
+     */
+    public fun listenerSpec(event: String): ListenerSpec? = listeners[event]
+
+    /**
      * Reconciles declared state against current state, emitting one op per actual difference.
      *
      * Only called when the [ElementData] value differs structurally from the previous composition,

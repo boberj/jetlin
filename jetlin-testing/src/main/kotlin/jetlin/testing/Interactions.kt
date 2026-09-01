@@ -57,13 +57,27 @@ public suspend fun NodeSelection.pressKey(key: String): NodeSelection = apply {
  */
 private suspend fun NodeSelection.send(event: String, payload: EventPayload) {
     val target = withPath { path ->
-        path.lastOrNull { event in it.eventNames }
+        val listening = path.lastOrNull { event in it.eventNames }
             ?: throw AssertionError(
                 "Nothing listens for '$event' on the node matching $describedBy, " +
                     "or on anything containing it. It has " +
                     path.last().eventNames.let { if (it.isEmpty()) "no listeners" else "listeners for $it" } +
                     ".\n\nThe node was:\n" + path.last().describe(),
             )
+
+        // The browser stops at the first element listening for an event, so a client-only listener
+        // consumes it rather than letting it reach a handler further out. Saying so beats dispatching
+        // into nothing and leaving the test to wonder why the page did not change.
+        if (listening.listenerSpec(event)?.notify == false) {
+            throw AssertionError(
+                "The listener for '$event' on the node matching $describedBy is client-only: it " +
+                    "declares commands and no handler, so there is nothing here to dispatch to. Its " +
+                    "effect happens in the browser. Pin the declaration with assertClientCommands, " +
+                    "and cover the behaviour with a browser test.\n\nThe node was:\n" +
+                    listening.describe(),
+            )
+        }
+        listening
     }
     test.dispatchEvent(target.id, event, payload)
 }

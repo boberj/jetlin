@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ComposeNode
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
+import jetlin.protocol.ClientCommand
+import jetlin.protocol.ClientTarget
 import jetlin.protocol.EventPayload
 import jetlin.protocol.Extract
 import jetlin.protocol.ListenerSpec
@@ -22,6 +24,42 @@ public val LocalTestTagsExposed: ProvidableCompositionLocal<Boolean> = staticCom
 
 /** The attribute a [AttrsScope.testTag] takes when tags are exposed. */
 internal const val TEST_TAG_ATTRIBUTE: String = "data-test"
+
+/**
+ * Builds the list of things the browser should do for itself; see [AttrsScope.clientOnly].
+ */
+public class ClientCommandsScope internal constructor() {
+    internal val commands: MutableList<ClientCommand> = mutableListOf()
+
+    /** Adds [name] when absent and removes it when present. The verb behind most disclosure UI. */
+    public fun toggleClass(name: String, on: ClientTarget = ClientTarget.Self) {
+        commands += ClientCommand.ToggleClass(name, on)
+    }
+
+    public fun addClass(name: String, on: ClientTarget = ClientTarget.Self) {
+        commands += ClientCommand.AddClass(name, on)
+    }
+
+    public fun removeClass(name: String, on: ClientTarget = ClientTarget.Self) {
+        commands += ClientCommand.RemoveClass(name, on)
+    }
+
+    public fun focus(on: ClientTarget = ClientTarget.Self) {
+        commands += ClientCommand.Focus(on)
+    }
+
+    public fun blur(on: ClientTarget = ClientTarget.Self) {
+        commands += ClientCommand.Blur(on)
+    }
+}
+
+/**
+ * Targets the nearest enclosing element carrying [className], starting with the element itself.
+ *
+ * How a control reaches the thing it controls — a button opening the card that contains it. A class
+ * rather than a node reference because the browser has to resolve this on its own, without asking.
+ */
+public fun closest(className: String): ClientTarget = ClientTarget.Closest(className)
 
 /** Declares attributes, DOM properties and event handlers for one element. */
 public class AttrsScope internal constructor(private val exposeTestTags: Boolean = false) {
@@ -88,8 +126,46 @@ public class AttrsScope internal constructor(private val exposeTestTags: Boolean
     public fun unsafeInnerHtml(html: String): Unit = prop(INNER_HTML, html)
 
     public fun on(event: String, spec: ListenerSpec = ListenerSpec(), handler: EventHandler) {
-        listeners[event] = spec
+        listeners[event] = merge(listeners[event], spec)
         handlers[event] = handler
+    }
+
+    /**
+     * Declares work the browser does for itself when [event] fires, with no round trip.
+     *
+     * Opening a menu, expanding a disclosure, focusing a field: the server has no opinion about any
+     * of it, so asking it costs a network hop and buys nothing. What can be declared here is a fixed
+     * set of verbs, not a script — the moment client behaviour can be arbitrary it becomes a second
+     * application to keep in step with the first, which is the thing this framework exists to avoid.
+     *
+     * ```kotlin
+     * Button({ clientOnly { toggleClass("open", on = closest("card")) } }) { Text("Details") }
+     * ```
+     *
+     * Combining is allowed: an element declaring both this and [onClick] runs the commands
+     * immediately and still tells the server. With no handler declared, the browser acts and stays
+     * quiet.
+     *
+     * The classes named here are the browser's to manage. If the composition also writes `class` on
+     * the same element, its value is authoritative and the next patch overwrites whatever was
+     * toggled.
+     */
+    public fun clientOnly(event: String = "click", block: ClientCommandsScope.() -> Unit) {
+        val scope = ClientCommandsScope().apply(block)
+        listeners[event] = merge(listeners[event], ListenerSpec(commands = scope.commands))
+    }
+
+    /** Keeps whichever of the two declarations for one event carries each field. */
+    private fun merge(existing: ListenerSpec?, added: ListenerSpec): ListenerSpec {
+        if (existing == null) return added
+        return ListenerSpec(
+            extract = existing.extract.ifEmpty { added.extract },
+            commands = existing.commands + added.commands,
+            debounceMs = maxOf(existing.debounceMs, added.debounceMs),
+            throttleMs = maxOf(existing.throttleMs, added.throttleMs),
+            preventDefault = existing.preventDefault || added.preventDefault,
+            stopPropagation = existing.stopPropagation || added.stopPropagation,
+        )
     }
 
     public fun onClick(handler: () -> Unit): Unit = on("click") { handler() }
@@ -118,7 +194,14 @@ public class AttrsScope internal constructor(private val exposeTestTags: Boolean
     /** Marks a `<option>` as chosen. A property rather than an attribute, like `value`. */
     public fun selected(value: Boolean): Unit = prop("selected", value)
 
-    internal fun data(): ElementData = ElementData(attributes, properties, listeners, testTag)
+    internal fun data(): ElementData = ElementData(
+        attributes = attributes,
+        properties = properties,
+        // Derived rather than declared: the browser is told to report an event exactly when a
+        // handler exists to receive it, so the two can never drift apart.
+        listeners = listeners.mapValues { (event, spec) -> spec.copy(notify = event in handlers) },
+        testTag = testTag,
+    )
     internal fun handlers(): Map<String, EventHandler> = handlers
 }
 

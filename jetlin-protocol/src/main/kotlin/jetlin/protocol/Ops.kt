@@ -105,6 +105,22 @@ public sealed interface NodeSpec {
 public data class ListenerSpec(
     /** Fields the client should read off the DOM event and include in the payload. */
     val extract: List<Extract> = emptyList(),
+    /**
+     * Work the browser does for itself when this event fires, before anything is sent.
+     *
+     * A closed vocabulary rather than a script: showing a menu or opening a disclosure needs no
+     * server, and paying a round trip for it is latency spent on nothing. Keeping it to a fixed set
+     * of verbs means these can never grow into a second application living in the browser.
+     */
+    val commands: List<ClientCommand> = emptyList(),
+    /**
+     * Whether the server wants to hear about this event at all.
+     *
+     * False when the element declared only [commands] and no handler, in which case the browser acts
+     * and stays quiet. Computed from the composition rather than declared, so it cannot disagree
+     * with whether a handler actually exists.
+     */
+    val notify: Boolean = true,
     /** Fire at most once per quiet period, in milliseconds. 0 disables. */
     val debounceMs: Int = 0,
     /** Fire at most once per interval, in milliseconds. 0 disables. */
@@ -112,6 +128,67 @@ public data class ListenerSpec(
     val preventDefault: Boolean = false,
     val stopPropagation: Boolean = false,
 )
+
+/**
+ * One thing the browser can be told to do without consulting the server.
+ *
+ * Deliberately small and declarative. Anything needing real logic belongs on the server, where the
+ * rest of the application already is.
+ */
+@Serializable
+public sealed interface ClientCommand {
+    /** Where the command lands. Defaults to the element the listener is on. */
+    public val target: ClientTarget
+
+    @Serializable
+    @SerialName("toggle")
+    public data class ToggleClass(
+        val name: String,
+        override val target: ClientTarget = ClientTarget.Self,
+    ) : ClientCommand
+
+    @Serializable
+    @SerialName("add")
+    public data class AddClass(
+        val name: String,
+        override val target: ClientTarget = ClientTarget.Self,
+    ) : ClientCommand
+
+    @Serializable
+    @SerialName("remove")
+    public data class RemoveClass(
+        val name: String,
+        override val target: ClientTarget = ClientTarget.Self,
+    ) : ClientCommand
+
+    @Serializable
+    @SerialName("focus")
+    public data class Focus(override val target: ClientTarget = ClientTarget.Self) : ClientCommand
+
+    @Serializable
+    @SerialName("blur")
+    public data class Blur(override val target: ClientTarget = ClientTarget.Self) : ClientCommand
+}
+
+/**
+ * Which element a [ClientCommand] applies to.
+ *
+ * Resolved in the browser, so it can only name things the browser can see. A CSS class is the one
+ * such handle the markup already carries — node ids would be precise but would have to be threaded
+ * from a composable that has not been laid out yet.
+ */
+@Serializable
+public sealed interface ClientTarget {
+    /** The element the listener is declared on. */
+    @Serializable
+    @SerialName("self")
+    public data object Self : ClientTarget
+
+    /** The nearest ancestor carrying [className], starting with the element itself. */
+    @Serializable
+    @SerialName("closest")
+    public data class Closest(val className: String) : ClientTarget
+}
 
 @Serializable
 public enum class Extract {

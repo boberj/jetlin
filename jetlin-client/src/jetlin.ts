@@ -8,8 +8,26 @@
 
 type PropValue = { t: "s"; v: string } | { t: "b"; v: boolean };
 
+type ClientTarget = { t: "self" } | { t: "closest"; className: string };
+
+/**
+ * Something the browser does for itself when an event fires.
+ *
+ * A closed set of verbs rather than a script: a disclosure or a menu needs no server, and a round
+ * trip to open one is latency spent on nothing. Anything needing real logic stays on the server.
+ */
+type ClientCommand =
+  | { t: "toggle"; name: string; target?: ClientTarget }
+  | { t: "add"; name: string; target?: ClientTarget }
+  | { t: "remove"; name: string; target?: ClientTarget }
+  | { t: "focus"; target?: ClientTarget }
+  | { t: "blur"; target?: ClientTarget };
+
 interface ListenerSpec {
   extract?: string[];
+  commands?: ClientCommand[];
+  /** Absent means true: the server is told about this event unless it said otherwise. */
+  notify?: boolean;
   debounceMs?: number;
   throttleMs?: number;
   preventDefault?: boolean;
@@ -58,6 +76,12 @@ const ROOT_ID = 0;
 const EMPTY_TEXT_MARKER = "0";
 
 /** `index:id` pairs naming the text children of an element, which carry no attributes of their own. */
+/** Where a command lands: the element itself, or the nearest ancestor carrying a class. */
+function resolveTarget(element: Element, target: ClientTarget | undefined): Element | null {
+  if (!target || target.t === "self") return element;
+  return element.closest(`.${CSS.escape(target.className)}`);
+}
+
 function parseTextMarkers(value: string | null): Map<number, number> {
   const markers = new Map<number, number>();
   if (!value) return markers;
@@ -484,7 +508,7 @@ class Jetlin {
       if (id !== undefined) {
         const spec = this.listeners.get(id)?.[event.type];
         if (spec) {
-          this.fire(id, event, spec);
+          this.fire(id, node as Element, event, spec);
           return;
         }
       }
@@ -492,9 +516,46 @@ class Jetlin {
     }
   }
 
-  private fire(id: number, event: Event, spec: ListenerSpec): void {
+  /**
+   * Runs the commands a listener declared, resolving each one's target from [element].
+   *
+   * Deliberately before any debounce or throttle, and before anything is sent: these exist so the
+   * page reacts at once, and delaying them by the same interval that spares the server a round trip
+   * would defeat the point of having them.
+   */
+  private runCommands(element: Element, commands: ClientCommand[]): void {
+    for (const command of commands) {
+      const target = resolveTarget(element, command.target);
+      if (!target) continue;
+      switch (command.t) {
+        case "toggle":
+          target.classList.toggle(command.name);
+          break;
+        case "add":
+          target.classList.add(command.name);
+          break;
+        case "remove":
+          target.classList.remove(command.name);
+          break;
+        case "focus":
+          (target as HTMLElement).focus();
+          break;
+        case "blur":
+          (target as HTMLElement).blur();
+          break;
+      }
+    }
+  }
+
+  private fire(id: number, element: Element, event: Event, spec: ListenerSpec): void {
     if (spec.preventDefault) event.preventDefault();
     if (spec.stopPropagation) event.stopPropagation();
+
+    if (spec.commands?.length) this.runCommands(element, spec.commands);
+
+    // Nothing on the server is waiting for this one. Declared with commands and no handler, so the
+    // browser has already done everything there was to do.
+    if (spec.notify === false) return;
 
     const key = `${id}:${event.type}`;
     const payload = this.payload(event, spec);

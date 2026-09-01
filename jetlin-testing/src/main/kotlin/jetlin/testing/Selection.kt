@@ -4,6 +4,7 @@ import jetlin.html.ElementNode
 import jetlin.html.HtmlNode
 import jetlin.html.HtmlOwner
 import jetlin.html.TextNode
+import jetlin.protocol.ClientCommand
 import jetlin.protocol.PropValue
 
 /**
@@ -64,6 +65,20 @@ public class NodeSelection internal constructor(
     public suspend fun assertDisabled(): NodeSelection = assertMatches(isDisabled())
 
     public suspend fun assertEnabled(): NodeSelection = assertMatches(isEnabled())
+
+    /**
+     * Asserts exactly which commands the browser will run for [event], and in what order.
+     *
+     * What a headless test can say about client-only behaviour: that it was declared, and declared
+     * correctly. Whether the class actually toggles is a question for a browser.
+     */
+    public suspend fun assertClientCommands(
+        event: String = "click",
+        vararg expected: ClientCommand,
+    ): NodeSelection = apply {
+        val actual = fetch().listenerSpec(event)?.commands.orEmpty()
+        assertSame("Client commands for '$event' on $description", expected.toList(), actual)
+    }
 
     /** Asserts that the selected node also satisfies [other]. */
     public suspend fun assertMatches(other: NodeMatcher): NodeSelection = apply {

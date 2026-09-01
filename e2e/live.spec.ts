@@ -170,6 +170,46 @@ test("session state survives a dropped connection", async ({ page }) => {
 });
 
 /**
+ * Client-only behaviour: what the browser is trusted to do on its own.
+ *
+ * The point of these is the absence of a round trip, which is hard to assert directly — so they
+ * assert something stronger instead: the same interaction working with no server on the other end
+ * of the socket at all.
+ */
+
+test("a disclosure opens without involving the server", async ({ page }) => {
+  await page.goto("/about");
+  const panel = page.locator("[data-test=disclosure-panel]");
+
+  await expect(panel).toBeHidden();
+  await page.locator("[data-test=disclosure-toggle]").click();
+  await expect(panel).toBeVisible();
+  await page.locator("[data-test=disclosure-toggle]").click();
+  await expect(panel).toBeHidden();
+});
+
+test("it still works with the socket disconnected", async ({ page }) => {
+  await page.goto("/about");
+  // Wait for the connection so that disconnecting means something.
+  await expect(page.locator("body")).not.toHaveClass(/jl-disconnected/);
+
+  await page.evaluate(() => (window as unknown as { jetlin: { disconnect(): void } }).jetlin.disconnect());
+  await expect(page.locator("body")).toHaveClass(/jl-disconnected/);
+
+  // Nothing can reach the server now, and the panel opens anyway.
+  await page.locator("[data-test=disclosure-toggle]").click();
+  await expect(page.locator("[data-test=disclosure-panel]")).toBeVisible();
+});
+
+test("it works before any script has connected, from the server-rendered markup", async ({ page }) => {
+  // The commands travel in data-jl-on, which is in the HTML, so the button is live as soon as the
+  // runtime parses the page rather than once a socket is established.
+  await page.goto("/about");
+  await page.locator("[data-test=disclosure-toggle]").click();
+  await expect(page.locator("[data-test=disclosure-panel]")).toBeVisible();
+});
+
+/**
  * Adoption: keeping the server-rendered markup instead of being sent the tree a second time.
  *
  * The DOM the browser parsed and painted is the thing under test, so these check node identity
