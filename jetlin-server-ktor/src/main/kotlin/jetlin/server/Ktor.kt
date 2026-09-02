@@ -172,6 +172,10 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
     val config = JetlinConfig().apply(configure)
     val router = Router(config.views.map { it.pattern to it })
     install(WebSockets)
+    // One line a minute at most for each: both are reached at request rate, and a warning
+    // repeated ten thousand times buries the one somebody needed to read.
+    val capacityLog = LogThrottle(60_000_000_000L)
+
     val registry = SessionRegistry(
         scope = this,
         store = config.sessionStore,
@@ -194,9 +198,20 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                 val session = try {
                     registry.create(call.toRequestContext(config))
                 } catch (e: SessionLimitReachedException) {
-                    // Refusing is the point: the alternative is growing memory until the process
-                    // dies, which takes everyone's session with it rather than only this one.
-                    logger.warn("Refusing a page render at the session limit of ${e.limit}", e)
+                    // Refusing is the point: the alternative is memory settling somewhere the heap
+                    // cannot hold, which takes everyone's session with it rather than only this one.
+                    // Reaching the cap is not normal, so it is said out loud — but at request rate,
+                    // so it is said at most once a minute with a count of what it stood for.
+                    capacityLog.attempt()?.let { suppressed ->
+                        logger.warn(
+                            "At the session limit of {}: refusing page renders. " +
+                                "{} live, {} refused since this message, {} refused in total.",
+                            e.limit,
+                            registry.liveCount,
+                            suppressed,
+                            registry.rejectedCount,
+                        )
+                    }
                     call.response.headers.append(HttpHeaders.RetryAfter, "5")
                     call.respondText(
                         AT_CAPACITY_PAGE,
@@ -235,6 +250,9 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                 return@webSocket
             }
 
+            // Counted out here so the tally survives into the finally that reports it.
+            var dropped = 0L
+
             try {
                 // The composition is already built and warm from the page render. If this is the
                 // socket that page opened, the browser is holding markup this very composition
@@ -260,9 +278,21 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                         // memory, and the client is better told it is going too fast. Said once per
                         // episode, because a page that ignores the first will ignore the next
                         // thousand.
+                        dropped++
                         if (!throttled) {
                             throttled = true
-                            logger.warn("Throttling a connection that is sending too fast")
+                            // Named well enough to find: a page sending faster than a person can
+                            // click is almost always a loop in application JavaScript, and knowing
+                            // which page is most of the work of fixing it. The token is truncated
+                            // on purpose — it is a bearer credential, and a leaked log should not
+                            // be a session takeover. Eight characters correlate lines with each
+                            // other without being enough to use.
+                            logger.warn(
+                                "Throttling session {} on {}: sending faster than {}/s",
+                                session.token.take(8),
+                                session.view.currentUrl,
+                                config.eventsPerSecond,
+                            )
                             sendMessage(ServerMessage.Error(TOO_FAST, fatal = false))
                         }
                         continue
@@ -302,6 +332,18 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                 }
                 sender.cancel()
             } finally {
+                // The total, once, on the way out. A connection can be throttled and recover many
+                // times over its life, so the per-episode lines say it is happening and this says
+                // how much it came to.
+                if (dropped > 0) {
+                    logger.warn(
+                        "Dropped {} events for exceeding {}/s: session {} on {}",
+                        dropped,
+                        config.eventsPerSecond,
+                        session.token.take(8),
+                        session.view.currentUrl,
+                    )
+                }
                 // Stop recording before releasing the session: the composition keeps running during
                 // the grace period, and whoever reconnects is sent the whole tree anyway.
                 session.view.clientDetached()

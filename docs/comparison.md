@@ -80,7 +80,7 @@ Present, partial and absent, with no attempt to make the last column shorter tha
 | File uploads | **no** | yes | yes | yes |
 | More than one node | **no** | yes | yes | yes (with backplane) |
 | Published artifacts | **no** | yes | yes | yes |
-| Rate limiting / session caps | per connection and process | yes | framework-level | yes |
+| Session cap / runaway-client limit | yes (not a DoS defence) | yes | framework-level | yes |
 | Telemetry | **no** | yes | yes | yes |
 | Ecosystem, components, docs | **no** | large | large | large |
 
@@ -99,10 +99,12 @@ until that changes.
 pins the behaviour, but the policy for node-local windows has to be decided first. LiveView, Blazor
 and Livewire all run behind a load balancer today.
 
-**Limits are global, not per client.** There is a per-connection event budget and a cap on live
-sessions, which stops the process dying, but one source can still fill the cap and get everyone else
-refused. Per-address limits need a decision about trusting `X-Forwarded-For` and for now belong in
-front of the application.
+**Limits are global, not per client.** A cap on live sessions stops the process dying and a
+per-connection event budget stops a runaway page taking a share of the machine. Neither is a defence
+against somebody who means it: one source can fill the cap and get everyone else refused, or flood
+many sessions at the permitted rate. Per-address limits need a decision about trusting
+`X-Forwarded-For` and for now belong in front of the application — which is where the mature
+frameworks put them too, but they say so up front and have the operational guidance to match.
 
 **No ecosystem.** LiveView has component libraries, LiveView Native, an eight-year-old community and
 Elixir's supervision trees underneath it. Vaadin ships a commercial component suite. Jetlin has a

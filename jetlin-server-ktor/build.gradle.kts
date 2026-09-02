@@ -17,4 +17,8 @@ dependencies {
     testImplementation(libs.ktor.server.netty)
     testImplementation(libs.ktor.client.cio)
     testImplementation(libs.ktor.client.websockets)
+    // A real logging backend, so tests can assert that reaching a limit is actually reported.
+    // Without one slf4j binds a no-op and the warnings go nowhere, which is also what a
+    // regression removing them would look like.
+    testImplementation(libs.logback.classic)
 }

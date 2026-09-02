@@ -198,7 +198,7 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 175 unit tests, asserting exact op streams
+./gradlew test                       # 180 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
 cd e2e && npm install && npx playwright test    # 29 browser tests (server must be running)

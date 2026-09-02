@@ -468,9 +468,13 @@ hits one is a normal day for everybody else.
 
 **Sessions.** `JetlinConfig.maxSessions` caps how many are held at once. Every page render allocates
 one whether or not a socket ever arrives to claim it, and unclaimed ones only go when the handoff
-timeout runs out, so without a ceiling a stream of unauthenticated requests grows memory until the
-process dies — at ~136 kB each and 100 requests a second, roughly 400 MB a minute. Past the cap a
-page render is refused with a 503 and a `Retry-After`.
+timeout runs out.
+
+Without a ceiling, memory settles at roughly `arrival rate × handoff timeout × per-session cost` —
+it plateaus rather than growing without end, because the reaper is clearing at the same time. At
+~136 kB a session and a 30-second timeout, 100 requests a second is a plateau of about 400 MB, and
+1,000 a second is 4 GB. The second of those is where the process dies. The cap turns a plateau you
+cannot afford into refusals you can: past it, a page render gets a 503 and a `Retry-After`.
 
 Reconnects are deliberately *not* capped. Somebody reattaching already had a session and is not the
 one creating the pressure; turning them away to make room for new visitors is the wrong trade.
@@ -489,11 +493,31 @@ decode. Over-budget frames are dropped rather than queued — holding them would
 into memory — and the client is told once per episode with a non-fatal error, because a page that
 ignores the first warning will ignore the next thousand.
 
-Note that the frame loop was never *unbounded*: `dispatch` suspends until the recomposition settles,
-so a client could not queue arbitrary work inside the composition. What a flood took was a share of
-the machine, continuously, from one session. That is what the bucket is for.
+**Be clear about what this is for.** It is not a defence against a determined attacker, and should
+not be described as one. The frame loop was never unbounded to begin with: `dispatch` suspends until
+the recomposition settles, so a client could never queue arbitrary work inside the composition, and
+unread frames back up into socket buffers until TCP tells the sender to stop. Nor does the bucket
+stop somebody who means it — with the session cap at ten thousand, a determined sender opens many
+sessions and floods each at the permitted rate, and if a recomposition costs a millisecond that is
+still twenty sessions per core.
 
-`SessionRegistry.rejectedCount` and `liveCount` make both visible.
+What it is for is the ordinary case: **a client that has gone wrong.** Application JavaScript in a
+loop, a `ClientComponent` pushing on every animation frame, a retry with no backoff, an `onInput`
+wired to something that fires continuously. None of those are attacks and all of them are common,
+and without a limit one user's broken page quietly takes a share of the server until somebody
+notices a latency graph. It also turns "a session costs an unbounded amount" into a number that can
+be multiplied by expected users, which is what makes capacity planning possible at all.
+
+Real protection against deliberate abuse belongs in front of the application, in nginx or a load
+balancer, which is also where per-address limits live.
+
+**Both are logged, because a limit nobody hears about teaches nobody anything.** Reaching the
+session cap and throttling a connection are each reported at `WARN`, and each is reached at request
+rate, so both go through a `LogThrottle` that emits at most one line a minute carrying the count of
+what it stood for. The throttle line names the page and the first eight characters of the session
+token — truncated deliberately, since the token is a bearer credential and a leaked log should not
+be a session takeover — and a connection that dropped anything reports its total on the way out.
+`SessionRegistry.rejectedCount` and `liveCount` make the same thing visible to monitoring.
 
 ### Back-pressure
 
@@ -731,12 +755,13 @@ Ordered by what it stops you doing, not by size.
 
 ### Would stop a production deployment
 
-- **The limits are global, not per client.** `maxSessions` and the per-connection token bucket stop
-  the process dying, but one source can still fill the session cap and get everyone else refused.
-  Making that per remote address needs a decision about trusting `X-Forwarded-For`, which is its own
-  security question — behind a proxy every request otherwise looks like the proxy. Until then this
-  belongs in front of the application, in nginx or a load balancer, which is where per-address limits
-  usually live anyway.
+- **The limits are global, not per client.** `maxSessions` stops the process dying and the
+  per-connection token bucket stops a runaway page taking a share of the machine, but neither is a
+  defence against somebody who means it: one source can fill the session cap and get everyone else
+  refused, and can flood many sessions at the permitted rate. Making limits per remote address needs
+  a decision about trusting `X-Forwarded-For`, which is its own security question — behind a proxy
+  every request otherwise looks like the proxy. Until then this belongs in front of the application,
+  in nginx or a load balancer, which is where per-address limits usually live anyway.
 - **Nothing is published.** No Maven coordinates, no version scheme, no binary-compatibility
   validator. Nothing outside this repository can depend on Jetlin, which outranks every feature
   below it.

@@ -108,6 +108,48 @@ class LimitsTest {
     }
 
     @Test
+    fun `hitting either limit is written to the log`(): Unit = testApplication {
+        val log = LogCapture.of("jetlin.server")
+        application {
+            jetlin {
+                maxSessions = 1
+                eventsPerSecond = 1.0
+                eventBurst = 1
+                view("/") {
+                    var count by remember { mutableStateOf(0) }
+                    Div { Button({ onClick { count++ } }) { Text("go") } }
+                }
+            }
+        }
+        val client = createClient { install(WebSockets) }
+        val token = client.tokenFromPage()
+
+        client.get("/") // refused: the one slot is taken
+
+        client.webSocket("/jetlin") {
+            hello(token)
+            awaitMessage<ServerMessage.Reset>()
+            repeat(20) { send(ClientMessage.Event(node = 2, event = "click", seq = it + 1L)) }
+            awaitMessage<ServerMessage.Error>()
+        }
+
+        // Silence would be the real failure here: a limit doing its job invisibly means the
+        // application it is protecting people from never gets fixed.
+        log.use {
+            assertTrue(
+                log.contains("At the session limit of 1"),
+                "expected the session cap to be logged, got: ${log.lines}",
+            )
+            assertTrue(
+                log.contains("Throttling session"),
+                "expected the throttle to be logged, got: ${log.lines}",
+            )
+            // And the tally on the way out, which is what says how bad it was.
+            waitUntil { log.contains("events for exceeding") }
+        }
+    }
+
+    @Test
     fun `a burst within the budget is not throttled`(): Unit = testApplication {
         application {
             jetlin {
