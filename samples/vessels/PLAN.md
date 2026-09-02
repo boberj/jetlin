@@ -71,8 +71,12 @@ Whoever picks this up will need them again.
 
 ## 2. Findings — the durable result
 
-This is the part worth keeping regardless of what gets built next. Findings 1–3 were
-established by reading the framework and hold whatever direction the work takes.
+This is the part worth keeping regardless of what gets built next.
+
+**Three of these have since been fixed** on `claude/kotlin-compose-reactive-framework-mexz47`
+(commits `c080584`, `18f19b2`, `8179bfe`) — findings 2, 5 and 6 below. They are kept here with
+their original wording, marked FIXED, because the record of what a real page needed is the
+point of this document. Findings 1, 3, 4, 7 and 8 are still open.
 
 **1. Nothing holds per-session state across a navigation.**
 `remember` dies when the view is swapped. `rememberSaved` looks right and is not: its
@@ -87,7 +91,7 @@ documented for authentication, tenancy and locale — not view state — and it 
 restored on rehydration, so a hibernated session comes back with an empty search box.
 Every dashboard has state of exactly this shape.
 
-**2. No SVG.** `document.createElement(tag)` in `jetlin.ts` has no `createElementNS`
+**2. No SVG. — FIXED (`8179bfe`).** `document.createElement(tag)` in `jetlin.ts` has no `createElementNS`
 beside it, and neither does `Ssr.kt`. An `<svg>` built that way is an
 `HTMLUnknownElement` and renders as blank space — so `Element("svg")` is not a
 workaround, it is a silent failure.
@@ -95,9 +99,15 @@ workaround, it is a silent failure.
 `ClientComponent`, so nothing in the suite has ever asked for an SVG element. This is
 precisely the blind spot the exercise exists to find, and it is the cheapest of the
 three to fix.
-*Workaround, used locally:* meters and bar charts as `<div>`s with percentage widths,
-progress rings as a CSS `conic-gradient`. Both stay inside the composition, so they
-are still server-patched — no `ClientComponent` needed.
+*Workaround, no longer needed:* meters and bar charts as `<div>`s with percentage widths,
+progress rings as a CSS `conic-gradient`.
+*The fix:* a `Namespace` enum on `NodeSpec.Element` — the server tells the client which
+language it meant, rather than the client guessing from a tag list (which gets `a`, `title`,
+`style` and `script` wrong, since those exist in both). An internal `LocalNamespace` that
+`Svg { }` provides, so descendants inherit it; `ForeignObject { }` switches back to HTML.
+Helpers for `Svg`, `G`, `Defs`, `Path`, `Circle`, `Ellipse`, `Rect`, `Line`, `Polyline`,
+`Polygon`, `SvgText`, `Tspan`, `SvgTitle`, `LinearGradient`, `Stop`, `ForeignObject`.
+**So charts on this sample should be drawn as SVG, not as `<div>` bars.**
 
 **3. Virtualization is not expressible, and this part looks architectural.** The real
 list windows 52 px rows with `useVirtualizer`. A server that cannot see the scroll
@@ -111,15 +121,22 @@ writes. `fleetUrl()` in `VesselsPage.kt` reassembles the whole query string by h
 including re-deciding which parameters to omit at their defaults. That is the only
 URL operation a page like this ever wants.
 
-**5. `Select` has no natural handler.** `Select`/`Option` exist and `onInput` works on
+**5. `Select` has no natural handler. — FIXED (`18f19b2`).** `Select`/`Option` exist and `onInput` works on
 them, but `onInput` is the wrong word for a dropdown. `onChange` returning the
 selected value is missing.
+*The fix:* `onChange(handler: (String) -> Unit)`. `AttrsScope.on()` now rejects a second
+handler for the same event rather than silently letting the last one win — `onChecked` and
+`onChange` both listen for `change`, so the collision was real. `jetlin-testing` gained
+`choose(value)` alongside `check()`.
 
-**6. Missing elements.** No `H4`–`H6`, `Ol`, `Dialog`, `Details`/`Summary`, `Tfoot`,
+**6. Missing elements. — FIXED (`c080584`).** No `H4`–`H6`, `Ol`, `Dialog`, `Details`/`Summary`, `Tfoot`,
 `Caption`. A dashboard of titled cards inside a page that already used `H1`/`H2` runs
 out of headings quickly. `Element(tag)` covers all of it, so this is ergonomics
 rather than capability — but it costs something on every card.
-(`Table`/`Thead`/`Tbody`/`Tr`/`Th`/`Td` are all present, so the list itself is fine.)
+(`Table`/`Thead`/`Tbody`/`Tr`/`Th`/`Td` were already present, so the list itself was fine.)
+*The fix:* all nine added, plus `AttrsScope.open(Boolean)`. `Dialog`'s KDoc says plainly that
+showing it is the caller's job: `open` works, but `showModal()` is a DOM method and there is no
+op for calling one — which is the op vocabulary doing its job, not an oversight.
 
 **7. No tooltip affordance.** Every one of the eleven action icons in a row has a
 tooltip in the real page. `attr("title", …)` is the honest fallback; anything better
@@ -131,9 +148,12 @@ map is a third-party widget that patches its own DOM. Both are exactly what
 `ClientComponent` is for — recording them as such is a point in the framework's
 favour, not against it.
 
-**Verdict as it stands:** findings 4–8 are ergonomics, a to-do list. Findings 1, 2
-and 3 are not, and none of them is something a self-designed test suite would ever
-have surfaced.
+**Verdict as it stands:** the ergonomic ones are cheap, and three of them are now done —
+the framework went from 180 to 200 tests in the process, and the demo's `/shapes` page gained
+a real chart with a `<select>`, a `<polyline>`, `<circle>` markers and a `<foreignObject>`
+caption. What remains open is the interesting half: **finding 1** (no per-session state across
+a navigation) and **finding 3** (no virtualization) are architectural, and neither is
+something a self-designed test suite would ever have surfaced.
 
 ---
 
