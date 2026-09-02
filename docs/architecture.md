@@ -461,6 +461,40 @@ On waking, the client's address bar wins over the stored location: the user may 
 button while disconnected. If nothing was saved, nothing is stored — a session with no saved state
 has nothing to come back to, and the client is told plainly so it can start a fresh one.
 
+### Limits
+
+Two ceilings, both of them degradations rather than defences: the aim is that a bad day for whoever
+hits one is a normal day for everybody else.
+
+**Sessions.** `JetlinConfig.maxSessions` caps how many are held at once. Every page render allocates
+one whether or not a socket ever arrives to claim it, and unclaimed ones only go when the handoff
+timeout runs out, so without a ceiling a stream of unauthenticated requests grows memory until the
+process dies — at ~136 kB each and 100 requests a second, roughly 400 MB a minute. Past the cap a
+page render is refused with a 503 and a `Retry-After`.
+
+Reconnects are deliberately *not* capped. Somebody reattaching already had a session and is not the
+one creating the pressure; turning them away to make room for new visitors is the wrong trade.
+
+The cap is soft: two requests arriving together can both see room and both take it, so the real
+ceiling is `maxSessions` plus whatever was in flight. Making it exact would mean serializing every
+page render behind one lock to prevent an overshoot that is bounded and harmless.
+
+**Events.** Each connection gets a token bucket — `eventsPerSecond` for the sustained ceiling,
+`eventBurst` for how far it may run ahead. A bucket rather than a fixed window because real use is
+bursty: a form gets filled in with a flurry and then nothing for ten seconds, and a window that
+cannot absorb the flurry has to be set so high it stops protecting anything.
+
+It is consulted **before the frame is parsed**, so a flood costs a clock read rather than a JSON
+decode. Over-budget frames are dropped rather than queued — holding them would only move the flood
+into memory — and the client is told once per episode with a non-fatal error, because a page that
+ignores the first warning will ignore the next thousand.
+
+Note that the frame loop was never *unbounded*: `dispatch` suspends until the recomposition settles,
+so a client could not queue arbitrary work inside the composition. What a flood took was a share of
+the machine, continuously, from one session. That is what the bucket is for.
+
+`SessionRegistry.rejectedCount` and `liveCount` make both visible.
+
 ### Back-pressure
 
 A composition outlives its socket, so a session with a running timer keeps producing updates whether
@@ -697,12 +731,12 @@ Ordered by what it stops you doing, not by size.
 
 ### Would stop a production deployment
 
-- **Nothing bounds inbound work.** There is no rate limit on client events — each one drives a
-  recomposition on the session's confined dispatcher — and `SessionRegistry.create` has no cap, so
-  every page GET allocates a live session (~136 kB) held for the handoff timeout. At 100 requests a
-  second that is roughly 400 MB of resident memory from unauthenticated traffic. Outbound has
-  `maxBufferedOps`; inbound has nothing at all. The shape of the fix is a per-connection token
-  bucket and a ceiling on unattached sessions, probably keyed by remote address.
+- **The limits are global, not per client.** `maxSessions` and the per-connection token bucket stop
+  the process dying, but one source can still fill the session cap and get everyone else refused.
+  Making that per remote address needs a decision about trusting `X-Forwarded-For`, which is its own
+  security question — behind a proxy every request otherwise looks like the proxy. Until then this
+  belongs in front of the application, in nginx or a load balancer, which is where per-address limits
+  usually live anyway.
 - **Nothing is published.** No Maven coordinates, no version scheme, no binary-compatibility
   validator. Nothing outside this repository can depend on Jetlin, which outranks every feature
   below it.

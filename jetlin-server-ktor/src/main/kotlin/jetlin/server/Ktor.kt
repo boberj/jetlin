@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
@@ -91,6 +93,37 @@ public class JetlinConfig {
     public var onError: (Throwable) -> Unit = { }
 
     /**
+     * Most live sessions to hold at once.
+     *
+     * Every page render allocates one — roughly 136 kB for the sample — whether or not a socket ever
+     * arrives to claim it, and unclaimed ones are only released when the handoff timeout runs out.
+     * Without a ceiling a stream of unauthenticated requests grows memory until the process dies.
+     *
+     * Set it from measured cost and available heap rather than from this default, which is chosen to
+     * be out of the way for real traffic rather than to be right for any particular deployment. When
+     * it is reached, page renders are refused with a 503; reconnects are not, because someone
+     * reattaching already had a session.
+     */
+    public var maxSessions: Int = 10_000
+
+    /**
+     * Sustained ceiling on messages one connection may send, per second. Zero or less disables it.
+     *
+     * A person typing into a debounced field produces a handful a second and clicking produces
+     * fewer, so this is far above anything a human does; what it stops is a page — hostile or
+     * broken — driving recomposition in a loop and taking a share of the machine with it.
+     */
+    public var eventsPerSecond: Double = 50.0
+
+    /**
+     * How far one connection may run ahead of [eventsPerSecond] in a burst.
+     *
+     * Real use is bursty: a form gets filled in with a flurry of events and then nothing. A limit
+     * that cannot absorb the flurry has to be set so high that it stops protecting anything.
+     */
+    public var eventBurst: Int = 100
+
+    /**
      * How long a composition stays up after its socket goes away.
      *
      * Long enough that a tunnel or a sleeping laptop reattaches to a running composition; past it,
@@ -145,6 +178,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         framePolicy = config.framePolicy,
         disconnectGrace = config.disconnectGrace,
         exposeTestTags = config.exposeTestTags,
+        maxSessions = config.maxSessions,
     ) { current -> RouteHost(router, current) }
 
     routing {
@@ -157,7 +191,20 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
 
         for (registration in config.views) {
             get(registration.pattern.pattern) {
-                val session = registry.create(call.toRequestContext(config))
+                val session = try {
+                    registry.create(call.toRequestContext(config))
+                } catch (e: SessionLimitReachedException) {
+                    // Refusing is the point: the alternative is growing memory until the process
+                    // dies, which takes everyone's session with it rather than only this one.
+                    logger.warn("Refusing a page render at the session limit of ${e.limit}", e)
+                    call.response.headers.append(HttpHeaders.RetryAfter, "5")
+                    call.respondText(
+                        AT_CAPACITY_PAGE,
+                        ContentType.Text.Html,
+                        HttpStatusCode.ServiceUnavailable,
+                    )
+                    return@get
+                }
                 call.respondText(
                     renderPage(config, registration.title, session),
                     ContentType.Text.Html,
@@ -200,8 +247,27 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                     session.view.messages.collect { sendMessage(it.withTitle(router)) }
                 }
 
+                // Consulted before anything is parsed, so a flood costs a clock read rather
+                // than a JSON decode.
+                val budget = TokenBucket(config.eventsPerSecond, config.eventBurst)
+                var throttled = false
+
                 for (frame in incoming) {
                     if (frame !is Frame.Text) continue
+
+                    if (!budget.tryConsume()) {
+                        // Dropped rather than queued: holding it would only move the flood into
+                        // memory, and the client is better told it is going too fast. Said once per
+                        // episode, because a page that ignores the first will ignore the next
+                        // thousand.
+                        if (!throttled) {
+                            throttled = true
+                            logger.warn("Throttling a connection that is sending too fast")
+                            sendMessage(ServerMessage.Error(TOO_FAST, fatal = false))
+                        }
+                        continue
+                    }
+                    throttled = false
 
                     val message = try {
                         JetlinJson.decodeFromString(ClientMessage.serializer(), frame.readText())
@@ -254,6 +320,21 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
 private val logger = LoggerFactory.getLogger("jetlin.server")
 
 private const val HANDLER_FAILED: String = "That action could not be completed."
+
+/** What a client is told when it is sending faster than the server is willing to listen. */
+private const val TOO_FAST: String = "Too many messages; some were ignored."
+
+/** Served when the session limit is reached. Deliberately static: rendering a view needs a session. */
+private val AT_CAPACITY_PAGE: String = """
+    <!doctype html>
+    <html lang="en">
+    <head><meta charset="utf-8"><title>Busy</title></head>
+    <body>
+    <h1>Busy</h1>
+    <p>This server is holding as many sessions as it is configured to. Please try again shortly.</p>
+    </body>
+    </html>
+""".trimIndent()
 
 /** What a client is told when its session has stopped for good and reloading is the only way on. */
 private const val SESSION_FAILED: String = "This session ended unexpectedly."

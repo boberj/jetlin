@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import jetlin.html.LiveView
 import jetlin.html.RequestContext
 import jetlin.runtime.FramePolicy
@@ -14,6 +15,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
+
+/**
+ * Thrown when a page render would take a session past the configured ceiling.
+ *
+ * Public because an application embedding [SessionRegistry] directly has to decide what to do about
+ * it. Inside the Ktor integration it becomes a 503 with a `Retry-After`.
+ */
+public class SessionLimitReachedException internal constructor(
+    public val limit: Int,
+) : RuntimeException("Refusing to create a session: already at the limit of $limit")
 
 /** One user's live view plus the bookkeeping the transport needs around it. */
 public class JetlinSession internal constructor(
@@ -62,6 +73,13 @@ public class JetlinSession internal constructor(
  * [SessionStore] and the composition is destroyed, releasing its slot table, node tree and
  * coroutines. What remains costs a few hundred bytes instead of a live session.
  *
+ * The number of live sessions is capped. Every page render allocates one whether or not a socket
+ * ever arrives for it, so without a ceiling a stream of unauthenticated requests grows memory until
+ * the process dies. The cap turns that into refusals, which is a worse day for whoever is being
+ * refused and a much better one for everybody else. Reconnects are deliberately not capped: someone
+ * reattaching already had a session, and turning them away to make room for new visitors is the
+ * wrong trade.
+ *
  * All of this assumes a single node. Only the hibernated state is ever written anywhere another
  * process could read it, so a second node could not pick up a session that is live, waiting for its
  * socket, or inside its grace period — a shared [SessionStore] alone would not change that.
@@ -73,15 +91,32 @@ public class SessionRegistry(
     private val handoffTimeout: Duration = 30.seconds,
     private val disconnectGrace: Duration = 30.seconds,
     private val exposeTestTags: Boolean = false,
+    private val maxSessions: Int = 10_000,
     private val content: @Composable (RequestContext) -> Unit,
 ) {
     private val sessions = ConcurrentHashMap<String, JetlinSession>()
     private val reapers = ConcurrentHashMap<String, Job>()
     private val random = SecureRandom()
+    private val rejected = AtomicLong()
 
     public val liveCount: Int get() = sessions.size
 
+    /** How many page renders have been turned away because [maxSessions] was reached. */
+    public val rejectedCount: Long get() = rejected.get()
+
+    /**
+     * Builds a session for a page render, unless there are already too many.
+     *
+     * A soft cap: two requests arriving together can both see room and both take it, so the real
+     * ceiling is [maxSessions] plus however many were in flight. That is deliberate — making it
+     * exact would mean serializing every page render behind one lock, to prevent an overshoot that
+     * is bounded and harmless.
+     */
     public suspend fun create(request: RequestContext): JetlinSession {
+        if (sessions.size >= maxSessions) {
+            rejected.incrementAndGet()
+            throw SessionLimitReachedException(maxSessions)
+        }
         val session = JetlinSession(
             token = newToken(),
             view = LiveView(request, framePolicy, emptyMap(), exposeTestTags, content),

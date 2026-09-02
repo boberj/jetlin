@@ -99,7 +99,7 @@ anything else.
 live navigation, forms and hibernation on top of it. [`docs/architecture.md`](docs/architecture.md)
 has the full design: the update path, the protocol, sessions, input handling, design decisions, and
 §13 lists everything missing — most importantly that nothing is published to Maven, there are no
-file uploads, it runs on one node, and nothing bounds inbound work.
+file uploads, and it runs on one node.
 [`docs/comparison.md`](docs/comparison.md) sets it against Phoenix LiveView, Livewire, Blazor Server
 and others, including where it is behind.
 
@@ -198,7 +198,7 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 165 unit tests, asserting exact op streams
+./gradlew test                       # 175 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
 cd e2e && npm install && npx playwright test    # 29 browser tests (server must be running)

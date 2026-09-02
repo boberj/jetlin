@@ -80,7 +80,7 @@ Present, partial and absent, with no attempt to make the last column shorter tha
 | File uploads | **no** | yes | yes | yes |
 | More than one node | **no** | yes | yes | yes (with backplane) |
 | Published artifacts | **no** | yes | yes | yes |
-| Rate limiting / session caps | **no** | yes | framework-level | yes |
+| Rate limiting / session caps | per connection and process | yes | framework-level | yes |
 | Telemetry | **no** | yes | yes | yes |
 | Ecosystem, components, docs | **no** | large | large | large |
 
@@ -99,12 +99,14 @@ until that changes.
 pins the behaviour, but the policy for node-local windows has to be decided first. LiveView, Blazor
 and Livewire all run behind a load balancer today.
 
-**Nothing bounds inbound work.** No event rate limit, no cap on unattached sessions. The mature
-frameworks all have answers here.
+**Limits are global, not per client.** There is a per-connection event budget and a cap on live
+sessions, which stops the process dying, but one source can still fill the cap and get everyone else
+refused. Per-address limits need a decision about trusting `X-Forwarded-For` and for now belong in
+front of the application.
 
 **No ecosystem.** LiveView has component libraries, LiveView Native, an eight-year-old community and
 Elixir's supervision trees underneath it. Vaadin ships a commercial component suite. Jetlin has a
-four-page demo.
+five-page demo.
 
 **Elixir has something Kotlin does not.** The BEAM's per-process isolation means a crashed LiveView
 takes down one lightweight process and a supervisor restarts it. Jetlin's equivalent is a confined
