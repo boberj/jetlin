@@ -8,7 +8,7 @@ Phoenix LiveView and Livewire were the inspirations for the idea.
 
 Status: **early**. The core is built and tested end to end in a real browser, with routing, request
 context, navigation, forms, hibernation and adoption of the server-rendered DOM on top of it.
-Section 12 lists what is designed but not yet built.
+Section 13 lists what is missing, in the order it would stop you shipping.
 
 ---
 
@@ -244,6 +244,38 @@ page and the socket have different hostnames.
 
 Sessions are reaped on a timer. If no socket ever arrives, or one goes away and does not return
 within the grace period, the composition is closed and its memory released.
+
+### When something fails
+
+Three things can go wrong on an open socket, and they are not the same thing.
+
+**A frame that cannot be read** is dropped with a warning. Frames come from a browser, which is not
+obliged to be well behaved: ending the session over one would let any client kill its own session
+with a typo, and would turn a protocol version skew into an outage rather than a log line.
+
+**A handler that throws** costs one interaction. The composition is untouched — the exception came
+out of the event lambda, not out of recomposition — so the page is still correct and the session
+still works. The client is sent `ServerMessage.Error(fatal = false)` and carries on.
+
+**A composable that throws** ends the session. The recomposer stops for good, so nothing this
+session does afterwards can succeed; the client is sent `Error(fatal = true)` and reloads into a
+fresh one. Leaving it connected would be worse than disconnecting it: a page that looks live and can
+never change again.
+
+`CompositionHost.isAlive` is what separates the second from the third, and it is the only thing that
+can: both arrive at the transport as an exception out of `dispatch`.
+
+What the browser is told is a fixed, generic sentence. An exception's own text routinely carries
+query fragments, file paths and identifiers, and none of it is the client's business. The real
+exception is logged and handed to `JetlinConfig.onError`, which is where an application forwards it
+to whatever it uses for error reporting — a log line nobody reads is not error handling. On the
+client the message is also raised as a `jetlin:error` DOM event, so an application can show a toast
+or a banner; the framework has no business deciding what an error looks like, but it does have to
+make one noticeable, because a click that quietly did nothing is the worst of both.
+
+A view that throws during its *initial* composition never becomes a session at all: `create` closes
+the half-built view before rethrowing, so a failing page cannot leak a dispatcher thread per
+request, and the HTTP layer returns its own error.
 
 ---
 
@@ -642,7 +674,44 @@ directly, so it works under whichever runner the consuming project already uses.
 
 ---
 
-## 13. Not built yet
+## 13. What is missing
+
+Ordered by what it stops you doing, not by size.
+
+### Would stop a production deployment
+
+- **Nothing bounds inbound work.** There is no rate limit on client events — each one drives a
+  recomposition on the session's confined dispatcher — and `SessionRegistry.create` has no cap, so
+  every page GET allocates a live session (~136 kB) held for the handoff timeout. At 100 requests a
+  second that is roughly 400 MB of resident memory from unauthenticated traffic. Outbound has
+  `maxBufferedOps`; inbound has nothing at all. The shape of the fix is a per-connection token
+  bucket and a ceiling on unattached sessions, probably keyed by remote address.
+- **Nothing is published.** No Maven coordinates, no version scheme, no binary-compatibility
+  validator. Nothing outside this repository can depend on Jetlin, which outranks every feature
+  below it.
+- **CI is not running.** The pipeline is written and parked in `ci/github-actions.yml`; enabling it
+  needs someone with `workflow` scope to move it to `.github/workflows/`.
+- **No telemetry.** Nothing reports session counts, patch sizes, recomposition time, hibernate and
+  wake rates, or how often a buffer overflowed. All of it is knowable — the numbers exist inside
+  `HtmlOwner` and `CompositionHost` — and none of it is exported.
+
+### Would stop a real application
+
+- **File uploads.** A WebSocket is the wrong pipe for bulk binary, so this needs a separate HTTP
+  endpoint, progress reporting, and correlation back to the session that asked for it.
+- **Event coverage is thin.** Five handlers (`onClick`, `onInput`, `onChecked`, `onSubmit`,
+  `onKeyDown`) and four extracts (value, checked, key, form). Missing: focus and blur, change on a
+  select, mouse and pointer events, key-up, paste, radio groups, multi-select, and anything reading
+  `dataset` or coordinates. The mechanism is right and the vocabulary is small — this is filling in,
+  not designing.
+- **Element coverage is thin.** No `Dialog`, `Details`/`Summary`, `Ol`, `Dl`, `Fieldset`, `Canvas`,
+  `Svg`, `Iframe` or media elements. `Element(tag)` is public so nothing is *blocked*; the
+  convenience layer is simply incomplete.
+- **Navigation is not accessible.** A client-side route change swaps the view without moving focus
+  or announcing anything to a screen reader, and scroll position is not restored on back or forward.
+  Standard omissions in this style of framework, and standard complaints about it.
+
+### Would stop it scaling past one machine
 
 - **Running on more than one node.** `SessionStore` is shaped for a shared implementation and its
   behaviour is pinned by `SessionStoreContract`, so a Redis or database-backed one is mostly a matter
@@ -650,20 +719,31 @@ directly, so it works under whichever runner the consuming project already uses.
   described in section 9, which has to be decided first. Two changes go with it whenever it happens:
   a generation counter on the snapshot so two processes cannot resurrect each other's state, and
   moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
-- **Preserving a client component across a reset.** `ClientComponent` deliberately does not: a
-  reconnect that has to resend the tree rebuilds the element and mounts the implementation afresh.
-  That is the right default, and the props-down contract makes it invisible for anything whose state
-  can be recreated. It is still the wrong answer for a component holding something expensive to
-  rebuild — a large canvas, a heavy third-party widget mid-animation. Doing better means preserving
-  a DOM subtree across a full-tree rebuild, which needs identity that survives
+
+### Known and deliberate
+
+- **The `ack` can be set slightly early** when a background patch overlaps an inbound event, which
+  could let one stale property write through. The fix is to capture the ack at drain time.
+- **A client component does not survive a reset.** `ClientComponent` rebuilds and remounts when a
+  reconnect has to resend the tree. That is the right default, and the props-down contract makes it
+  invisible for anything whose state can be recreated. It is still wrong for a component holding
+  something expensive to rebuild — a large canvas, a heavy widget mid-animation. Doing better means
+  preserving a DOM subtree across a full-tree rebuild, which needs identity surviving
   `container.replaceChildren()` and reconciliation of a tree the server has stopped tracking. Worth
   it only once something real is hurt by the current behaviour.
-- File uploads, a Spring Boot adapter, telemetry, and CI.
+- **`clientOnly` targets only itself or an ancestor by class.** No sibling targeting and no node
+  references. Sibling targeting needs a handle to a node that has not been composed yet, which is a
+  design problem rather than a coding one.
+- **The session token is bearer-only.** Whoever holds it can attach to the session. It is generated
+  from `SecureRandom`, never reused, and only ever appears in the page it belongs to — but it is not
+  bound to a cookie or a principal, so a token leaked through a referrer header or a log is a
+  session takeover. Binding it to the request that created it is the obvious hardening.
 
-Known limitation: `ack` can be set slightly early when a background patch overlaps an inbound event,
-which could let one stale property write through. The fix is to capture the ack at drain time.
+### Wanted but not urgent
 
----
+Streaming the initial HTML rather than rendering it whole. A Spring Boot adapter. `phx-update`-style
+merge policies for third-party-managed subtrees. Head management beyond `<title>` — meta and
+Open Graph tags per route. A development-mode overlay for the errors described in section 7.
 
 ## 14. Notes and risks
 

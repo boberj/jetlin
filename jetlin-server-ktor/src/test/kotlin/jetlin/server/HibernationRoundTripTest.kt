@@ -141,22 +141,22 @@ class HibernationRoundTripTest {
     }
 }
 
-private suspend fun io.ktor.client.HttpClient.tokenFromPage(): String {
+internal suspend fun io.ktor.client.HttpClient.tokenFromPage(): String {
     val html = get("/").bodyAsText()
     return Regex("""token: "([^"]+)"""").find(html)?.groupValues?.get(1)
         ?: error("no session token in the rendered page")
 }
 
-private suspend fun io.ktor.websocket.WebSocketSession.hello(token: String, url: String? = null) {
+internal suspend fun io.ktor.websocket.WebSocketSession.hello(token: String, url: String? = null) {
     send(ClientMessage.Hello(token, url))
 }
 
-private suspend fun io.ktor.websocket.WebSocketSession.send(message: ClientMessage) {
+internal suspend fun io.ktor.websocket.WebSocketSession.send(message: ClientMessage) {
     send(Frame.Text(JetlinJson.encodeToString(ClientMessage.serializer(), message)))
 }
 
 /** Reads frames until one of the requested type arrives, so unrelated traffic cannot fail a test. */
-private suspend inline fun <reified T : ServerMessage> io.ktor.websocket.WebSocketSession.awaitMessage(): T =
+internal suspend inline fun <reified T : ServerMessage> io.ktor.websocket.WebSocketSession.awaitMessage(): T =
     withTimeout(5_000) {
         while (true) {
             val frame = incoming.receive() as? Frame.Text ?: continue
@@ -166,7 +166,7 @@ private suspend inline fun <reified T : ServerMessage> io.ktor.websocket.WebSock
         error("unreachable")
     }
 
-private suspend fun waitUntil(condition: () -> Boolean) {
+internal suspend fun waitUntil(condition: () -> Boolean) {
     withTimeout(5_000) {
         while (!condition()) delay(20)
     }

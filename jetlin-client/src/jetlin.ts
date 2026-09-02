@@ -305,8 +305,15 @@ class Jetlin {
         break;
       case "error":
         console.error("[jetlin]", message.message);
-        // The session is gone for good — hibernated past its expiry, or never existed. Reconnecting
-        // cannot help, so start a clean one rather than leaving a page that looks live but is not.
+        // Raised on the window so an application can show whatever it shows — a toast, a banner.
+        // The framework has no business deciding what an error looks like, but it does have to make
+        // one noticeable: a click that quietly did nothing is the worst of both.
+        window.dispatchEvent(
+          new CustomEvent("jetlin:error", { detail: { message: message.message, fatal: !!message.fatal } }),
+        );
+        // The session is gone for good — hibernated past its expiry, never existed, or its
+        // composition stopped. Reconnecting cannot help, so start a clean one rather than leaving a
+        // page that looks live but is not.
         if (message.fatal) {
           this.fatal = true;
           this.socket?.close();

@@ -58,6 +58,16 @@ public class CompositionHost(
     public val changeCount: Long get() = recomposer.changeCount
 
     /**
+     * Whether this composition can still do work.
+     *
+     * False once a composable has thrown: the recomposer stops and nothing will recompose again, so
+     * the session it belongs to can only be discarded. Distinct from a handler throwing, which
+     * leaves the composition perfectly healthy — the difference decides whether one interaction
+     * failed or the whole session is gone, and only the caller can act on it.
+     */
+    public val isAlive: Boolean get() = failure == null && runnerJob?.isActive != false
+
+    /**
      * Starts the recomposition loop and installs [content], returning once the initial composition
      * has fully settled. The [Applier] has seen the complete initial tree by the time this returns.
      */

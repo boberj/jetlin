@@ -78,6 +78,15 @@ public class LiveView(
         host.confined { owner.drainOps() }
     }
 
+    /**
+     * Whether the composition behind this view is still running.
+     *
+     * False after a composable threw. Everything else — a handler that failed, a store that was
+     * unreachable — leaves the view usable, and telling the two apart is what decides whether a
+     * client is told its click failed or its session is gone.
+     */
+    public val isAlive: Boolean get() = host.isAlive
+
     /** Server-rendered HTML for the initial page load. */
     public suspend fun renderHtml(): String = host.confined { renderToHtml(owner) }
 

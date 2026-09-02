@@ -98,7 +98,10 @@ anything else.
 **Early.** The core is built and tested end to end in a browser, with routing, request context,
 live navigation, forms and hibernation on top of it. [`docs/architecture.md`](docs/architecture.md)
 has the full design: the update path, the protocol, sessions, input handling, design decisions, and
-what is designed but not yet built (multi-node, uploads).
+§13 lists everything missing — most importantly that nothing is published to Maven, there are no
+file uploads, it runs on one node, and nothing bounds inbound work.
+[`docs/comparison.md`](docs/comparison.md) sets it against Phoenix LiveView, Livewire, Blazor Server
+and others, including where it is behind.
 
 Session state lives on the server, so per-session cost sets how many users a node can carry:
 
@@ -193,7 +196,7 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 162 unit tests, asserting exact op streams
+./gradlew test                       # 165 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
 cd e2e && npm install && npx playwright test    # 25 browser tests (server must be running)

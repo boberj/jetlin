@@ -33,6 +33,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 
 public class JetlinConfig {
     public var framePolicy: FramePolicy = FramePolicy.Immediate
@@ -77,6 +78,17 @@ public class JetlinConfig {
      * ```
      */
     public var clientSetup: String = ""
+
+    /**
+     * Called when a session fails, before the client is told anything.
+     *
+     * Where an application sends the exception to whatever it uses for error reporting. Jetlin logs
+     * it too, but a log line nobody reads is not error handling.
+     *
+     * What reaches the browser is a fixed, generic message: an exception's text routinely carries
+     * query fragments, file paths and identifiers, and none of that is the client's business.
+     */
+    public var onError: (Throwable) -> Unit = { }
 
     /**
      * How long a composition stays up after its socket goes away.
@@ -190,8 +202,37 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
 
                 for (frame in incoming) {
                     if (frame !is Frame.Text) continue
-                    val message = JetlinJson.decodeFromString(ClientMessage.serializer(), frame.readText())
-                    session.view.dispatch(message)
+
+                    val message = try {
+                        JetlinJson.decodeFromString(ClientMessage.serializer(), frame.readText())
+                    } catch (t: Throwable) {
+                        // Frames come from a browser, which is not obliged to be well behaved. One
+                        // that cannot be read is dropped; taking the session down over it would let
+                        // anyone end their own session with a malformed message, and would turn a
+                        // protocol version skew into an outage rather than a warning.
+                        logger.warn("Ignoring a frame that could not be read", t)
+                        continue
+                    }
+
+                    try {
+                        session.view.dispatch(message)
+                    } catch (t: Throwable) {
+                        config.onError(t)
+                        if (session.view.isAlive) {
+                            // A handler threw. The composition is untouched and the page is still
+                            // correct — this one interaction did not happen, which is the client's
+                            // business to know and nobody else's.
+                            logger.error("A handler failed while processing a client event", t)
+                            sendMessage(ServerMessage.Error(HANDLER_FAILED, fatal = false))
+                        } else {
+                            // A composable threw, which stops the recomposer for good. Nothing this
+                            // session does from here can succeed, so say so plainly instead of
+                            // leaving a page that looks live.
+                            logger.error("The composition failed; the session cannot continue", t)
+                            sendMessage(ServerMessage.Error(SESSION_FAILED, fatal = true))
+                            break
+                        }
+                    }
                 }
                 sender.cancel()
             } finally {
@@ -203,6 +244,19 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         }
     }
 }
+
+/**
+ * What a client is told when one of its events could not be handled.
+ *
+ * Deliberately says nothing about why. The exception is logged and handed to [JetlinConfig.onError];
+ * its text is for whoever operates the server, not for whoever is looking at the page.
+ */
+private val logger = LoggerFactory.getLogger("jetlin.server")
+
+private const val HANDLER_FAILED: String = "That action could not be completed."
+
+/** What a client is told when its session has stopped for good and reloading is the only way on. */
+private const val SESSION_FAILED: String = "This session ended unexpectedly."
 
 /**
  * Chooses the view for the current location and gives it its path parameters.

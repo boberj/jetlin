@@ -89,7 +89,14 @@ public class SessionRegistry(
             // follows may adopt what it was served.
             adoptable = true,
         )
-        session.view.start()
+        // A view that throws while composing has still allocated a dispatcher and a recomposer.
+        // Closing it here keeps a failing page from leaking a thread per request.
+        try {
+            session.view.start()
+        } catch (t: Throwable) {
+            session.close()
+            throw t
+        }
         sessions[session.token] = session
         scheduleReap(session.token, handoffTimeout)
         return session
@@ -132,7 +139,12 @@ public class SessionRegistry(
             // markup the browser is still holding. It has to be sent the tree.
             adoptable = false,
         )
-        restored.view.start()
+        try {
+            restored.view.start()
+        } catch (t: Throwable) {
+            restored.close()
+            throw t
+        }
         restored.attached = true
         sessions[token] = restored
         return restored
