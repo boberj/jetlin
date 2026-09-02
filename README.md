@@ -198,10 +198,10 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 180 unit tests, asserting exact op streams
+./gradlew test                       # 200 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 29 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 34 browser tests (server must be running)
 ```
 
 The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
@@ -212,7 +212,8 @@ typing while the server sends unrelated updates, navigation without a page load,
 validation gating a submit, reconnection with state preserved, that the server-rendered DOM is
 kept rather than rebuilt on connect, that a `clientOnly` disclosure still opens with the socket
 deliberately disconnected, and that a client component mounts, takes new props, reports events back
-and is torn down again with its mounts and unmounts balancing, and that a failing handler costs one
+and is torn down again with its mounts and unmounts balancing, that a drawing is real SVG whether
+the browser parsed it or the client built it from an op, and that a failing handler costs one
 interaction while a failing view ends the session and the page starts over — unless the page cancels
 the error event and takes over, which it can, and which listening alone does not do. Each one resets the demo's shared
 store first, so they assert exact counts and contents rather than working around whatever the
