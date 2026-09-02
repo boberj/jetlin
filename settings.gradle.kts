@@ -24,5 +24,6 @@ include(
     ":jetlin-server-ktor",
     ":jetlin-testing",
     ":samples:demo",
+    ":samples:vessels",
     ":conventions",
 )
