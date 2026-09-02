@@ -2,12 +2,20 @@ package jetlin.html
 
 import jetlin.protocol.JetlinJson
 import jetlin.protocol.ListenerSpec
+import jetlin.protocol.Namespace
 import jetlin.protocol.PropValue
 import jetlin.protocol.ROOT_ID
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 
-/** HTML elements that must not be given a closing tag. */
+/**
+ * HTML elements that must not be given a closing tag.
+ *
+ * An HTML rule, and only an HTML one. Inside an `<svg>` the parser is in foreign content, where
+ * nothing is void and every element has to be closed — `<path d="…">` left open would swallow its
+ * siblings as children. Nothing in SVG happens to share a name with this list today, so this is a
+ * guard rather than a fix, but it is the kind that costs one comparison and saves an afternoon.
+ */
 private val VOID_ELEMENTS = setOf(
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "source", "track", "wbr",
@@ -36,6 +44,13 @@ private const val EMPTY_TEXT = "<!--0-->"
  *
  * The composition that produced this HTML stays alive and is handed to the WebSocket when it
  * connects, so a page is composed once rather than once per request.
+ *
+ * An SVG subtree needs neither `xmlns` nor a marker of its own: a parser switches into foreign
+ * content when it meets `<svg>` and back out at `</svg>`, assigning the namespaces itself. Only the
+ * client building nodes from ops has to be told, and it is told in [jetlin.protocol.NodeSpec].
+ * Attribute names are written exactly as the composition gave them, which is what `viewBox` and
+ * `preserveAspectRatio` need — the parser lowercases every attribute and then puts the case back
+ * for the ones SVG defines.
  */
 public fun renderToHtml(owner: HtmlOwner): String = buildString {
     appendChildren(owner.root.children)
@@ -126,7 +141,7 @@ private fun StringBuilder.appendElement(node: ElementNode) {
     }
 
     append('>')
-    if (node.tag in VOID_ELEMENTS) return
+    if (node.namespace == Namespace.HTML && node.tag in VOID_ELEMENTS) return
 
     // innerHTML is the one place a caller can bypass escaping, so it is written out verbatim and
     // takes the place of children entirely. The applier rejects an element that has both.

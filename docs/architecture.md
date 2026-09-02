@@ -54,7 +54,7 @@ that read it, and a patch follows. Sending updates to a connected client needs n
 
 ```
 ┌─ Browser ──────────────────────────────────────────────────────────────────┐
-│  jetlin.js (8.5 kB minified)                                               │
+│  jetlin.js (8.6 kB minified)                                               │
 │  applies ops · delegates events · guards in-flight input · reconnects      │
 └───────────────▲──────────────────────────────────────┬─────────────────────┘
                 │ patch { rev, ack, ops }              │ event { node, seq }
@@ -165,6 +165,14 @@ destination, so the address bar can never run ahead of the content on screen.
 `form`) and how to rate-limit it (`debounceMs`, `throttleMs`, `preventDefault`, `stopPropagation`).
 Handlers stay on the server; the client only knows that a node listens for an event.
 
+An element in `ins` also carries `ns` when it is not HTML — `svg` today. The browser needs it before
+the node exists, since `createElement("circle")` yields an `HTMLUnknownElement` that draws nothing
+and reports nothing. It is sent rather than inferred because the tag does not determine the answer:
+`a`, `title`, `style` and `script` exist in both languages, so any tag list the client could hold
+would be wrong for four of them. Every element states its own, rather than only the two that switch
+language, so a subtree means the same thing read on its own as read in place; the default is not
+encoded, so a page with no drawings in it carries nothing extra.
+
 Encoding is JSON via kotlinx.serialization with a `t` discriminator. A compact positional encoding
 or CBOR would be a drop-in change; readable frames are more useful at this stage.
 
@@ -172,7 +180,7 @@ or CBOR would be a drop-in change; readable frames are more useful at this stage
 
 ## 6. The browser runtime
 
-8.5 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
+8.6 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
 children per element, and the listener specs.
 
 The child array exists because the DOM's own `childNodes` cannot be trusted for indexing — browsers
@@ -185,6 +193,11 @@ items shift left. A divergence there would reorder lists differently on each sid
 Events use one capture-phase listener per event type on the container. Capture rather than bubble,
 so that events which do not bubble (`focus`, `blur`) still reach the delegate, and so one
 registration survives any amount of subtree churn.
+
+Nodes are created with `createElementNS` when the spec says which language they are in, and with
+`createElement` otherwise. Nothing else in the runtime distinguishes them: `setAttribute`,
+`classList` and `closest` work the same on an SVG element, and the properties that do not —
+`className` above all — are not used anywhere.
 
 ---
 
@@ -367,6 +380,33 @@ rule that disables it. `touched` keeps a fresh form from opening covered in erro
 field reports no `error` even while `isValid` is false. `bind` debounces by default, because a field
 that round-trips on every keystroke is the usual way this architecture is made to feel slow.
 
+### Drawings
+
+```kotlin
+Svg({ attr("viewBox", "0 0 220 80"); classes("chart") }) {
+    SvgTitle { Text("$count readings, newest last") }
+    Polyline({ attr("points", points); attr("fill", "none"); attr("stroke", "currentColor") })
+    ForeignObject({ attr("x", "10"); attr("y", "0"); attr("width", "200"); attr("height", "14") }) {
+        P({ classes("caption") }) { Text("HTML again, in the middle of the drawing") }
+    }
+}
+```
+
+A chart is elements, so it is patched like anything else — a redraw is a `SetAttr` on a `points`
+attribute, not a repaint. What makes SVG worth naming separately is that the browser will not take
+those elements through the usual door, and says nothing when you try: an element created as HTML
+instead of SVG is real, empty and silent. `Svg { }` opens the language and everything inside inherits
+it, `ForeignObject { }` hands it back, and the node carries which one it is to the browser.
+
+Two things to watch. SVG is case-sensitive where HTML is not, so it is `attr("viewBox", …)` and
+`Element("linearGradient")` — the lowercase spellings are quietly ignored. And paint and geometry are
+*attributes*, not properties: `attr("fill", …)`, never `prop`.
+
+`SvgText` and `SvgTitle` carry a prefix because `Text` already emits a text node and `title` means
+something else in HTML; the rest — `Path`, `Circle`, `Rect`, `Line`, `Polyline`, `Polygon`, `G`,
+`Defs`, `LinearGradient` and the others — are named after their tags. A shape composed outside an
+`Svg { }` is refused rather than rendered as nothing.
+
 ### Interaction latency and typing
 
 Every interaction is a round trip, so two things need care.
@@ -548,7 +588,7 @@ rather than a requirement.
 **Ktor first, with a portable core.** `LiveView` knows nothing about WebSockets or Ktor and can be
 driven straight from a test with no server involved. Adapters for other servers are additive.
 
-**The client is TypeScript.** About 730 lines of DOM manipulation, which ships as 8.5 kB with no
+**The client is TypeScript.** About 820 lines of DOM manipulation, which ships as 8.6 kB with no
 runtime of its own to carry.
 
 ---
@@ -781,10 +821,12 @@ Ordered by what it stops you doing, not by size.
   `dataset` or coordinates. The mechanism is right and the vocabulary is small — this is filling in,
   not designing. One element cannot declare two handlers for the same event, which is why
   `onChange` and `onChecked` — both `change` — are refused together rather than merged.
-- **Element coverage is thin.** No `Dl`, `Fieldset`, `Canvas`, `Svg`, `Iframe` or media elements.
+- **Element coverage is thin.** No `Dl`, `Fieldset`, `Canvas`, `Iframe` or media elements.
   `Element(tag)` is public so nothing is *blocked*; the convenience layer is simply incomplete.
   `Dialog` is there but only opens inline: `showModal()` is a DOM method, and there is no op for
-  calling one.
+  calling one. SVG covers what a chart needs and stops there — no `symbol`/`use`, no markers, no
+  animation elements, all of which `Element(tag)` reaches inside an `Svg { }`. MathML is the other
+  language a browser parses and is not supported; adding it would be one more `Namespace` entry.
 - **Navigation is not accessible.** A client-side route change swaps the view without moving focus
   or announcing anything to a screen reader, and scroll position is not restored on back or forward.
   Standard omissions in this style of framework, and standard complaints about it.

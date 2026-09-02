@@ -39,6 +39,8 @@ type NodeSpec =
       t: "e";
       id: number;
       tag: string;
+      /** Absent means HTML, which is almost every node and so is left off the wire. */
+      ns?: "html" | "svg";
       attrs?: Record<string, string>;
       props?: Record<string, PropValue>;
       listeners?: Record<string, ListenerSpec>;
@@ -64,6 +66,18 @@ type ServerMessage =
   | { t: "error"; message: string; fatal?: boolean };
 
 const ROOT_ID = 0;
+
+/**
+ * Where a tag has to be created with createElementNS instead of createElement.
+ *
+ * createElement("circle") is not an error and not a warning: it makes an HTMLUnknownElement that
+ * occupies no space, so a chart built that way is simply absent. Which namespace a node belongs to
+ * is decided by the server, since the tag does not decide it — a, title, style and script exist in
+ * both languages — and arrives with the node.
+ */
+const NAMESPACE_URIS: Record<string, string> = {
+  svg: "http://www.w3.org/2000/svg",
+};
 
 /**
  * Marks where a text child with no content belongs.
@@ -554,7 +568,10 @@ class Jetlin {
       return text;
     }
 
-    const element = document.createElement(spec.tag);
+    const namespace = spec.ns ? NAMESPACE_URIS[spec.ns] : undefined;
+    const element = namespace
+      ? document.createElementNS(namespace, spec.tag)
+      : document.createElement(spec.tag);
     this.register(spec.id, element);
     element.setAttribute("data-jl", String(spec.id));
 

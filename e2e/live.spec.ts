@@ -461,3 +461,102 @@ test("markup that cannot be adopted falls back to a full render", async ({ page 
   await page.locator("[data-test=edit-first]").click();
   await expect(page.locator("[data-test=adjacent]")).toHaveText("ALPHAbeta");
 });
+
+/**
+ * SVG: the other language a browser parses, and the one where a mistake makes no noise.
+ *
+ * `createElement("circle")` is not an error. It is an HTMLUnknownElement — no warning, no pixels,
+ * a chart-shaped hole. So these check the namespace itself as well as what ends up on screen, on
+ * both paths a node can arrive by: parsed from the markup the server served, and built by the
+ * client from an insert op.
+ */
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const HTML_NS = "http://www.w3.org/1999/xhtml";
+
+test("the drawing is in the served markup, before any script runs", async ({ page }) => {
+  await page.route("**/jetlin.js", (route) => route.abort());
+  await page.goto("/shapes");
+
+  await expect(page.locator("[data-test=chart] circle")).toHaveCount(5);
+  // The parser changed language on <svg> by itself, and back again inside <foreignObject>.
+  const languages = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("[data-test=chart] *")).map((n) => n.namespaceURI),
+  );
+  expect(new Set(languages)).toEqual(new Set([SVG_NS, HTML_NS]));
+});
+
+test("a drawing the client took up is real SVG and takes up space", async ({ page }) => {
+  await page.goto("/shapes");
+
+  const languages = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("[data-test=chart], [data-test=chart-line]")).map(
+      (n) => n.namespaceURI,
+    ),
+  );
+  expect(languages).toEqual([SVG_NS, SVG_NS]);
+
+  // An unknown element would be here too, and would be nothing. A drawing has a box.
+  const box = await page.locator("[data-test=chart]").boundingBox();
+  expect(box!.width).toBeGreaterThan(100);
+  expect(box!.height).toBeGreaterThan(20);
+
+  // Attribute case survived the serializer and the parser. "viewbox" is a different attribute, and
+  // reading it back through the SVG DOM proves the browser understood this one.
+  const scaled = await page.evaluate(
+    () => (document.querySelector("[data-test=chart]") as SVGSVGElement).viewBox.baseVal.width,
+  );
+  expect(scaled).toBe(220);
+});
+
+test("choosing a series redraws the line without rebuilding it", async ({ page }) => {
+  await page.goto("/shapes");
+  const line = page.locator("[data-test=chart-line]");
+  const before = await line.getAttribute("points");
+
+  // Marked on the element itself: a rebuilt drawing would take the marker with it.
+  await page.evaluate(() => {
+    (document.querySelector("[data-test=chart-line]") as SVGElement).dataset.marker = "kept";
+  });
+
+  await page.locator("[data-test=chart-series]").selectOption("fuel");
+  await expect(page.locator("[data-test=chart-values]")).toHaveText("11,7,13,6,9");
+  await expect(line).not.toHaveAttribute("points", before!);
+  await expect(line).toHaveAttribute("data-marker", "kept");
+});
+
+test("a shape the client builds is created in the SVG language too", async ({ page }) => {
+  await page.goto("/shapes");
+  const points = page.locator("[data-test=chart] circle");
+  await expect(points).toHaveCount(5);
+
+  await page.evaluate(() => {
+    document
+      .querySelectorAll("[data-test=chart] circle")
+      .forEach((circle) => ((circle as SVGElement).dataset.served = "1"));
+  });
+
+  await page.locator("[data-test=chart-add]").click();
+  await expect(points).toHaveCount(6);
+
+  // The one without the marker never went near the HTML parser: the client made it from an op.
+  const built = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("[data-test=chart] circle"))
+      .filter((circle) => !(circle as SVGElement).dataset.served)
+      .map((circle) => circle.namespaceURI),
+  );
+  expect(built).toEqual([SVG_NS]);
+});
+
+test("a foreign object hands the browser back to HTML mid-drawing", async ({ page }) => {
+  await page.goto("/shapes");
+
+  const caption = page.locator("[data-test=chart-caption]");
+  await expect(caption).toContainText("HTML again");
+
+  const languages = await page.evaluate(() => {
+    const node = document.querySelector("[data-test=chart-caption]")!;
+    return [node.namespaceURI, node.parentElement!.namespaceURI];
+  });
+  expect(languages).toEqual([HTML_NS, SVG_NS]);
+});

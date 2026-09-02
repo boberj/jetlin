@@ -2,6 +2,7 @@ package jetlin.html
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ComposeNode
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import jetlin.protocol.ClientCommand
@@ -9,6 +10,7 @@ import jetlin.protocol.ClientTarget
 import jetlin.protocol.EventPayload
 import jetlin.protocol.Extract
 import jetlin.protocol.ListenerSpec
+import jetlin.protocol.Namespace
 import jetlin.protocol.PropValue
 
 public val LocalHtmlOwner: ProvidableCompositionLocal<HtmlOwner> =
@@ -24,6 +26,21 @@ public val LocalTestTagsExposed: ProvidableCompositionLocal<Boolean> = staticCom
 
 /** The attribute a [AttrsScope.testTag] takes when tags are exposed. */
 internal const val TEST_TAG_ATTRIBUTE: String = "data-test"
+
+/**
+ * The document language elements are currently being emitted in; see [Svg].
+ *
+ * Deliberately not public. Every element inherits this, so being able to provide it would be a way
+ * to declare that a `<div>` is an SVG element — which the browser accepts, renders as nothing, and
+ * reports no error for. [Svg] and [ForeignObject] are the only two places the language really
+ * changes, and they are both here.
+ *
+ * Static, because within one element it never changes: an element that moved between languages would
+ * have to be recreated, and a composable that emits one is written inside `Svg { }` or outside it,
+ * never both.
+ */
+internal val LocalNamespace: ProvidableCompositionLocal<Namespace> =
+    staticCompositionLocalOf { Namespace.HTML }
 
 /**
  * Builds the list of things the browser should do for itself; see [AttrsScope.clientOnly].
@@ -278,13 +295,14 @@ public fun Element(
     content: @Composable () -> Unit = {},
 ) {
     val owner = LocalHtmlOwner.current
+    val namespace = LocalNamespace.current
     val scope = AttrsScope(tag, exposeTestTags = LocalTestTagsExposed.current)
     attrs?.invoke(scope)
     val data = scope.data()
     val handlers = scope.handlers()
 
     ComposeNode<ElementNode, HtmlApplier>(
-        factory = { owner.createElement(tag) },
+        factory = { owner.createElement(tag, namespace) },
         update = {
             // Structural: only reaches the client when something genuinely differs.
             set(data) { applyData(it) }
@@ -516,4 +534,144 @@ public fun Link(
         },
         content = content,
     )
+}
+
+/**
+ * Opens an SVG drawing: everything composed inside it is an SVG element rather than an HTML one.
+ *
+ * ```kotlin
+ * Svg({ attr("viewBox", "0 0 100 40"); classes("spark") }) {
+ *     SvgTitle { Text("Speed over the last hour") }
+ *     Polyline({ attr("points", points); attr("fill", "none"); attr("stroke", "currentColor") })
+ * }
+ * ```
+ *
+ * The distinction matters because getting it wrong is invisible. `createElement("circle")` produces
+ * an `HTMLUnknownElement`: no error, no warning, a box of zero size where the chart should be. So
+ * the language is a property of the tree rather than a guess made from the tag name, and it travels
+ * to the browser with the node.
+ *
+ * The helpers below cover what a chart needs. Anything else is [Element] with its tag — inside this
+ * block it lands in the right language automatically — but mind the spelling: SVG tags and
+ * attributes are case-sensitive, so it is `Element("linearGradient")` and `attr("viewBox", …)`, and
+ * the lowercase spellings of both are quietly ignored by the browser.
+ *
+ * Paint and geometry — `fill`, `stroke`, `d`, `cx`, `r` — are presentation *attributes*, so they go
+ * through [AttrsScope.attr] and not [AttrsScope.prop]. `class` and `style` work as they do in HTML.
+ */
+@Composable
+public fun Svg(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}) {
+    CompositionLocalProvider(LocalNamespace provides Namespace.SVG) {
+        Element("svg", attrs, content)
+    }
+}
+
+/**
+ * Puts HTML back inside a drawing: wrapped text, a table, a form, laid out by the browser.
+ *
+ * The one place the language changes back, and the reason a namespace is carried per node rather
+ * than meaning "everything under an `<svg>`". Give it `x`, `y`, `width` and `height` — SVG does not
+ * lay out its children, so a foreign object with no size shows nothing.
+ */
+@Composable
+public fun ForeignObject(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("foreignObject", attrs) {
+        CompositionLocalProvider(LocalNamespace provides Namespace.HTML) { content() }
+    }
+
+/** A group: one transform, one class or one accessible name over a set of shapes. */
+@Composable
+public fun G(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("g", attrs, content)
+
+/** Definitions — gradients, markers, clip paths — that draw nothing until something refers to them. */
+@Composable
+public fun Defs(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("defs", attrs, content)
+
+@Composable
+public fun Path(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("path", attrs, content)
+
+@Composable
+public fun Circle(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("circle", attrs, content)
+
+@Composable
+public fun Ellipse(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("ellipse", attrs, content)
+
+@Composable
+public fun Rect(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("rect", attrs, content)
+
+@Composable
+public fun Line(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("line", attrs, content)
+
+@Composable
+public fun Polyline(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("polyline", attrs, content)
+
+@Composable
+public fun Polygon(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("polygon", attrs, content)
+
+/**
+ * SVG's `<text>`, which draws characters at a position.
+ *
+ * Prefixed because [Text] already means something here and always will: it emits a text *node*,
+ * which is what puts the characters inside this element. The two appear in one expression —
+ * `SvgText({ attr("x", "8") }) { Text("18 kn") }` — so the name worth spending two extra characters
+ * on is the one where a reader would otherwise have to work out which was meant. [SvgTitle] carries
+ * the prefix for the same reason, `title` being a rather different thing in HTML.
+ */
+@Composable
+public fun SvgText(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("text", attrs, content)
+
+/** A run within a [SvgText] that is positioned or styled apart from the rest of it. */
+@Composable
+public fun Tspan(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("tspan", attrs, content)
+
+/**
+ * The accessible name of a drawing or a shape, and the tooltip a browser shows for it.
+ *
+ * A chart is a picture, and this is the only part of it a screen reader has to go on. First child of
+ * an [Svg], or of a [G] standing for one series.
+ */
+@Composable
+public fun SvgTitle(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("title", attrs, content)
+
+@Composable
+public fun LinearGradient(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("linearGradient", attrs, content)
+
+/** One colour stop of a gradient. */
+@Composable
+public fun Stop(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    SvgElement("stop", attrs, content)
+
+/**
+ * Emits an SVG element, refusing to do it outside a drawing.
+ *
+ * Reads the language rather than providing it. Providing on every shape would put a composition
+ * group and a provider map on each of the hundreds of nodes a chart has, all to say something they
+ * inherit anyway; reading costs a comparison and catches the mistake the first time the page
+ * renders — which is the only way this one ever gets caught, a `<circle>` outside an `<svg>` being
+ * a blank space and nothing else.
+ */
+@Composable
+private fun SvgElement(
+    tag: String,
+    attrs: (AttrsScope.() -> Unit)?,
+    content: @Composable () -> Unit = {},
+) {
+    check(LocalNamespace.current == Namespace.SVG) {
+        "<$tag> is an SVG element and has to be composed inside Svg { }. Outside one the browser " +
+            "makes an unknown HTML element of the same name, which draws nothing and reports no error."
+    }
+    Element(tag, attrs, content)
 }

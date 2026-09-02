@@ -1,7 +1,7 @@
 # Jetlin
 
 Interactive web UI written as Kotlin `@Composable` functions that run **on the server**. The browser
-gets HTML plus an 8.5 kB runtime that applies the DOM changes the server sends and reports events
+gets HTML plus an 8.6 kB runtime that applies the DOM changes the server sends and reports events
 back.
 
 Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and

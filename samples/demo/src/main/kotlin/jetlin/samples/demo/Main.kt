@@ -14,7 +14,9 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import jetlin.html.Button
+import jetlin.html.Circle
 import jetlin.html.Div
+import jetlin.html.ForeignObject
 import jetlin.html.H1
 import jetlin.html.H2
 import jetlin.html.Input
@@ -22,8 +24,13 @@ import jetlin.html.Li
 import jetlin.html.Link
 import jetlin.html.LocalNavigator
 import jetlin.html.Nav
+import jetlin.html.Option
 import jetlin.html.P
+import jetlin.html.Polyline
+import jetlin.html.Select
 import jetlin.html.Span
+import jetlin.html.Svg
+import jetlin.html.SvgTitle
 import jetlin.html.Text
 import jetlin.html.TextArea
 import jetlin.html.Ul
@@ -34,6 +41,7 @@ import jetlin.html.pathParam
 import jetlin.html.rememberField
 import jetlin.html.rememberSavedField
 import jetlin.server.jetlin
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -321,9 +329,10 @@ internal fun ErrorsPage() = Shell {
  * Markup that is awkward to hand back to a browser and take up again.
  *
  * Every shape here is one the HTML parser would blur: two text nodes it would merge into one, a text
- * node with nothing in it to produce, text sitting either side of an element, and markup that is not
- * the composition's to touch. The page exists so those cases are exercised rather than reasoned
- * about, since a mistake in any of them shows up not on load but several interactions later.
+ * node with nothing in it to produce, text sitting either side of an element, markup that is not the
+ * composition's to touch, and a subtree it hands to another language entirely. The page exists so
+ * those cases are exercised rather than reasoned about, since a mistake in any of them shows up not
+ * on load but several interactions later.
  */
 @Composable
 internal fun ShapesPage() = Shell {
@@ -384,7 +393,111 @@ internal fun ShapesPage() = Shell {
             }) { Text("Swap it") }
         }
     }
+    Chart()
 }
+
+/** The readings each series starts with. Two of the same length, so switching only moves the line. */
+private val SERIES = mapOf(
+    "speed" to listOf(6, 9, 5, 12, 8),
+    "fuel" to listOf(11, 7, 13, 6, 9),
+)
+
+/**
+ * A chart the server draws, in the other language a browser understands.
+ *
+ * Nothing here is a picture the server produced — it is a tree of elements like any other, patched
+ * the same way. What makes it worth a page of its own is that the browser will not accept those
+ * elements from the usual door: a `<circle>` created as HTML is a real element that occupies no
+ * space and reports no error, so getting this wrong shows up as an empty rectangle rather than as
+ * anything anybody could debug. The composition says which language it meant, and each node carries
+ * that to the browser on both paths — the markup served for first paint, and the ops that patch it
+ * afterwards.
+ *
+ * The caption sits in a `<foreignObject>`, which hands the browser back to HTML in the middle of the
+ * drawing, so text wraps the way text does.
+ */
+@Composable
+internal fun Chart() {
+    var series by remember { mutableStateOf("speed") }
+    var added by remember { mutableStateOf(emptyList<Int>()) }
+    val readings = SERIES.getValue(series) + added
+
+    val peak = readings.max().coerceAtLeast(1)
+    val step = if (readings.size > 1) (RIGHT - LEFT) / (readings.size - 1) else 0.0
+    val points = readings.mapIndexed { index, value ->
+        val x = (LEFT + index * step).roundToInt()
+        val y = (BOTTOM - (BOTTOM - TOP) * value / peak).roundToInt()
+        x to y
+    }
+
+    Div({ classes("card") }) {
+        H2 { Text("Drawn on the server") }
+
+        Div({ classes("row") }) {
+            Span({ classes("label") }) { Text("Series") }
+            Select({
+                classes("input"); testTag("chart-series")
+                // A dropdown commits a choice rather than reporting a keystroke, so it listens for
+                // "change" and not "input".
+                onChange { series = it }
+            }) {
+                for (name in SERIES.keys) {
+                    Option({ value(name); selected(name == series) }) {
+                        Text(if (name == "speed") "Speed over ground" else "Fuel burn")
+                    }
+                }
+            }
+        }
+
+        Svg({
+            classes("chart"); testTag("chart")
+            // Mixed case, and it has to survive the serializer, the HTML parser and setAttribute:
+            // "viewbox" is silently not the same attribute at all.
+            attr("viewBox", "0 0 $VIEW_WIDTH $VIEW_HEIGHT")
+            attr("role", "img")
+        }) {
+            SvgTitle { Text("${readings.size} readings, newest last") }
+            Polyline({
+                testTag("chart-line")
+                attr("points", points.joinToString(" ") { (x, y) -> "$x,$y" })
+                attr("fill", "none")
+                attr("stroke", "currentColor")
+                attr("stroke-width", "1.5")
+            })
+            points.forEach { (x, y) ->
+                Circle({
+                    classes("point")
+                    attr("cx", "$x"); attr("cy", "$y"); attr("r", "2")
+                })
+            }
+            ForeignObject({
+                attr("x", "${LEFT.roundToInt()}"); attr("y", "0")
+                attr("width", "${(RIGHT - LEFT).roundToInt()}"); attr("height", "14")
+            }) {
+                P({ classes("chart-caption"); testTag("chart-caption") }) {
+                    Text("Peak $peak — this line is HTML again")
+                }
+            }
+        }
+
+        Div({ classes("row") }) {
+            Button({
+                classes("btn"); testTag("chart-add")
+                // Appends a shape to a subtree the browser has already parsed, which is the other
+                // path into the DOM: an insert op, built by the client rather than by the parser.
+                onClick { added = added + ((added.size * 5 + 4) % 11 + 3) }
+            }) { Text("Another reading") }
+            Span({ classes("count"); testTag("chart-values") }) { Text(readings.joinToString(",")) }
+        }
+    }
+}
+
+private const val VIEW_WIDTH = 220
+private const val VIEW_HEIGHT = 80
+private const val LEFT = 10.0
+private const val RIGHT = 210.0
+private const val TOP = 20.0
+private const val BOTTOM = 72.0
 
 @Composable
 internal fun AboutPage() = Shell {
@@ -533,6 +646,9 @@ private val STYLES = """
                 justify-content: center; font-size: .9rem; }
       .banner .btn { background: transparent; color: #fff; border-color: rgba(255,255,255,.6); }
       .jl-dead .page { opacity: .45; pointer-events: none; }
+      .chart { display: block; width: 100%; height: auto; aspect-ratio: 220 / 80; color: #2563eb; }
+      .chart .point { fill: #2563eb; }
+      .chart-caption { margin: 0; font-size: 5px; font-weight: 500; color: #6b7280; }
       .sparkline { display: flex; align-items: flex-end; gap: .35rem; height: 4rem; }
       .sparkline .bar { flex: 1; background: #2563eb; border-radius: 3px 3px 0 0; cursor: pointer; }
       .sparkline .bar:hover { background: #1d4ed8; }

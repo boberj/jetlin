@@ -73,6 +73,9 @@ public fun ClientComponent(
     onEvent: (event: String, payload: JsonObject) -> Unit = { _, _ -> },
 ) {
     val owner = LocalHtmlOwner.current
+    // The same rule as any other element: a component inside an Svg { } that asks for a <g> gets an
+    // SVG one, because an HTML <g> would silently be nothing at all.
+    val namespace = LocalNamespace.current
     val scope = AttrsScope(tag, exposeTestTags = LocalTestTagsExposed.current)
     attrs?.invoke(scope)
     scope.attr(COMPONENT_ATTRIBUTE, name)
@@ -89,7 +92,7 @@ public fun ClientComponent(
     val handlers = scope.handlers()
 
     ComposeNode<ElementNode, HtmlApplier>(
-        factory = { owner.createElement(tag) },
+        factory = { owner.createElement(tag, namespace) },
         update = {
             set(data) { applyData(it) }
             set(handlers) { this.handlers = it }

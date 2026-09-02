@@ -3,6 +3,7 @@ package jetlin.html
 import java.util.Collections
 import jetlin.protocol.EventPayload
 import jetlin.protocol.ListenerSpec
+import jetlin.protocol.Namespace
 import jetlin.protocol.NodeId
 import jetlin.protocol.NodeSpec
 import jetlin.protocol.Op
@@ -55,6 +56,11 @@ public class TextNode internal constructor(
 public class ElementNode internal constructor(
     override val id: NodeId,
     public val tag: String,
+    /**
+     * Fixed for the life of the node. An element cannot change language without being recreated,
+     * which is exactly what happens: the namespace is decided by where the composable sits.
+     */
+    public val namespace: Namespace,
     private val owner: HtmlOwner,
 ) : HtmlNode() {
 
@@ -165,6 +171,7 @@ public class ElementNode internal constructor(
     override fun toSpec(): NodeSpec = NodeSpec.Element(
         id = id,
         tag = tag,
+        namespace = namespace,
         attrs = LinkedHashMap(attributes),
         props = LinkedHashMap(properties),
         listeners = LinkedHashMap(listeners),
@@ -217,10 +224,13 @@ public class HtmlOwner {
     private val dirty = Channel<Unit>(Channel.CONFLATED)
     internal val dirtySignals: ReceiveChannel<Unit> get() = dirty
 
-    public val root: ElementNode = ElementNode(ROOT_ID, "#root", this).apply { attached = true }
+    public val root: ElementNode =
+        ElementNode(ROOT_ID, "#root", Namespace.HTML, this).apply { attached = true }
 
     internal fun allocateId(): NodeId = nextId++
-    internal fun createElement(tag: String): ElementNode = ElementNode(allocateId(), tag, this)
+
+    internal fun createElement(tag: String, namespace: Namespace = Namespace.HTML): ElementNode =
+        ElementNode(allocateId(), tag, namespace, this)
     internal fun createText(text: String): TextNode = TextNode(allocateId(), text, this)
 
     internal fun register(node: ElementNode) { byId[node.id] = node }

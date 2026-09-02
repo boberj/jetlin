@@ -72,6 +72,30 @@ public sealed interface PropValue {
     public data class Bool(val v: Boolean) : PropValue
 }
 
+/**
+ * The document language an element belongs to.
+ *
+ * The browser needs this before it can create the node: `document.createElement("circle")` makes an
+ * `HTMLUnknownElement` that lays out as nothing and reports no error, which is the worst way for a
+ * chart to fail. Only `createElementNS` with the SVG namespace produces something that draws.
+ *
+ * Sent by the server rather than worked out from the tag, because the tag does not determine it:
+ * `a`, `title`, `style` and `script` exist in both languages, so any list of "SVG tags" the client
+ * could hold is wrong for four of them. The composition already knows which one it meant — it is
+ * the difference between `Svg { A { } }` and a plain `A { }` — so it says.
+ *
+ * A name rather than the namespace URI. The URI is thirty-odd bytes that would repeat on every node
+ * of a chart, and turning a closed set of names into URIs is a two-entry table the client can hold.
+ */
+@Serializable
+public enum class Namespace {
+    @SerialName("html")
+    HTML,
+
+    @SerialName("svg")
+    SVG,
+}
+
 /** A node and its whole subtree, used by [Op.Insert] and by full-tree resets after rehydration. */
 @Serializable
 public sealed interface NodeSpec {
@@ -82,6 +106,16 @@ public sealed interface NodeSpec {
     public data class Element(
         override val id: NodeId,
         val tag: String,
+        /**
+         * Stated on every element, not only where it changes.
+         *
+         * Inheriting it from the parent would save the marker on all but the two elements that
+         * switch language, but it would make a node's meaning depend on where it is read from: a
+         * subtree in a trace, or in a test's expected op list, would no longer say what it is. The
+         * default is omitted by the encoder, so an HTML page pays nothing for it either way.
+         */
+        @SerialName("ns")
+        val namespace: Namespace = Namespace.HTML,
         val attrs: Map<String, String> = emptyMap(),
         val props: Map<String, PropValue> = emptyMap(),
         val listeners: Map<String, ListenerSpec> = emptyMap(),
