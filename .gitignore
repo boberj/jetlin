@@ -10,3 +10,7 @@ playwright-report/
 .idea/
 *.iml
 .DS_Store
+
+# Claude Code: personal settings and agent worktrees, not shared state.
+.claude/settings.local.json
+.claude/worktrees/
