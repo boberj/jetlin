@@ -780,9 +780,10 @@ Ordered by what it stops you doing, not by size.
   select, mouse and pointer events, key-up, paste, radio groups, multi-select, and anything reading
   `dataset` or coordinates. The mechanism is right and the vocabulary is small — this is filling in,
   not designing.
-- **Element coverage is thin.** No `Dialog`, `Details`/`Summary`, `Ol`, `Dl`, `Fieldset`, `Canvas`,
-  `Svg`, `Iframe` or media elements. `Element(tag)` is public so nothing is *blocked*; the
-  convenience layer is simply incomplete.
+- **Element coverage is thin.** No `Dl`, `Fieldset`, `Canvas`, `Svg`, `Iframe` or media elements.
+  `Element(tag)` is public so nothing is *blocked*; the convenience layer is simply incomplete.
+  `Dialog` is there but only opens inline: `showModal()` is a DOM method, and there is no op for
+  calling one.
 - **Navigation is not accessible.** A client-side route change swaps the view without moving focus
   or announcing anything to a screen reader, and scroll position is not restored on back or forward.
   Standard omissions in this style of framework, and standard complaints about it.

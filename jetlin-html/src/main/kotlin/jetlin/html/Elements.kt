@@ -103,6 +103,9 @@ public class AttrsScope internal constructor(private val exposeTestTags: Boolean
     public fun href(value: String): Unit = attr("href", value)
     public fun disabled(value: Boolean) { if (value) attr("disabled", "") else attr("disabled", null) }
 
+    /** Shows a [Details] or a [Dialog] inline. Absent rather than `open="false"`, like [disabled]. */
+    public fun open(value: Boolean) { if (value) attr("open", "") else attr("open", null) }
+
     /**
      * Sets a DOM property. Use for `value`/`checked`: assigning the attribute instead only changes
      * the control's default and stops taking effect once the user has touched it.
@@ -376,6 +379,63 @@ public fun Th(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () ->
 @Composable
 public fun Td(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
     Element("td", attrs, content)
+
+@Composable
+public fun Tfoot(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("tfoot", attrs, content)
+
+/** The table's own heading. Announced with the table by a screen reader, unlike a heading above it. */
+@Composable
+public fun Caption(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("caption", attrs, content)
+
+@Composable
+public fun H4(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("h4", attrs, content)
+
+@Composable
+public fun H5(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("h5", attrs, content)
+
+@Composable
+public fun H6(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("h6", attrs, content)
+
+@Composable
+public fun Ol(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("ol", attrs, content)
+
+/**
+ * A disclosure the browser opens and closes for itself.
+ *
+ * Nothing is sent when the user toggles one: `<details>` owns its own `open` state and there is no
+ * handler here for the `toggle` event. That is the same bargain as [AttrsScope.clientOnly] and is
+ * usually the right one. The consequence is that [AttrsScope.open] is a declaration rather than a
+ * mirror — set it and the next patch that changes it overwrites whatever the user had done.
+ */
+@Composable
+public fun Details(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("details", attrs, content)
+
+/** The always-visible line of a [Details]. Must be its first child, or the browser supplies one. */
+@Composable
+public fun Summary(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("summary", attrs, content)
+
+/**
+ * A `<dialog>`. Showing it is the caller's job, and only one of the two ways is available here.
+ *
+ * [AttrsScope.open] shows it inline, so a composition can drive it like any other attribute.
+ * `showModal()` — top layer, backdrop, trapped focus, Escape to close — is a DOM *method*, and
+ * Jetlin has no vocabulary for calling one: the ops are attributes, properties and listeners, and
+ * adding a "call this method" op would open the door to the browser running arbitrary instructions
+ * from the server, which the protocol exists to avoid. A modal needs a [ClientComponent] or a
+ * script of the application's own. This is the element and nothing more, rather than an `open` that
+ * silently is not modal.
+ */
+@Composable
+public fun Dialog(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
+    Element("dialog", attrs, content)
 
 /**
  * An anchor that navigates within the live session instead of reloading the page.
