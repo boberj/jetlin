@@ -66,6 +66,19 @@ public class JetlinConfig {
     public var exposeTestTags: Boolean = false
 
     /**
+     * Markup placed after the runtime loads and before the session connects.
+     *
+     * Where an application registers its client components, because the order matters: the first
+     * thing a connection does is take up the markup it was served, and a component whose
+     * implementation has not been registered by then renders nothing.
+     *
+     * ```kotlin
+     * clientSetup = """<script src="/app.js"></script>"""
+     * ```
+     */
+    public var clientSetup: String = ""
+
+    /**
      * How long a composition stays up after its socket goes away.
      *
      * Long enough that a tunnel or a sleeping laptop reattaches to a running composition; past it,
@@ -276,6 +289,7 @@ private suspend fun renderPage(config: JetlinConfig, title: String, session: Jet
         <body>
         <div id="jetlin-root"${rootAttributes(session.view.owner)}>$body</div>
         <script src="/jetlin/jetlin.js"></script>
+        ${config.clientSetup}
         <script>window.jetlin = Jetlin.connect({ token: "${session.token}" });</script>
         </body>
         </html>

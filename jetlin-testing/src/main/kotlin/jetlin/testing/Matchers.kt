@@ -58,6 +58,17 @@ public fun hasAttr(name: String, value: String): NodeMatcher =
 public fun hasTestTag(value: String): NodeMatcher =
     NodeMatcher("testTag '$value'") { it is ElementNode && it.testTag == value }
 
+/**
+ * Matches an element rendered by the client component registered as [name].
+ *
+ * A headless test can see that the component was asked for, and with what props, but not what it
+ * drew — that happens in a browser, and belongs in a browser test.
+ */
+public fun hasClientComponent(name: String): NodeMatcher =
+    NodeMatcher("client component '$name'") {
+        it is ElementNode && it.attribute("data-jl-component") == name
+    }
+
 /** Matches an element whose `id` attribute equals [value]. */
 public fun hasId(value: String): NodeMatcher = hasAttr("id", value)
 

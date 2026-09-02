@@ -8,7 +8,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import io.ktor.server.engine.embeddedServer
+import io.ktor.http.ContentType
 import io.ktor.server.netty.Netty
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.routing
 import jetlin.html.Button
 import jetlin.html.Div
 import jetlin.html.H1
@@ -23,6 +27,7 @@ import jetlin.html.Span
 import jetlin.html.Text
 import jetlin.html.TextArea
 import jetlin.html.Ul
+import jetlin.html.ClientComponent
 import jetlin.html.bind
 import jetlin.html.closest
 import jetlin.html.pathParam
@@ -30,16 +35,32 @@ import jetlin.html.rememberField
 import jetlin.html.rememberSavedField
 import jetlin.server.jetlin
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 fun main() {
     val port = System.getenv("PORT")?.toInt() ?: 8080
     embeddedServer(Netty, port = port) {
+        routing {
+            get("/demo/sparkline.js") {
+                val script = checkNotNull(object {}.javaClass.getResource("/demo/sparkline.js")).readText()
+                call.respondText(script, ContentType.Text.JavaScript)
+            }
+        }
         jetlin {
             // This app exists to be tested, so its test tags are written into the markup for
             // Playwright to select on. A real application would set this only outside production,
             // where the default keeps them off the wire entirely.
             exposeTestTags = true
             head = STYLES
+            // Registered before the session connects, so the sparkline's implementation is there
+            // when the runtime takes up the markup it was served.
+            clientSetup = """<script src="/demo/sparkline.js"></script>"""
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
             view("/about", title = "About · Jetlin") { AboutPage() }
@@ -286,6 +307,47 @@ internal fun AboutPage() = Shell {
         }
     }
     Disclosure()
+    Sparkline()
+}
+
+/**
+ * A canvas the server cannot draw, fed by state the server owns.
+ *
+ * Everything else on these pages is markup a composition can produce. A chart is not: it is pixels,
+ * drawn by code that has to run where the canvas is. So the composition renders an empty element,
+ * names an implementation for it, and passes the numbers down as props.
+ *
+ * Nothing is preserved if the connection drops long enough to need the tree resent — the canvas is
+ * rebuilt and redrawn from these same props, which is exactly why they live here and not in the
+ * browser.
+ */
+@Composable
+internal fun Sparkline() {
+    var points by remember { mutableStateOf(listOf(3, 7, 4, 9, 6)) }
+
+    Div({ classes("card") }) {
+        H2 { Text("Drawn in the browser") }
+        ClientComponent(
+            name = "sparkline",
+            props = buildJsonObject {
+                put("points", buildJsonArray { points.forEach { add(JsonPrimitive(it)) } })
+            },
+            attrs = { classes("sparkline"); testTag("sparkline") },
+            onEvent = { event, payload ->
+                // The chart reports which bar was clicked; the server decides what that means.
+                if (event == "picked") {
+                    val index = payload["index"]!!.jsonPrimitive.int
+                    points = points.toMutableList().also { it[index] = (it[index] % 9) + 1 }
+                }
+            },
+        )
+        P({ classes("hint"); testTag("sparkline-values") }) { Text(points.joinToString(",")) }
+        Button({
+            classes("btn")
+            testTag("sparkline-shuffle")
+            onClick { points = points.map { (it % 9) + 1 } }
+        }) { Text("New numbers") }
+    }
 }
 
 /**
@@ -367,6 +429,9 @@ private val STYLES = """
       .btn { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid #d1d5db;
              background: #fff; cursor: pointer; text-decoration: none; color: inherit; }
       .btn:hover { background: #f3f4f6; }
+      .sparkline { display: flex; align-items: flex-end; gap: .35rem; height: 4rem; }
+      .sparkline .bar { flex: 1; background: #2563eb; border-radius: 3px 3px 0 0; cursor: pointer; }
+      .sparkline .bar:hover { background: #1d4ed8; }
       .disclosure .panel { display: none; }
       .disclosure.open .panel { display: block; margin-top: .9rem; }
       .btn[disabled] { opacity: .5; cursor: not-allowed; }

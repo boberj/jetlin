@@ -92,6 +92,56 @@ function parseTextMarkers(value: string | null): Map<number, number> {
   return markers;
 }
 
+/** Event name a component's pushes travel under, matching COMPONENT_EVENT on the server. */
+const COMPONENT_EVENT = "jl:component";
+const COMPONENT_ATTRIBUTE = "data-jl-component";
+const COMPONENT_PROPS_ATTRIBUTE = "data-jl-props";
+
+/**
+ * An implementation the application registers for [ClientComponent] to render.
+ *
+ * [mount] may return a handle -- an editor, a chart, whatever it built -- which is given back to
+ * [update] and [unmount] so the implementation need keep no registry of its own.
+ */
+export interface ClientComponentFactory<T = unknown> {
+  mount(element: HTMLElement, props: Record<string, unknown>, push: PushFn): T;
+  /** Called when the server sends new props. Without it, changed props remount the component. */
+  update?(element: HTMLElement, props: Record<string, unknown>, handle: T): void;
+  /** Called before the element leaves the page. The place to release listeners and timers. */
+  unmount?(element: HTMLElement, handle: T): void;
+}
+
+export type PushFn = (event: string, payload?: Record<string, unknown>) => void;
+
+const components = new Map<string, ClientComponentFactory<never>>();
+
+/**
+ * Registers [factory] under [name], for a ClientComponent on the server to ask for by that name.
+ *
+ * A registry rather than a lookup by global name: what the server sends is a key into a table the
+ * application populated, and can never be a piece of code to run.
+ */
+export function clientComponent<T>(name: string, factory: ClientComponentFactory<T>): void {
+  components.set(name, factory as ClientComponentFactory<never>);
+}
+
+interface Mounted {
+  factory: ClientComponentFactory<never>;
+  element: HTMLElement;
+  handle: never;
+}
+
+function parseProps(element: Element): Record<string, unknown> {
+  const raw = element.getAttribute(COMPONENT_PROPS_ATTRIBUTE);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    console.warn(`jetlin: could not parse props for component "${element.getAttribute(COMPONENT_ATTRIBUTE)}"`);
+    return {};
+  }
+}
+
 export interface JetlinOptions {
   url?: string;
   token: string;
@@ -139,6 +189,9 @@ class Jetlin {
    */
   private children = new Map<number, Node[]>();
   private listeners = new Map<number, Record<string, ListenerSpec>>();
+
+  /** Live client components, by node id, so they can be updated and torn down. */
+  private mounted = new Map<number, Mounted>();
 
   /** Event types already delegated on the container. */
   private delegated = new Set<string>();
@@ -310,6 +363,13 @@ class Jetlin {
       return;
     }
 
+    // Same for a client component, which additionally has to be started: the markup it was served
+    // is an empty shell, and the implementation fills it.
+    if (element.hasAttribute(COMPONENT_ATTRIBUTE)) {
+      this.mount(id, element as HTMLElement);
+      return;
+    }
+
     const textIds = parseTextMarkers(element.getAttribute("data-jl-t"));
     const logical: Node[] = [];
 
@@ -363,6 +423,9 @@ class Jetlin {
   // ------------------------------------------------------------------ patches
 
   private reset(children: NodeSpec[]): void {
+    // Every component goes before the DOM holding it does, or their listeners and timers outlive
+    // the page they belonged to.
+    for (const id of Array.from(this.mounted.keys())) this.unmount(id);
     this.container.replaceChildren();
     this.nodes.clear();
     this.children.clear();
@@ -412,6 +475,7 @@ class Jetlin {
         const element = this.nodes.get(op.id) as Element;
         if (op.value === null) element.removeAttribute(op.name);
         else element.setAttribute(op.name, op.value);
+        if (op.name === COMPONENT_PROPS_ATTRIBUTE) this.updateComponent(op.id);
         break;
       }
       case "prop": {
@@ -466,6 +530,11 @@ class Jetlin {
       for (const event of Object.keys(spec.listeners)) this.delegate(event);
     }
 
+    if (element.hasAttribute(COMPONENT_ATTRIBUTE)) {
+      this.mount(spec.id, element as HTMLElement);
+      return element;
+    }
+
     const kids = (spec.children ?? []).map((child) => this.build(child));
     this.children.set(spec.id, kids);
     for (const kid of kids) element.appendChild(kid);
@@ -477,9 +546,68 @@ class Jetlin {
     this.ids.set(node, id);
   }
 
+  /**
+   * Hands an element over to the implementation registered under its component name.
+   *
+   * Its children are recorded as empty, so nothing Jetlin does afterwards will index or patch
+   * inside it: whatever the implementation renders is its own, and the server has never heard of it.
+   */
+  private mount(id: number, element: HTMLElement): void {
+    const name = element.getAttribute(COMPONENT_ATTRIBUTE)!;
+    this.children.set(id, []);
+
+    const factory = components.get(name);
+    if (!factory) {
+      // Left empty rather than fatal: a missing registration is a build problem in one corner of
+      // the page, and taking the whole session down over it helps nobody.
+      console.warn(`jetlin: no client component registered as "${name}"`);
+      return;
+    }
+
+    const push: PushFn = (event, payload) =>
+      this.send(id, COMPONENT_EVENT, { data: { event, payload: payload ?? {} } });
+
+    const handle = factory.mount(element, parseProps(element), push) as never;
+    this.mounted.set(id, { factory, element, handle });
+  }
+
+  /** Passes new props along, remounting when the implementation offers no cheaper way to take them. */
+  private updateComponent(id: number): void {
+    const live = this.mounted.get(id);
+    if (!live) return;
+    const props = parseProps(live.element);
+    if (live.factory.update) {
+      live.factory.update(live.element, props, live.handle);
+      return;
+    }
+    live.factory.unmount?.(live.element, live.handle);
+    live.element.replaceChildren();
+    this.mounted.delete(id);
+    this.mount(id, live.element);
+  }
+
+  /**
+   * Tears a component down before its element leaves the page.
+   *
+   * Not optional. A third-party widget that is never told it is going holds on to listeners, timers
+   * and observers, and a list that re-renders leaks a set of them every time.
+   */
+  private unmount(id: number): void {
+    const live = this.mounted.get(id);
+    if (!live) return;
+    this.mounted.delete(id);
+    try {
+      live.factory.unmount?.(live.element, live.handle);
+    } catch (error) {
+      // One misbehaving widget must not stop the rest of the page being torn down correctly.
+      console.warn("jetlin: a client component threw while unmounting", error);
+    }
+  }
+
   private forget(node: Node): void {
     const id = this.ids.get(node);
     if (id === undefined) return;
+    this.unmount(id);
     for (const child of this.children.get(id) ?? []) this.forget(child);
     this.nodes.delete(id);
     this.children.delete(id);
@@ -633,8 +761,8 @@ class Jetlin {
 
 declare global {
   interface Window {
-    Jetlin: { connect: typeof connect };
+    Jetlin: { connect: typeof connect; clientComponent: typeof clientComponent };
   }
 }
 
-window.Jetlin = { connect };
+window.Jetlin = { connect, clientComponent };

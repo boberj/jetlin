@@ -3,6 +3,7 @@ package jetlin.protocol
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 public sealed interface ServerMessage {
@@ -106,7 +107,23 @@ public data class EventPayload(
     val checked: Boolean? = null,
     val key: String? = null,
     val form: Map<String, String>? = null,
+    /**
+     * Free-form payload from a client component, which the framework does not interpret.
+     *
+     * The other fields are things Jetlin knows how to read off a DOM event. This one is whatever a
+     * component chose to send up, so it stays opaque JSON until the application decodes it.
+     */
+    val data: JsonObject? = null,
 )
+
+/** Event name a client component's pushes arrive under; see `ClientComponent`. */
+public const val COMPONENT_EVENT: String = "jl:component"
+
+/** Key holding the component's own name for the event, inside [EventPayload.data]. */
+public const val COMPONENT_EVENT_NAME: String = "event"
+
+/** Key holding the component's payload, inside [EventPayload.data]. */
+public const val COMPONENT_EVENT_PAYLOAD: String = "payload"
 
 /** Shared codec. Class discriminator is `t` to keep frames small. */
 public val JetlinJson: Json = Json {

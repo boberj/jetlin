@@ -54,7 +54,7 @@ that read it, and a patch follows. Sending updates to a connected client needs n
 
 ```
 ┌─ Browser ──────────────────────────────────────────────────────────────────┐
-│  jetlin.js (7.0 kB minified)                                               │
+│  jetlin.js (8.3 kB minified)                                               │
 │  applies ops · delegates events · guards in-flight input · reconnects      │
 └───────────────▲──────────────────────────────────────┬─────────────────────┘
                 │ patch { rev, ack, ops }              │ event { node, seq }
@@ -172,7 +172,7 @@ or CBOR would be a drop-in change; readable frames are more useful at this stage
 
 ## 6. The browser runtime
 
-7.0 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
+8.3 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
 children per element, and the listener specs.
 
 The child array exists because the DOM's own `childNodes` cannot be trusted for indexing — browsers
@@ -441,7 +441,7 @@ rather than a requirement.
 **Ktor first, with a portable core.** `LiveView` knows nothing about WebSockets or Ktor and can be
 driven straight from a test with no server involved. Adapters for other servers are additive.
 
-**The client is TypeScript.** About 650 lines of DOM manipulation, which ships as 7.0 kB with no
+**The client is TypeScript.** About 730 lines of DOM manipulation, which ships as 8.3 kB with no
 runtime of its own to carry.
 
 ---
@@ -540,6 +540,66 @@ What a headless test can say about this is that it was declared, and declared ex
 and `jetlin-testing` says so rather than dispatching into nothing: clicking a client-only node fails
 with an explanation instead of quietly doing nothing.
 
+### Elements the composition does not own
+
+Some things a server-side tree cannot produce: a map, a chart, a rich-text editor. `ClientComponent`
+creates the element and stops there, naming an implementation the application registered in its own
+bundle.
+
+```kotlin
+val body = rememberSavedField(note.body, key = "body")
+
+ClientComponent(
+    name = "editor",
+    props = buildJsonObject { put("content", body.value) },
+    onEvent = { event, payload ->
+        if (event == "changed") body.edit(payload["html"]!!.jsonPrimitive.content)
+    },
+)
+```
+
+```js
+Jetlin.clientComponent("editor", {
+  mount(element, props, push) { … },
+  update(element, props, handle) { … },
+  unmount(element, handle) { … },
+});
+```
+
+**Props down, events up, and the DOM in between is disposable.** Nothing survives a reconnect that
+had to resend the tree; the element is rebuilt and mounted afresh from props the server still holds.
+That is the same bargain `remember` makes, and it is why this needs no machinery for keeping a
+subtree alive through a rebuild — the hard half of the problem is answered by not having it.
+
+The rule that makes it safe: **nothing the user authored may live only inside one.** A map's pan and
+zoom can be recreated and nobody minds; text somebody typed cannot, so it is pushed up and held in a
+`rememberSaved` field, which then survives a reconnect and hibernation through machinery that
+already exists.
+
+Mechanically it adds almost nothing. `data-jl-component` and `data-jl-props` are ordinary
+attributes, so they ride the HTML serializer, `NodeSpec` and `Op.SetAttr` unchanged: new props are
+one attribute write, and a component inserted after first paint arrives complete. The client hooks
+into four places that already existed — `build` and `adoptElement` mount, `forget` unmounts, `reset`
+unmounts everything before `replaceChildren`. Pushes reuse the ordinary event path, carrying their
+payload in `EventPayload.data`, which the framework does not interpret.
+
+Two deliberate restrictions. There are no composable children: the contents belong to the
+implementation, Jetlin records the element's logical children as empty and never patches inside it —
+which also means nothing renders there with JavaScript disabled. And `name` is a key into a registry
+the application populated, never a piece of code, so what crosses the wire can name an
+implementation but can never be one.
+
+Unmounting is not optional. A widget that is never told it is going keeps its listeners, timers and
+observers, and a list that re-renders leaks a set each time. `JetlinConfig.clientSetup` is where an
+application loads its registrations, injected after the runtime and before the session connects,
+because a component whose implementation has not been registered by the time the markup is taken up
+renders nothing.
+
+`jetlin-testing` reaches the half of this that is not the browser's: `hasClientComponent` finds one,
+`assertProps` pins what the server sent, and `pushFromClient` drives an event up so the server's
+reaction can be asserted without a browser. What the implementation draws is covered by browser
+tests, including that mounts and unmounts balance.
+
 ### Saying where, not what
 
 Queries can be confined to a subtree, which is how a test says "the up button *in this row*" instead
@@ -590,15 +650,14 @@ directly, so it works under whichever runner the consuming project already uses.
   described in section 9, which has to be decided first. Two changes go with it whenever it happens:
   a generation counter on the snapshot so two processes cannot resurrect each other's state, and
   moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
-- **Enclaves.** A subtree the composition renders once and then hands over entirely — a map, a
-  chart, a rich-text editor, anything with its own lifecycle. `clientOnly` covers behaviour the
-  server has no opinion about; an enclave covers markup the server does not own at all, which is a
-  different and harder problem. `unsafeInnerHtml` already carries `data-jl-raw` and the client
-  already refuses to index into it, so the boundary exists; what does not exist is identity across a
-  `Reset`. Every reconnect past the grace period rebuilds the whole tree, and an enclave that loses
-  its scroll position, its editor buffer or its half-drawn canvas on every dropped connection is
-  worse than not having one. Surviving a reset — not ignoring patches — is the feature, and it needs
-  deciding before any of it is built.
+- **Preserving a client component across a reset.** `ClientComponent` deliberately does not: a
+  reconnect that has to resend the tree rebuilds the element and mounts the implementation afresh.
+  That is the right default, and the props-down contract makes it invisible for anything whose state
+  can be recreated. It is still the wrong answer for a component holding something expensive to
+  rebuild — a large canvas, a heavy third-party widget mid-animation. Doing better means preserving
+  a DOM subtree across a full-tree rebuild, which needs identity that survives
+  `container.replaceChildren()` and reconciliation of a tree the server has stopped tracking. Worth
+  it only once something real is hurt by the current behaviour.
 - File uploads, a Spring Boot adapter, telemetry, and CI.
 
 Known limitation: `ack` can be set slightly early when a background patch overlaps an inbound event,

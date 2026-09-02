@@ -210,6 +210,74 @@ test("it works before any script has connected, from the server-rendered markup"
 });
 
 /**
+ * Client components: an element the composition creates and then stops owning.
+ *
+ * The server sends props down and receives events up; what is drawn in between is the browser's.
+ * These cover both directions and the teardown, which is the part that leaks if it is wrong.
+ */
+
+test("a client component renders what the server cannot", async ({ page }) => {
+  await page.goto("/about");
+
+  // Bars exist only because JavaScript drew them; the served markup is an empty element.
+  await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
+  await expect(page.locator("[data-test=sparkline-values]")).toHaveText("3,7,4,9,6");
+});
+
+test("new props from the server reach the component", async ({ page }) => {
+  await page.goto("/about");
+  await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
+
+  const before = await page.locator("[data-test=sparkline] .bar").first().evaluate((b) => b.style.height);
+  await page.locator("[data-test=sparkline-shuffle]").click();
+
+  await expect(page.locator("[data-test=sparkline-values]")).not.toHaveText("3,7,4,9,6");
+  const after = await page.locator("[data-test=sparkline] .bar").first().evaluate((b) => b.style.height);
+  expect(after).not.toBe(before);
+});
+
+test("an event from the component reaches the server, which decides what it means", async ({ page }) => {
+  await page.goto("/about");
+  await expect(page.locator("[data-test=sparkline-values]")).toHaveText("3,7,4,9,6");
+
+  // The component only reports which bar was clicked. Changing the number is the server's doing,
+  // and it comes back down as new props.
+  await page.locator("[data-test=sparkline] .bar").first().click();
+
+  await expect(page.locator("[data-test=sparkline-values]")).toHaveText("4,7,4,9,6");
+  await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
+});
+
+test("a component is torn down when the server removes it", async ({ page }) => {
+  const warnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") warnings.push(message.text());
+  });
+
+  await page.goto("/about");
+  await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
+
+  // Navigating away drops the whole view, which must take the component with it rather than
+  // leaving it attached to a detached element.
+  await page.locator("nav a", { hasText: "Todos" }).click();
+  await expect(page).toHaveURL("/");
+  await expect(page.locator("[data-test=sparkline]")).toHaveCount(0);
+
+  // And back again, mounted fresh from props the server still holds.
+  await page.locator("nav a", { hasText: "About" }).click();
+  await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
+
+  // Mounted twice, torn down once, and the second one is still live: the counts balance, which is
+  // what "no leak" actually means here.
+  const counts = await page.evaluate(() => ({
+    mounts: (window as unknown as { sparklineMounts: number }).sparklineMounts,
+    unmounts: (window as unknown as { sparklineUnmounts: number }).sparklineUnmounts,
+  }));
+  expect(counts).toEqual({ mounts: 2, unmounts: 1 });
+  expect(warnings.filter((w) => w.includes("component"))).toEqual([]);
+});
+
+/**
  * Adoption: keeping the server-rendered markup instead of being sent the tree a second time.
  *
  * The DOM the browser parsed and painted is the thing under test, so these check node identity

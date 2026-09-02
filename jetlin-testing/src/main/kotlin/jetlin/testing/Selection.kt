@@ -4,8 +4,17 @@ import jetlin.html.ElementNode
 import jetlin.html.HtmlNode
 import jetlin.html.HtmlOwner
 import jetlin.html.TextNode
+import jetlin.protocol.COMPONENT_EVENT
+import jetlin.protocol.COMPONENT_EVENT_NAME
+import jetlin.protocol.COMPONENT_EVENT_PAYLOAD
 import jetlin.protocol.ClientCommand
+import jetlin.protocol.EventPayload
+import jetlin.protocol.JetlinJson
 import jetlin.protocol.PropValue
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /**
  * A handle on one node matching a query.
@@ -78,6 +87,46 @@ public class NodeSelection internal constructor(
     ): NodeSelection = apply {
         val actual = fetch().listenerSpec(event)?.commands.orEmpty()
         assertSame("Client commands for '$event' on $description", expected.toList(), actual)
+    }
+
+    /** The props the server last sent to this client component. */
+    public suspend fun props(): JsonObject {
+        val raw = fetch().attribute("data-jl-props")
+            ?: throw AssertionError("The node matching $description is not a client component.")
+        return JetlinJson.parseToJsonElement(raw).jsonObject
+    }
+
+    public suspend fun assertProps(expected: JsonObject): NodeSelection = apply {
+        assertSame("Props of $description", expected, props())
+    }
+
+    /**
+     * Sends an event up from a client component, as its browser implementation would.
+     *
+     * The half of a component a headless test can drive: not what it renders, but whether the
+     * server does the right thing when it reports something.
+     */
+    public suspend fun pushFromClient(
+        event: String,
+        payload: JsonObject = JsonObject(emptyMap()),
+    ): NodeSelection = apply {
+        val node = fetch()
+        if (node.attribute("data-jl-component") == null) {
+            throw AssertionError(
+                "The node matching $description is not a client component, so nothing can be " +
+                    "pushed from it.\n\nThe node was:\n" + node.describe(),
+            )
+        }
+        test.dispatchEvent(
+            node.id,
+            COMPONENT_EVENT,
+            EventPayload(
+                data = buildJsonObject {
+                    put(COMPONENT_EVENT_NAME, event)
+                    put(COMPONENT_EVENT_PAYLOAD, payload)
+                },
+            ),
+        )
     }
 
     /** Asserts that the selected node also satisfies [other]. */

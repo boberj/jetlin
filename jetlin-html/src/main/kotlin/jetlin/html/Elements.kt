@@ -194,6 +194,17 @@ public class AttrsScope internal constructor(private val exposeTestTags: Boolean
     /** Marks a `<option>` as chosen. A property rather than an attribute, like `value`. */
     public fun selected(value: Boolean): Unit = prop("selected", value)
 
+    /**
+     * Registers a handler with no listener spec attached.
+     *
+     * For events the browser does not raise: a client component pushing to the server calls into the
+     * runtime directly, so there is nothing to add a DOM listener for, and adding one would put a
+     * pointless capture handler on the container.
+     */
+    internal fun handle(event: String, handler: EventHandler) {
+        handlers[event] = handler
+    }
+
     internal fun data(): ElementData = ElementData(
         attributes = attributes,
         properties = properties,
