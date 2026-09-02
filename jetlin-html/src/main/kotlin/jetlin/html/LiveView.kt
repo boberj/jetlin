@@ -167,10 +167,11 @@ public class LiveView(
      * deliberately not captured — it is scratch space, and recomputing it is the point.
      */
     public suspend fun hibernate(): Map<String, JsonElement> {
-        awaitIdle()
-        // Closed even if saving fails: a session that cannot be captured still has to release its
-        // composition, or a bad key would leak the very memory hibernation exists to reclaim.
+        // Closed whatever happens, and that includes the wait: a composition that has already died
+        // reports its failure from awaitIdle, and leaving that outside the try meant the one kind of
+        // session most in need of releasing was the one kind that never was.
         return try {
+            awaitIdle()
             host.confined { stateRegistry.performSave() }
         } finally {
             close()

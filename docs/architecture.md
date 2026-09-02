@@ -275,7 +275,13 @@ make one noticeable, because a click that quietly did nothing is the worst of bo
 
 A view that throws during its *initial* composition never becomes a session at all: `create` closes
 the half-built view before rethrowing, so a failing page cannot leak a dispatcher thread per
-request, and the HTTP layer returns its own error.
+request, and the HTTP layer returns its own error. A session whose composition died later is closed
+by the reaper on its way past — `hibernate` waits for idle *inside* its `try`, because a dead
+composition reports its failure from that wait, and the session most in need of releasing was
+otherwise the one kind that never was.
+
+The demo's `/errors` page is both halves side by side: a button that throws in a handler next to a
+counter that keeps counting, and a button that throws in the view and takes the session with it.
 
 ---
 

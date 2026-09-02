@@ -210,6 +210,49 @@ test("it works before any script has connected, from the server-rendered markup"
 });
 
 /**
+ * Failures, seen from the browser.
+ *
+ * Two exceptions that reach the transport identically and mean completely different things. What
+ * these check is that the difference survives all the way to the page.
+ */
+
+test("a handler that throws costs one interaction and nothing else", async ({ page }) => {
+  await page.goto("/errors");
+
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+
+  await page.locator("[data-test=fail-handler]").click();
+
+  // The application is told, through the jetlin:error event, and shows what it likes.
+  await expect(page.locator("[data-test=toast]")).toBeVisible();
+  await expect(page.locator("[data-test=toast]")).toContainText("could not be completed");
+  // Nothing about the exception itself crosses the wire.
+  await expect(page.locator("[data-test=toast]")).not.toContainText("always going to");
+
+  // And the session is untouched: the count is where it was, and clicking still works.
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("2");
+});
+
+test("a view that throws ends the session and the page starts over", async ({ page }) => {
+  await page.goto("/errors");
+
+  await page.locator("[data-test=still-works]").click();
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("2");
+
+  await page.locator("[data-test=fail-view]").click();
+
+  // The client is told this one is unrecoverable and reloads into a fresh session, which is
+  // visible as the counter going back to zero on a page that works again.
+  await expect(page.locator("[data-test=clicks]")).toHaveText("0", { timeout: 10_000 });
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+});
+
+/**
  * Client components: an element the composition creates and then stops owning.
  *
  * The server sends props down and receives events up; what is drawn in between is the browser's.

@@ -47,9 +47,11 @@ fun main() {
     val port = System.getenv("PORT")?.toInt() ?: 8080
     embeddedServer(Netty, port = port) {
         routing {
-            get("/demo/sparkline.js") {
-                val script = checkNotNull(object {}.javaClass.getResource("/demo/sparkline.js")).readText()
-                call.respondText(script, ContentType.Text.JavaScript)
+            for (name in listOf("sparkline.js", "errors.js")) {
+                get("/demo/$name") {
+                    val script = checkNotNull(object {}.javaClass.getResource("/demo/$name")).readText()
+                    call.respondText(script, ContentType.Text.JavaScript)
+                }
             }
         }
         jetlin {
@@ -60,11 +62,21 @@ fun main() {
             head = STYLES
             // Registered before the session connects, so the sparkline's implementation is there
             // when the runtime takes up the markup it was served.
-            clientSetup = """<script src="/demo/sparkline.js"></script>"""
+            clientSetup = """
+                <script src="/demo/sparkline.js"></script>
+                <script src="/demo/errors.js"></script>
+            """.trimIndent()
+            // Where a real application would forward this to its error reporting. Printing it is
+            // the demo's version of that; the point is that the exception reaches the application
+            // rather than only a log line nobody reads.
+            onError = { throwable ->
+                println("[demo] a session reported: ${throwable::class.simpleName}: ${throwable.message}")
+            }
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
             view("/about", title = "About · Jetlin") { AboutPage() }
             view("/shapes", title = "Shapes · Jetlin") { ShapesPage() }
+            view("/errors", title = "Errors · Jetlin") { ErrorsPage() }
         }
     }.start(wait = true)
 }
@@ -77,6 +89,7 @@ internal fun Shell(content: @Composable () -> Unit) {
             Link("/") { Text("Todos") }
             Link("/about") { Text("About") }
             Link("/shapes") { Text("Shapes") }
+            Link("/errors") { Text("Errors") }
             Button({
                 classes("link")
                 testTag("reset")
@@ -220,6 +233,74 @@ internal fun TodoDetailPage() = Shell {
             }
         }
     }
+}
+
+/**
+ * What happens when the server-side code goes wrong.
+ *
+ * Two failures that look identical from the outside — an exception reaching the transport — and are
+ * not the same thing at all. A handler that throws leaves the composition untouched, so one
+ * interaction did not happen and everything else still works. A composable that throws stops the
+ * recomposer for good, so the session can only be abandoned.
+ *
+ * Telling them apart is worth the trouble: treating every failure as fatal throws away sessions that
+ * were fine, and treating none of them as fatal leaves a page that looks live and can never change
+ * again.
+ */
+@Composable
+internal fun ErrorsPage() = Shell {
+    var clicks by remember { mutableStateOf(0) }
+    var broken by remember { mutableStateOf(false) }
+
+    Div({ classes("card") }) {
+        H1 { Text("When things go wrong") }
+        P {
+            Text(
+                "Nothing here reaches the browser except a fixed sentence. The exception itself is " +
+                    "logged and handed to the application, because its text carries paths and " +
+                    "identifiers that are nobody's business in a page.",
+            )
+        }
+
+        Div({ classes("field") }) {
+            H2 { Text("A handler that fails") }
+            P({ classes("hint") }) {
+                Text("One interaction is lost. The session is untouched — the counter still counts.")
+            }
+            Div({ classes("row") }) {
+                Button({
+                    classes("btn")
+                    testTag("fail-handler")
+                    onClick { error("this handler was always going to do this") }
+                }) { Text("Throw in a handler") }
+                Button({
+                    classes("btn")
+                    testTag("still-works")
+                    onClick { clicks++ }
+                }) { Text("Still works") }
+                Span({ classes("count"); testTag("clicks") }) { Text("$clicks") }
+            }
+        }
+
+        Div({ classes("field") }) {
+            H2 { Text("A view that fails") }
+            P({ classes("hint") }) {
+                Text(
+                    "The recomposer stops, so this session is over. The browser is told so and " +
+                        "reloads into a new one — which is why the counter above goes back to zero.",
+                )
+            }
+            Button({
+                classes("btn")
+                testTag("fail-view")
+                onClick { broken = true }
+            }) { Text("Throw in the view (reloads the page)") }
+        }
+    }
+
+    // Composed fine the first time and fatal on the next pass, which is exactly the shape of a real
+    // one: a view that was correct until some state made it not.
+    if (broken) error("this view cannot render in this state")
 }
 
 /**
@@ -429,6 +510,10 @@ private val STYLES = """
       .btn { font: inherit; padding: .45rem .9rem; border-radius: 8px; border: 1px solid #d1d5db;
              background: #fff; cursor: pointer; text-decoration: none; color: inherit; }
       .btn:hover { background: #f3f4f6; }
+      .toast { position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%);
+               background: #14161a; color: #fff; padding: .6rem 1rem; border-radius: 8px;
+               font-size: .9rem; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+      .toast-fatal { background: #b91c1c; }
       .sparkline { display: flex; align-items: flex-end; gap: .35rem; height: 4rem; }
       .sparkline .bar { flex: 1; background: #2563eb; border-radius: 3px 3px 0 0; cursor: pointer; }
       .sparkline .bar:hover { background: #1d4ed8; }

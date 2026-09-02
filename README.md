@@ -127,8 +127,10 @@ val expanded = remember { mutableStateOf(false) }   // does not; recomputing cos
 ```
 
 A small app: a keyed todo list, a detail page with server-side validation reached by a real
-`<a href>` that navigates without reloading, a clock driven from the server, and a page of markup
-shapes that are awkward to hand back to a browser. The store is shared across sessions, so opening
+`<a href>` that navigates without reloading, a clock driven from the server, a panel that opens
+without a round trip, a chart drawn by JavaScript from server-held numbers, a page of markup shapes
+that are awkward to hand back to a browser, and an `/errors` page where you can break a handler and
+then break the whole session and watch the two behave differently. The store is shared across sessions, so opening
 two windows shows edits in one appearing in the other — and "Reset demo data" puts it back, in every
 open window at once.
 
@@ -199,7 +201,7 @@ whichever runner you already use.
 ./gradlew test                       # 165 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 25 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 27 browser tests (server must be running)
 ```
 
 The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
@@ -210,7 +212,8 @@ typing while the server sends unrelated updates, navigation without a page load,
 validation gating a submit, reconnection with state preserved, that the server-rendered DOM is
 kept rather than rebuilt on connect, that a `clientOnly` disclosure still opens with the socket
 deliberately disconnected, and that a client component mounts, takes new props, reports events back
-and is torn down again with its mounts and unmounts balancing. Each one resets the demo's shared
+and is torn down again with its mounts and unmounts balancing, and that a failing handler costs one
+interaction while a failing view ends the session and the page starts over. Each one resets the demo's shared
 store first, so they assert exact counts and contents rather than working around whatever the
 previous test left. Hibernating and waking a session is covered at the integration level instead,
 driving a real socket, because a browser reconnects on its own too quickly to sit out a grace
@@ -226,7 +229,7 @@ period.
 | `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
 | `jetlin-testing` | Driving a view headlessly, for testing an application's own UI logic |
-| `samples/demo` | Runnable four-page demo and the memory benchmark |
+| `samples/demo` | Runnable five-page demo and the memory benchmark |
 | `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
 
 ## CI

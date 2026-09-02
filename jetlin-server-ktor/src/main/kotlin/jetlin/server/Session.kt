@@ -179,11 +179,17 @@ public class SessionRegistry(
                 store.save(session.token, SessionSnapshot(url, state))
             }
         } catch (t: Throwable) {
-            // Capturing can fail on a key collision, and saving can fail on an unreachable store.
-            // Neither is this user's doing, and neither may escape: the reaper runs in a coroutine
-            // shared with every other session, so an exception thrown here would cost all of them
-            // their hibernation rather than just this one. The composition is torn down either way.
+            // Capturing can fail on a key collision, saving can fail on an unreachable store, and a
+            // composition that already died reports that here. None of it is this user's doing, and
+            // none of it may escape: the reaper runs in a coroutine shared with every other session,
+            // so an exception thrown here would cost all of them their hibernation rather than just
+            // this one.
             logger.warn("Could not store session state; it will not be restorable", t)
+        } finally {
+            // Belt and braces. hibernate() closes the view on its way out, but this is the promise
+            // the registry makes — that a reaped session has released its composition — and it
+            // should not rest on a detail of the layer below. close() is idempotent.
+            session.close()
         }
     }
 
