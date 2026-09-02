@@ -8,7 +8,9 @@ import jetlin.html.Button
 import jetlin.html.Div
 import jetlin.html.Form
 import jetlin.html.Input
+import jetlin.html.Option
 import jetlin.html.P
+import jetlin.html.Select
 import jetlin.html.Span
 import jetlin.html.Text
 import jetlin.html.bind
@@ -132,6 +134,23 @@ class InteractionTest {
 
         onNode(hasTag("input")).check(false)
         onNode(hasTestTag("state")).assertText("todo")
+    }
+
+    @Test
+    fun `choosing an option reports its value`(): Unit = runViewTest {
+        setContent {
+            var series by remember { mutableStateOf("speed") }
+            Div {
+                Select({ testTag("series"); onChange { series = it } }) {
+                    Option({ value("speed") }) { Text("Speed") }
+                    Option({ value("fuel") }) { Text("Fuel burn") }
+                }
+                Span({ testTag("showing") }) { Text(series) }
+            }
+        }
+
+        onNode(hasTestTag("series")).choose("fuel")
+        onNode(hasTestTag("showing")).assertText("fuel")
     }
 
     @Test

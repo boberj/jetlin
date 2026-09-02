@@ -73,7 +73,7 @@ public fun ClientComponent(
     onEvent: (event: String, payload: JsonObject) -> Unit = { _, _ -> },
 ) {
     val owner = LocalHtmlOwner.current
-    val scope = AttrsScope(exposeTestTags = LocalTestTagsExposed.current)
+    val scope = AttrsScope(tag, exposeTestTags = LocalTestTagsExposed.current)
     attrs?.invoke(scope)
     scope.attr(COMPONENT_ATTRIBUTE, name)
     scope.attr(COMPONENT_PROPS_ATTRIBUTE, JetlinJson.encodeToString(JsonObject.serializer(), props))

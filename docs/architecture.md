@@ -775,11 +775,12 @@ Ordered by what it stops you doing, not by size.
 
 - **File uploads.** A WebSocket is the wrong pipe for bulk binary, so this needs a separate HTTP
   endpoint, progress reporting, and correlation back to the session that asked for it.
-- **Event coverage is thin.** Five handlers (`onClick`, `onInput`, `onChecked`, `onSubmit`,
-  `onKeyDown`) and four extracts (value, checked, key, form). Missing: focus and blur, change on a
-  select, mouse and pointer events, key-up, paste, radio groups, multi-select, and anything reading
+- **Event coverage is thin.** Six handlers (`onClick`, `onInput`, `onChange`, `onChecked`,
+  `onSubmit`, `onKeyDown`) and four extracts (value, checked, key, form). Missing: focus and blur,
+  mouse and pointer events, key-up, paste, radio groups, multi-select, and anything reading
   `dataset` or coordinates. The mechanism is right and the vocabulary is small — this is filling in,
-  not designing.
+  not designing. One element cannot declare two handlers for the same event, which is why
+  `onChange` and `onChecked` — both `change` — are refused together rather than merged.
 - **Element coverage is thin.** No `Dl`, `Fieldset`, `Canvas`, `Svg`, `Iframe` or media elements.
   `Element(tag)` is public so nothing is *blocked*; the convenience layer is simply incomplete.
   `Dialog` is there but only opens inline: `showModal()` is a DOM method, and there is no op for

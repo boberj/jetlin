@@ -33,6 +33,18 @@ public suspend fun NodeSelection.check(checked: Boolean = true): NodeSelection =
     send("change", EventPayload(checked = checked))
 }
 
+/**
+ * Picks an option in a `<select>`, naming it by the value the option carries.
+ *
+ * A browser reports the value that was chosen rather than which option was clicked, so there is
+ * nothing to resolve against the options here — and equally nothing checking that the value named is
+ * one of them. A test picking something the list no longer offers fails on its next assertion rather
+ * than on this line, so assert on the options too where they are the point.
+ */
+public suspend fun NodeSelection.choose(value: String): NodeSelection = apply {
+    send("change", EventPayload(value = value))
+}
+
 /** Submits a form, carrying the field values the browser would have collected. */
 public suspend fun NodeSelection.submit(fields: Map<String, String> = emptyMap()): NodeSelection = apply {
     send("submit", EventPayload(form = fields))

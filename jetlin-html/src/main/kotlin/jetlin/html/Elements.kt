@@ -62,7 +62,11 @@ public class ClientCommandsScope internal constructor() {
 public fun closest(className: String): ClientTarget = ClientTarget.Closest(className)
 
 /** Declares attributes, DOM properties and event handlers for one element. */
-public class AttrsScope internal constructor(private val exposeTestTags: Boolean = false) {
+public class AttrsScope internal constructor(
+    /** The element being configured. Held only so that a rejected declaration can name it. */
+    private val tag: String,
+    private val exposeTestTags: Boolean = false,
+) {
     private val attributes = LinkedHashMap<String, String>()
     private val properties = LinkedHashMap<String, PropValue>()
     private val listeners = LinkedHashMap<String, ListenerSpec>()
@@ -128,9 +132,40 @@ public class AttrsScope internal constructor(private val exposeTestTags: Boolean
      */
     public fun unsafeInnerHtml(html: String): Unit = prop(INNER_HTML, html)
 
+    /**
+     * Listens for [event] and calls [handler] when the browser reports it.
+     *
+     * One handler per event per element. A second declaration is rejected rather than allowed to
+     * replace the first: listeners are keyed by event name the whole way down — here, in the node,
+     * in the op, and in the client's table — so there is nowhere for a second one to live, and a
+     * page whose handler silently never runs is a bad afternoon.
+     */
     public fun on(event: String, spec: ListenerSpec = ListenerSpec(), handler: EventHandler) {
+        check(event !in handlers) {
+            "<$tag> declares two handlers for '$event'. Only one can run, since listeners are keyed " +
+                "by event name — note that onChecked and onChange both listen for 'change'. Declare " +
+                "the one you meant, or do both things in a single on(\"$event\") { }."
+        }
         listeners[event] = merge(listeners[event], spec)
         handlers[event] = handler
+    }
+
+    /**
+     * Adds [handler] to run after whatever is already listening for [event].
+     *
+     * Internal, and for the framework's own composables only. [Link] wraps an element the caller
+     * also gets to configure, and both of them have a legitimate claim on the click: the caller may
+     * want to record it, and the link still has to navigate. Two parties are not the same situation
+     * as one composable declaring two handlers, which [on] is right to reject. The wrapper runs
+     * last, so the caller sees the click before the view is swapped out from under it.
+     */
+    internal fun alsoOn(event: String, spec: ListenerSpec = ListenerSpec(), handler: EventHandler) {
+        val existing = handlers[event]
+        listeners[event] = merge(listeners[event], spec)
+        handlers[event] = if (existing == null) handler else { payload ->
+            existing(payload)
+            handler(payload)
+        }
     }
 
     /**
@@ -179,6 +214,23 @@ public class AttrsScope internal constructor(private val exposeTestTags: Boolean
             handler(it.value.orEmpty())
         }
 
+    /**
+     * Fires when a control's value is committed rather than while it is being edited.
+     *
+     * The handler a `<select>` wants. [onInput] does work on one — a browser raises both — but it
+     * is the verb for keystrokes, and reading `onInput` on a dropdown leaves the next person
+     * wondering what a half-typed choice would be.
+     *
+     * `change` is also what a checkbox raises, so this and [onChecked] are the same listener asked
+     * to extract two different things and cannot both be declared on one element. Doing so is
+     * rejected where it is written rather than resolved silently in favour of whichever came last.
+     */
+    public fun onChange(handler: (String) -> Unit): Unit =
+        on("change", ListenerSpec(extract = listOf(Extract.VALUE))) {
+            handler(it.value.orEmpty())
+        }
+
+    /** Ticks and unticks. Shares the `change` event with [onChange]; see there. */
     public fun onChecked(handler: (Boolean) -> Unit): Unit =
         on("change", ListenerSpec(extract = listOf(Extract.CHECKED))) {
             handler(it.checked ?: false)
@@ -226,7 +278,7 @@ public fun Element(
     content: @Composable () -> Unit = {},
 ) {
     val owner = LocalHtmlOwner.current
-    val scope = AttrsScope(exposeTestTags = LocalTestTagsExposed.current)
+    val scope = AttrsScope(tag, exposeTestTags = LocalTestTagsExposed.current)
     attrs?.invoke(scope)
     val data = scope.data()
     val handlers = scope.handlers()
@@ -457,7 +509,10 @@ public fun Link(
         attrs = {
             href(href)
             attrs?.invoke(this)
-            on("click", ListenerSpec(preventDefault = true)) { navigator.push(href) }
+            // Added to whatever the caller declared rather than declared outright: a link is one of
+            // the few elements two people configure, and a caller's own onClick would otherwise be
+            // rejected for colliding with the navigation it knows nothing about.
+            alsoOn("click", ListenerSpec(preventDefault = true)) { navigator.push(href) }
         },
         content = content,
     )
