@@ -1,7 +1,7 @@
 # Jetlin
 
 Interactive web UI written as Kotlin `@Composable` functions that run **on the server**. The browser
-gets HTML plus an 8.3 kB runtime that applies the DOM changes the server sends and reports events
+gets HTML plus an 8.5 kB runtime that applies the DOM changes the server sends and reports events
 back.
 
 Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and
@@ -201,7 +201,7 @@ whichever runner you already use.
 ./gradlew test                       # 165 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 27 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 29 browser tests (server must be running)
 ```
 
 The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
@@ -213,7 +213,8 @@ validation gating a submit, reconnection with state preserved, that the server-r
 kept rather than rebuilt on connect, that a `clientOnly` disclosure still opens with the socket
 deliberately disconnected, and that a client component mounts, takes new props, reports events back
 and is torn down again with its mounts and unmounts balancing, and that a failing handler costs one
-interaction while a failing view ends the session and the page starts over. Each one resets the demo's shared
+interaction while a failing view ends the session and the page starts over — unless the page cancels
+the error event and takes over, which it can, and which listening alone does not do. Each one resets the demo's shared
 store first, so they assert exact counts and contents rather than working around whatever the
 previous test left. Hibernating and waking a session is covered at the integration level instead,
 driving a real socket, because a browser reconnects on its own too quickly to sit out a grace

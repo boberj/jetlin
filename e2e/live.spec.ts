@@ -252,6 +252,45 @@ test("a view that throws ends the session and the page starts over", async ({ pa
   await expect(page.locator("[data-test=clicks]")).toHaveText("1");
 });
 
+test("a page can take over a fatal error instead of being reloaded", async ({ page }) => {
+  await page.goto("/errors?handle");
+
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+
+  await page.locator("[data-test=fail-view]").click();
+
+  // preventDefault on the fatal event: no reload, and the page says what it is now.
+  await expect(page.locator("[data-test=dead-banner]")).toBeVisible();
+  await expect(page.locator("body")).toHaveClass(/jl-dead/);
+  // The count survives, which is the proof the page was not reloaded.
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+
+  // And it really is dead: nothing on it can change again, whatever is clicked.
+  await page.locator("[data-test=still-works]").click({ force: true });
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+
+  // The way out is the one the page offered.
+  await page.locator("[data-test=dead-reload]").click();
+  await expect(page.locator("[data-test=dead-banner]")).toHaveCount(0);
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+});
+
+test("listening alone does not suppress the reload", async ({ page }) => {
+  // The demo listens on every page but only cancels when the url says to, which is exactly the
+  // distinction being checked: an application forwarding errors to telemetry still gets recovery.
+  await page.goto("/errors");
+
+  await page.locator("[data-test=still-works]").click();
+  await expect(page.locator("[data-test=clicks]")).toHaveText("1");
+
+  await page.locator("[data-test=fail-view]").click();
+
+  await expect(page.locator("[data-test=clicks]")).toHaveText("0", { timeout: 10_000 });
+  await expect(page.locator("[data-test=dead-banner]")).toHaveCount(0);
+});
+
 /**
  * Client components: an element the composition creates and then stops owning.
  *

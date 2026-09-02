@@ -277,6 +277,52 @@ class Jetlin {
     socket.onerror = () => socket.close();
   }
 
+  /**
+   * Tells the page something failed, and does the default thing unless the page says otherwise.
+   *
+   * Raised on the window so an application can show whatever it shows — a toast, a banner. The
+   * framework has no business deciding what an error looks like, but it does have to make one
+   * noticeable: a click that quietly did nothing is the worst of both.
+   *
+   * The event is cancelable, and `preventDefault()` is how a page says it has taken over. Note that
+   * merely listening does not count: plenty of applications will add a listener only to forward
+   * errors to their telemetry, and silently disabling recovery for them would be a nasty surprise.
+   * Taking over has to be a decision made per error, not a side effect of wanting to hear about
+   * them.
+   */
+  private reportError(message: string, fatal: boolean): void {
+    const event = new CustomEvent("jetlin:error", {
+      detail: { message, fatal },
+      cancelable: true,
+    });
+    // Listener exceptions are reported to the global handler rather than thrown back at us, so a
+    // page with a broken handler still gets the default behaviour.
+    const handled = !window.dispatchEvent(event);
+
+    if (fatal) {
+      // The session is gone for good — hibernated past its expiry, never existed, or its
+      // composition stopped. Nothing on this page can change again, whatever happens next.
+      this.fatal = true;
+      this.socket?.close();
+      if (handled) {
+        // The page asked to stay. It is now showing something that cannot respond, so say so in a
+        // way CSS can act on; whoever cancelled the default owns what the user sees from here.
+        document.body.classList.add("jl-dead");
+        return;
+      }
+      // Otherwise start a clean session rather than leave a page that looks live but is not.
+      this.reload();
+      return;
+    }
+
+    if (!handled) console.error("[jetlin]", message);
+  }
+
+  /** Starts over with a fresh session. The recovery a page can offer after cancelling the default. */
+  public reload(): void {
+    location.reload();
+  }
+
   private scheduleReconnect(): void {
     if (this.fatal) return;
     const delay = Math.min(1000 * 2 ** this.reconnectAttempt, 10000);
@@ -304,21 +350,7 @@ class Jetlin {
         if (message.title) document.title = message.title;
         break;
       case "error":
-        console.error("[jetlin]", message.message);
-        // Raised on the window so an application can show whatever it shows — a toast, a banner.
-        // The framework has no business deciding what an error looks like, but it does have to make
-        // one noticeable: a click that quietly did nothing is the worst of both.
-        window.dispatchEvent(
-          new CustomEvent("jetlin:error", { detail: { message: message.message, fatal: !!message.fatal } }),
-        );
-        // The session is gone for good — hibernated past its expiry, never existed, or its
-        // composition stopped. Reconnecting cannot help, so start a clean one rather than leaving a
-        // page that looks live but is not.
-        if (message.fatal) {
-          this.fatal = true;
-          this.socket?.close();
-          location.reload();
-        }
+        this.reportError(message.message, !!message.fatal);
         break;
     }
   }

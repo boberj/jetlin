@@ -54,7 +54,7 @@ that read it, and a patch follows. Sending updates to a connected client needs n
 
 ```
 ┌─ Browser ──────────────────────────────────────────────────────────────────┐
-│  jetlin.js (8.3 kB minified)                                               │
+│  jetlin.js (8.5 kB minified)                                               │
 │  applies ops · delegates events · guards in-flight input · reconnects      │
 └───────────────▲──────────────────────────────────────┬─────────────────────┘
                 │ patch { rev, ack, ops }              │ event { node, seq }
@@ -172,7 +172,7 @@ or CBOR would be a drop-in change; readable frames are more useful at this stage
 
 ## 6. The browser runtime
 
-8.3 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
+8.5 kB minified, no dependencies. It keeps three things: `id → Node`, a mirrored array of logical
 children per element, and the listener specs.
 
 The child array exists because the DOM's own `childNodes` cannot be trusted for indexing — browsers
@@ -272,6 +272,17 @@ to whatever it uses for error reporting — a log line nobody reads is not error
 client the message is also raised as a `jetlin:error` DOM event, so an application can show a toast
 or a banner; the framework has no business deciding what an error looks like, but it does have to
 make one noticeable, because a click that quietly did nothing is the worst of both.
+
+That event is **cancelable**, and `preventDefault()` is how a page says it has taken over: on a
+fatal error the automatic reload does not happen. Deliberately not "a listener is registered" —
+plenty of applications will add one only to forward errors to their telemetry, and silently
+disabling recovery for them would be a nasty surprise. Taking over is a decision made per error, not
+a side effect of wanting to hear about them.
+
+Cancelling leaves a page that cannot change again — the composition is gone and the socket is
+closed — which is the state the fatal path exists to avoid, now entered deliberately. Jetlin marks
+it with `jl-dead` on the body so it can be dimmed or overlaid without anything being guessed at, and
+offers `jetlin.reload()` as the way back. Whoever cancelled owns what the user sees from there.
 
 A view that throws during its *initial* composition never becomes a session at all: `create` closes
 the half-built view before rethrowing, so a failing page cannot leak a dispatcher thread per
@@ -479,7 +490,7 @@ rather than a requirement.
 **Ktor first, with a portable core.** `LiveView` knows nothing about WebSockets or Ktor and can be
 driven straight from a test with no server involved. Adapters for other servers are additive.
 
-**The client is TypeScript.** About 730 lines of DOM manipulation, which ships as 8.3 kB with no
+**The client is TypeScript.** About 730 lines of DOM manipulation, which ships as 8.5 kB with no
 runtime of its own to carry.
 
 ---

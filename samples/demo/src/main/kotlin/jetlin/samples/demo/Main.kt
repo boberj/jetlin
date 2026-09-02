@@ -290,11 +290,25 @@ internal fun ErrorsPage() = Shell {
                         "reloads into a new one — which is why the counter above goes back to zero.",
                 )
             }
-            Button({
-                classes("btn")
-                testTag("fail-view")
-                onClick { broken = true }
-            }) { Text("Throw in the view (reloads the page)") }
+            Div({ classes("row") }) {
+                Button({
+                    classes("btn")
+                    testTag("fail-view")
+                    onClick { broken = true }
+                }) { Text("Throw in the view (reloads the page)") }
+                Link("/errors?handle", { classes("link"); testTag("handle-link") }) {
+                    Text("…or handle it in the page instead")
+                }
+            }
+            P({ classes("hint") }) {
+                Text(
+                    "The event Jetlin raises is cancelable. A page that calls preventDefault on a " +
+                        "fatal one is saying it will deal with this, and the reload does not " +
+                        "happen — which leaves a page that cannot change until someone starts a " +
+                        "new session. Listening alone is not enough, so an application forwarding " +
+                        "errors to its telemetry still gets the default.",
+                )
+            }
         }
     }
 
@@ -514,6 +528,11 @@ private val STYLES = """
                background: #14161a; color: #fff; padding: .6rem 1rem; border-radius: 8px;
                font-size: .9rem; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
       .toast-fatal { background: #b91c1c; }
+      .banner { position: fixed; inset: auto 0 0 0; background: #b91c1c; color: #fff;
+                padding: .8rem 1rem; display: flex; gap: .8rem; align-items: center;
+                justify-content: center; font-size: .9rem; }
+      .banner .btn { background: transparent; color: #fff; border-color: rgba(255,255,255,.6); }
+      .jl-dead .page { opacity: .45; pointer-events: none; }
       .sparkline { display: flex; align-items: flex-end; gap: .35rem; height: 4rem; }
       .sparkline .bar { flex: 1; background: #2563eb; border-radius: 3px 3px 0 0; cursor: pointer; }
       .sparkline .bar:hover { background: #1d4ed8; }
