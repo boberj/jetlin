@@ -235,6 +235,17 @@ object FleetStore {
         return UsageStatus(usedGb = random.nextDouble(0.5, plan * 0.55), planGb = plan)
     }
 
+    /**
+     * Canned cellular (5G) usage, in GB — its own figure rather than a fraction of the Starlink one,
+     * since the fleet list's dotted meter is driven by absolute GB. Present only for a vessel with a
+     * Peplink device, as the original's is summed from that device's cellular WANs.
+     */
+    fun cellularUsageGb(vessel: Vessel): Double? {
+        val deviceId = vessel.peplinkMainDeviceId ?: return null
+        val random = Random(deviceId * 7)
+        return random.nextDouble(5.0, 640.0)
+    }
+
     /** Puts the fleet back to its seeded state, so browser tests start from a known list. */
     fun reset() {
         vessels.clear()

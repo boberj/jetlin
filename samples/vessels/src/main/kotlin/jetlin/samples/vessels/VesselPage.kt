@@ -190,8 +190,8 @@ private fun Blocks(vessel: Vessel, detail: VesselDetail, telemetry: Telemetry) {
 private fun StatusBlock(detail: VesselDetail, telemetry: Telemetry) {
     Block("Status", "col-span-12 lg:col-span-8", "block-status") {
         Div({ classes("grid grid-cols-1 gap-x-10 md:grid-cols-2") }) {
-            Div { detail.identity.forEach { (label, value) -> LabelValue(label, value) } }
-            Div { detail.service.forEach { (label, value) -> LabelValue(label, value) } }
+            Div { detail.identity.forEach { (label, value) -> StatusMetricRow(label, value) } }
+            Div { detail.service.forEach { (label, value) -> StatusMetricRow(label, value) } }
         }
         Div({ classes("mt-4 grid grid-cols-1 gap-6 border-t border-border pt-4 md:grid-cols-2") }) {
             Gauge(Icon.CPU, "CPU load", telemetry.cpuPercent, "cpu")
@@ -439,9 +439,9 @@ private fun ConnectionsBlock(detail: VesselDetail, telemetry: Telemetry) {
                         }
                     }
                     Div({ classes("mt-2") }) {
-                        connection.rows.forEach { (label, value) -> LabelValue(label, value) }
+                        connection.rows.forEach { (label, value) -> MetricRow(label, value) }
                         if (connection.title == "Cellular") {
-                            LabelValue(
+                            MetricRow(
                                 "Signal",
                                 "RSRP ${telemetry.rsrpDbm} dBm · RSRQ ${telemetry.rsrqDb} dB · SINR ${telemetry.sinrDb} dB",
                             )
@@ -480,11 +480,11 @@ private fun StarlinkPanel(telemetry: Telemetry) {
             }
         }
         Div({ classes("mt-2") }) {
-            LabelValue("Throughput", "↓ ${telemetry.downKbps} kbps · ↑ ${telemetry.upKbps} kbps")
-            LabelValue("Latency", "${telemetry.latencyMs} ms")
-            LabelValue("Obstruction", "%.2f%%".format(telemetry.obstructionPercent))
-            LabelValue("Dish uptime", formatUptime(telemetry.dishUptimeSeconds))
-            LabelValue("GPS", "Locked (${telemetry.satellites} sats)")
+            MetricRow("Throughput", "↓ ${telemetry.downKbps} kbps · ↑ ${telemetry.upKbps} kbps")
+            MetricRow("Latency", "${telemetry.latencyMs} ms")
+            MetricRow("Obstruction", "%.2f%%".format(telemetry.obstructionPercent))
+            MetricRow("Dish uptime", formatUptime(telemetry.dishUptimeSeconds))
+            MetricRow("GPS", "Locked (${telemetry.satellites} sats)")
         }
     }
 }
@@ -541,8 +541,8 @@ private fun SpeedFusionBlock(detail: VesselDetail) {
                             )
                         }) { Text(if (link.connected) "CONNECTED" else "DOWN") }
                     }
-                    LabelValue("Remote device", link.remote)
-                    LabelValue(if (link.active) "Active" else "Inactive", link.subnets)
+                    MetricRow("Remote device", link.remote)
+                    MetricRow(if (link.active) "Active" else "Inactive", link.subnets)
                 }
             }
         }
@@ -655,12 +655,37 @@ private fun SubHeading(text: String) {
     Div({ classes("text-xs font-medium uppercase tracking-wider text-muted-foreground") }) { Text(text) }
 }
 
+/** Used in CONNECTIONS, SPEEDFUSION and the Starlink panel. */
 @Composable
-private fun LabelValue(label: String, value: String) {
-    Div({ classes("flex items-baseline justify-between gap-4 py-0.5 text-sm") }) {
+private fun MetricRow(label: String, value: String) {
+    Div({ classes("flex items-start justify-between gap-4 py-0.5 text-xs") }) {
         Span({ classes("shrink-0 text-muted-foreground") }) { Text(label) }
-        Span({ classes("truncate text-right font-medium text-foreground") }) { Text(value) }
+        Span({ classes("text-right font-medium text-foreground") }) { Text(value) }
     }
+}
+
+/** Used in the STATUS block, whose labels sit right-aligned against their values. */
+@Composable
+private fun StatusMetricRow(label: String, value: String) {
+    Div({ classes("grid grid-cols-[minmax(6.5rem,42%)_minmax(0,1fr)] items-start gap-3 text-xs leading-5") }) {
+        Span({ classes("text-right text-muted-foreground") }) { Text(label) }
+        Span({ classes("min-w-0 text-left font-medium text-foreground") }) { Text(value) }
+    }
+}
+
+/**
+ * The shared badge base every pill on these pages is drawn from — the original's `Badge` component,
+ * with the variant's colours passed in rather than looked up, since Tailwind reads class names out
+ * of this file rather than out of a runtime map.
+ */
+@Composable
+internal fun Badge(extra: String, tag: String? = null, content: @Composable () -> Unit) {
+    Span({
+        classes(
+            "inline-flex items-center justify-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap w-fit shrink-0 transition-colors $extra",
+        )
+        if (tag != null) testTag(tag)
+    }) { content() }
 }
 
 /** A labelled percentage bar. Live, so this is one of the things that moves on its own. */

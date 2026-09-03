@@ -101,18 +101,7 @@
   }
 }
 
-/*
- * The cellular meter's track is dotted where the Starlink one is solid, which is how the fleet list
- * tells the two apart at a glance. A background image rather than a row of elements: this is drawn
- * twice per row and eighty rows are on screen at once, so it is 160 nodes not to ship.
- */
-.track-dotted {
-  background-image: radial-gradient(circle, #d1d5db 1.2px, transparent 1.2px);
-  background-size: 6px 100%;
-  background-repeat: repeat-x;
-}
-
-/* The alert bell in an emergency row shakes, and the row's badge pulses. Both are the original's. */
+/* The alert bell shakes when its flag is set — the original's `bell-ringing`, from lucide's demo. */
 @keyframes ring {
   0%, 100% { transform: rotate(0deg); }
   10% { transform: rotate(10deg); }
