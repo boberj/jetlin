@@ -30,6 +30,15 @@ import kotlinx.coroutines.runBlocking
  * non-keyed implementation, or a keyed one whose key changes with its data, produces the same page
  * and a patch proportional to the size of the table.
  */
+/**
+ * Rows per keyed group, for the whole run; see [FLAT].
+ *
+ * A top-level var rather than a parameter threaded through every benchmark, because it is not part
+ * of what any of them mean — it is a property of the page they all drive, set once before the first
+ * session is opened and never touched again.
+ */
+private var chunk: Int = FLAT
+
 fun main(): Unit = runBlocking {
     val iterations = System.getenv("ITERATIONS")?.toInt() ?: 10
     val warmupPasses = System.getenv("WARMUP_PASSES")?.toInt() ?: 5
@@ -38,6 +47,9 @@ fun main(): Unit = runBlocking {
     // change to how the CPU section is warmed up.
     val sections = System.getenv("SECTIONS")?.split(",")?.map { it.trim() } ?: listOf("all")
     fun runs(section: String) = "all" in sections || section in sections
+    // Rows per keyed group. The published operations are defined against one group holding the whole
+    // table, so the reported numbers use that; this exists to measure what the alternative costs.
+    chunk = System.getenv("CHUNK")?.toInt() ?: FLAT
 
     println(header(iterations, warmupPasses))
 
@@ -116,7 +128,7 @@ private class CpuBenchmark(
         val timings = ArrayList<Long>(iterations)
         var last: Patch? = null
         repeat(iterations) {
-            Driver.open().use { driver ->
+            Driver.open(chunk = chunk).use { driver ->
                 driver.prepare(warmup)
                 val patch = driver.operation()
                 timings += patch.totalNanos
@@ -268,11 +280,11 @@ private class MemoryBenchmark(
 ) {
     suspend fun sample(): MemorySample {
         // One throwaway session first, so class loading is not billed to the measurement.
-        Driver.open().use { warm -> warm.prepare() }
+        Driver.open(chunk = chunk).use { warm -> warm.prepare() }
 
         val before = usedHeap()
         val drivers = ArrayList<Driver>(sessions)
-        repeat(sessions) { drivers += Driver.open().also { driver -> driver.prepare() } }
+        repeat(sessions) { drivers += Driver.open(chunk = chunk).also { driver -> driver.prepare() } }
         val after = usedHeap()
 
         val rows = drivers.first().rowCount()
@@ -340,31 +352,34 @@ private fun usedHeap(): Long {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * How long the server takes to produce the first page, and how big it is.
+ * What a cold request for the page costs, composing included.
  *
- * The published startup metrics — script bootup, main thread work, total byte weight — are about
- * the JavaScript a framework ships. Jetlin ships one 8.6 kB runtime and no application code at all,
- * so those numbers are a constant and measuring them per benchmark would say nothing. What varies,
- * and what a user waits for, is the HTML: this is the time to render it and its size, for an empty
- * table and for one already holding a thousand rows.
+ * The published startup metrics — script bootup, main thread work, total byte weight — are about the
+ * JavaScript a framework ships. Jetlin ships one 8.6 kB runtime and no application code, so those are
+ * a constant and measuring them per benchmark would say nothing. What varies is the document.
+ *
+ * Reported as two halves rather than one number, because they are not the same kind of work and
+ * conflating them is actively misleading: composing a thousand rows is the same work "create rows"
+ * does, and writing them out is the same walk that encodes a patch. Timing only the second and
+ * calling it "first paint" makes serving a page look an order of magnitude cheaper than building
+ * the rows on it, which it is not.
  */
-private suspend fun measureFirstPaint(): List<Triple<String, Long, Int>> {
-    val cases = listOf<Pair<String, suspend Driver.() -> Unit>>(
-        "empty table" to { },
-        "1,000 rows" to { click("run") },
-    )
-    return cases.map { (name, prepare) ->
-        // Warm, then measure, for the same reason the CPU benchmarks discard passes.
-        repeat(3) { Driver.open().use { warm -> warm.prepare(); warm.html() } }
-        Driver.open().use { driver ->
-            driver.prepare()
-            val start = System.nanoTime()
-            val html = driver.html()
-            val elapsed = System.nanoTime() - start
-            Triple(name, elapsed, html.toByteArray(Charsets.UTF_8).size)
-        }
-    }
+private suspend fun measureFirstPaint(): List<FirstPaint> = listOf(0, ROWS).map { rows ->
+    // Warm, then take the best of several: a cold request is one shot, and the median of a handful
+    // of them says more about this container's scheduler than about the work.
+    repeat(WARM_REQUESTS) { Driver.firstPaint(rows, chunk) }
+    (1..5).map { Driver.firstPaint(rows, chunk) }.minBy { it.totalNanos }
 }
+
+/**
+ * Unmeasured requests before the one that counts.
+ *
+ * More than the three this started with. Composing a page from nothing is the one thing here that
+ * no other benchmark does — every CPU iteration composes an empty page and then clicks — so this
+ * section cannot borrow their warmup and has to do its own, or it reports a cold JIT as a slow
+ * framework.
+ */
+private const val WARM_REQUESTS = 12
 
 // ---------------------------------------------------------------------------------------------
 // Reporting.
@@ -380,6 +395,7 @@ private fun header(iterations: Int, warmupPasses: Int): String = """
     |and stops where the socket would be. The browser's share is not measured and is not included,
     |so these numbers do not compare with the published ones.
     |
+    |rows per keyed group:     ${if (chunk == FLAT) "the whole table, as the benchmark defines it" else "$chunk"}
     |iterations per benchmark: $iterations (min / median / mean reported)
     |discarded warmup passes:  $warmupPasses
     |jvm:                      ${System.getProperty("java.vm.name")} ${System.getProperty("java.version")}
@@ -420,12 +436,18 @@ private fun memoryTable(results: List<Pair<MemoryBenchmark, MemorySample>>): Str
     append(table(listOf("benchmark", "state", "rows", "per session"), rows))
 }
 
-private const val FIRST_PAINT_HEADING = "\nFirst paint — server-rendered HTML"
+private const val FIRST_PAINT_HEADING = "\nFirst paint — a cold request, composed and written out"
 
-private fun firstPaintTable(results: List<Triple<String, Long, Int>>): String = table(
-    listOf("page", "render ms", "html"),
-    results.map { (name, nanos, size) ->
-        listOf(name, decimals(nanos / 1_000_000.0), bytes(size))
+private fun firstPaintTable(results: List<FirstPaint>): String = table(
+    listOf("page", "compose ms", "write html ms", "total ms", "html"),
+    results.map { paint ->
+        listOf(
+            if (paint.rows == 0) "empty table" else "${paint.rows} rows",
+            decimals(paint.composeNanos / 1_000_000.0),
+            decimals(paint.renderNanos / 1_000_000.0),
+            decimals(paint.totalNanos / 1_000_000.0),
+            bytes(paint.bytes),
+        )
     },
 )
 
@@ -487,9 +509,9 @@ private suspend fun measureScaling(iterations: Int): List<ScalingRow> {
         // Building the table is measured on sessions that have never held one, for the same reason
         // the nine benchmarks open a new session per iteration.
         val create = repeated(iterations) {
-            Driver.open().use { fresh -> fresh.mutate { run(size) }.totalNanos }
+            Driver.open(chunk = chunk).use { fresh -> fresh.mutate { run(size) }.totalNanos }
         }
-        Driver.open().use { driver ->
+        Driver.open(chunk = chunk).use { driver ->
             driver.mutate { run(size) }
             // A couple of unmeasured repetitions. Fewer than the harness's warmups on purpose: by
             // the time the sweep runs the JVM has been at this for minutes, and at four thousand

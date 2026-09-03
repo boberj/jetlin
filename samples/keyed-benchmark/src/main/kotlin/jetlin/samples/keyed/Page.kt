@@ -26,7 +26,7 @@ import jetlin.html.Tr
  * of DOM edits the recomposition produced.
  */
 @Composable
-fun BenchmarkPage(store: RowStore) {
+fun BenchmarkPage(store: RowStore, chunk: Int = FLAT) {
     Div({ classes("container") }) {
         Div({ classes("jumbotron") }) {
             Div({ classes("row") }) {
@@ -45,11 +45,19 @@ fun BenchmarkPage(store: RowStore) {
         }
         Table({ classes("table table-hover table-striped test-data") }) {
             Tbody({ id("tbody") }) {
-                store.rows.forEach { row ->
-                    // The keyed part, and the only line that separates this implementation from the
-                    // non-keyed one. Without it a swap rewrites the text of two rows; with it the
-                    // two nodes move and their contents are never touched.
-                    key(row.id) { RowView(row, store) }
+                if (chunk == FLAT) {
+                    store.rows.forEach { row ->
+                        // The keyed part, and the only line that separates this implementation from
+                        // the non-keyed one. Without it a swap rewrites the text of two rows; with it
+                        // the two nodes move and their contents are never touched.
+                        key(row.id) { RowView(row, store) }
+                    }
+                } else {
+                    store.rows.chunked(chunk).forEachIndexed { index, rows ->
+                        key(index) {
+                            rows.forEach { row -> key(row.id) { RowView(row, store) } }
+                        }
+                    }
                 }
             }
         }
@@ -96,3 +104,14 @@ private fun RowView(row: Row, store: RowStore) {
 /** The row counts the benchmark's buttons are defined in terms of. */
 const val ROWS: Int = 1_000
 const val MANY_ROWS: Int = 10_000
+
+/**
+ * One keyed group holding every row — what the reference implementations do, and the default here.
+ *
+ * The alternative is to nest the rows inside groups of a fixed size, which produces the same table
+ * and the same keys but leaves no single group with thousands of children to reconcile. It is not
+ * how the benchmark is written and so it is not what the reported numbers use; it is here because
+ * the numbers make a much better case for it than for the flat version, and a claim like that
+ * should come with the knob to check it. See `CHUNK` in `Runner.kt`.
+ */
+const val FLAT: Int = 0

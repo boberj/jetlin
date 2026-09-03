@@ -33,9 +33,40 @@ class Driver private constructor(private val view: LiveView, val store: RowStore
         private const val LABEL_CELL = 1
         private const val REMOVE_CELL = 2
 
-        suspend fun open(seed: Int = 0): Driver {
+        /**
+         * What a cold HTTP request for this page costs, split into its two halves.
+         *
+         * Deliberately not [open] followed by [html]: that would compose an empty page, build the
+         * rows through a click, and then time only the serializer — which is the measurement that
+         * makes first paint look ten times cheaper than creating the same rows. A real first request
+         * composes the view it is going to serve and then writes it out, so [rows] are in the store
+         * before the composition starts and both halves are on the clock.
+         */
+        suspend fun firstPaint(rows: Int, chunk: Int = FLAT): FirstPaint {
+            val store = RowStore()
+            if (rows > 0) store.run(rows)
+            val view = LiveView { BenchmarkPage(store, chunk) }
+            view.owner.maxBufferedOps = Int.MAX_VALUE
+            try {
+                val start = System.nanoTime()
+                view.start()
+                val composed = System.nanoTime()
+                val html = view.renderHtml()
+                val written = System.nanoTime()
+                return FirstPaint(
+                    rows = rows,
+                    composeNanos = composed - start,
+                    renderNanos = written - composed,
+                    bytes = html.toByteArray(Charsets.UTF_8).size,
+                )
+            } finally {
+                view.close()
+            }
+        }
+
+        suspend fun open(seed: Int = 0, chunk: Int = FLAT): Driver {
             val store = RowStore(seed)
-            val view = LiveView { BenchmarkPage(store) }
+            val view = LiveView { BenchmarkPage(store, chunk) }
             // Creating ten thousand rows is ten thousand inserts, and a table replaced wholesale is
             // twice that. The default ceiling exists to stop a session that nobody is reading from
             // pinning memory; here every patch is drained the moment it is produced, and letting the
@@ -140,6 +171,23 @@ class Driver private constructor(private val view: LiveView, val store: RowStore
     }
 
     private suspend fun nodeId(find: (HtmlOwner) -> ElementNode): NodeId = view.inspect { find(it).id }
+}
+
+/**
+ * A cold request for the page: composing the view, then writing it out as HTML.
+ *
+ * The two halves are kept apart because they answer different questions. [composeNanos] is what the
+ * page costs to exist at all — the same work a click that built the rows would do. [renderNanos] is
+ * the serializer, and is the one number that has a direct counterpart on the socket side: writing a
+ * patch as JSON is the same walk over the same nodes.
+ */
+data class FirstPaint(
+    val rows: Int,
+    val composeNanos: Long,
+    val renderNanos: Long,
+    val bytes: Int,
+) {
+    val totalNanos: Long get() = composeNanos + renderNanos
 }
 
 /**
