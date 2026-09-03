@@ -113,7 +113,9 @@ class TodoAppTest {
 
     @Test
     fun `resetting restores the seeded list`(): Unit = runViewTest {
-        setContent { TodoListPage() }
+        // Reset lives in the chrome rather than the page, so the test composes the chrome. In the
+        // served application that wrapping is done once by `app { }` instead of per view.
+        setContent { Shell { TodoListPage() } }
 
         onNode(hasTestTag("draft")).type("Something extra")
         onNode(hasTestTag("add")).click()

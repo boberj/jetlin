@@ -93,6 +93,41 @@ props the server still holds. Which is why the rule is that nothing the user aut
 there: push it up into a `rememberSaved` field and it survives reconnects and hibernation like
 anything else.
 
+### How long state lives
+
+Navigation swaps the view inside a composition that stays up for the whole session, so where a value
+is declared is what decides how long it lasts:
+
+| Declared in | Lasts until |
+|---|---|
+| `remember` in a view | you navigate away from that view |
+| `rememberSaved` in a view | you navigate away — and it is handed back when you return, or when the session wakes |
+| `remember` in `app { }` | the session ends |
+| `rememberSaved` in `app { }` | the session ends, surviving hibernation on the way |
+
+`app { }` is one composable wrapping every view, composed once per session, and the only place whose
+`remember` outlives a page change:
+
+```kotlin
+jetlin {
+    app { route ->
+        val filter = remember { mutableStateOf("") }
+        CompositionLocalProvider(LocalFilter provides filter) {
+            Shell { route() }
+        }
+    }
+    view("/") { TodoListPage() }
+    view("/todo/{id}") { TodoDetailPage() }
+}
+```
+
+What the application reads it back with is its own `CompositionLocal`: the framework supplies
+somewhere for state to stand, not opinions about what it is.
+
+Chrome belongs there too, for a reason visible in the patches — a nav bar composed inside each view
+is torn out and re-inserted on every move, while one composed above the route recomposes to the same
+markup and emits nothing at all.
+
 ## Status
 
 **Early.** The core is built and tested end to end in a browser, with routing, request context,
@@ -198,10 +233,10 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 200 unit tests, asserting exact op streams
+./gradlew test                       # 209 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 34 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # 36 browser tests (server must be running)
 ```
 
 The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
@@ -212,7 +247,8 @@ typing while the server sends unrelated updates, navigation without a page load,
 validation gating a submit, reconnection with state preserved, that the server-rendered DOM is
 kept rather than rebuilt on connect, that a `clientOnly` disclosure still opens with the socket
 deliberately disconnected, and that a client component mounts, takes new props, reports events back
-and is torn down again with its mounts and unmounts balancing, that a drawing is real SVG whether
+and is torn down again with its mounts and unmounts balancing, that state in the chrome and a
+view's saved state both come back when the back button does, that a drawing is real SVG whether
 the browser parsed it or the client built it from an op, and that a failing handler costs one
 interaction while a failing view ends the session and the page starts over — unless the page cancels
 the error event and takes over, which it can, and which listening alone does not do. Each one resets the demo's shared

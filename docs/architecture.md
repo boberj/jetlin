@@ -362,6 +362,46 @@ Because `Link` is a real anchor, it works without JavaScript: middle-click and "
 behave normally, crawlers follow it, and with scripting disabled it falls back to a plain request
 that starts a fresh session on that path.
 
+### What outlives a navigation
+
+A navigation is one state write. `LiveView` holds the current `RequestContext` in a `mutableStateOf`,
+and moving means replacing it; the composition, the recomposer and the node tree all carry on. What
+is rebuilt is the matched view, because the route host wraps it in `key(pattern)` — two different
+routes must not inherit each other's state, while `/todo/1` to `/todo/2` keeps the view and re-runs
+it with new parameters.
+
+That leaves a gap the router cannot fill on its own, since everything an application writes sits
+under that `key`. `app { }` is the composable above it:
+
+```kotlin
+jetlin {
+    app { route ->
+        val filter = remember { mutableStateOf("") }
+        CompositionLocalProvider(LocalFilter provides filter) { Shell { route() } }
+    }
+    view("/") { TodoListPage() }
+}
+```
+
+Composed once for the session, so `remember` in it survives every move, and `rememberSaved` in it
+survives hibernation as well — the container is never disposed, so its providers are still
+registered when the session is asked what to keep. How a view reads that state is the application's
+choice, normally a `CompositionLocal` it declares; the framework supplies the place, not the shape.
+
+Views get their own saved state back through `SaveableStateHolder`. Each route composes against a
+child registry seeded from what that route saved last time, and leaving stores it again, so
+`rememberSaved` means "survives being torn down" rather than only "survives hibernation" — which is
+what a back button needs and what the name already implied. The holder keys on the matched pattern,
+the same thing `key` uses, so a view's registry lives exactly as long as the view; keying them
+differently would compose retained state against a fresh registry. It keeps the 32 most recently
+left, because keys arrive from outside and holding every location a session ever visited is a leak
+with a polite name.
+
+One wrinkle worth stating: a view's saved values are captured when its providers unregister, not
+only when the holder asks for them. A view disposing its own effects is ordinary, and which
+`onDispose` runs first is the runtime's business — capturing on the way out means saving does not
+depend on winning that race.
+
 ### Forms
 
 ```kotlin

@@ -1,8 +1,6 @@
 package jetlin.server
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.key
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -20,9 +18,9 @@ import io.ktor.websocket.readText
 import jetlin.html.AttributeKey
 import jetlin.html.Div
 import jetlin.html.H1
-import jetlin.html.LocalRequest
 import jetlin.html.P
 import jetlin.html.RequestContext
+import jetlin.html.RouteHost
 import jetlin.html.RoutePattern
 import jetlin.html.rootAttributes
 import jetlin.html.Router
@@ -133,6 +131,7 @@ public class JetlinConfig {
 
     internal val views: MutableList<ViewRegistration> = mutableListOf()
     internal var attributeFactory: (suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>)? = null
+    internal var appContainer: (@Composable (route: @Composable () -> Unit) -> Unit)? = null
 
     /**
      * Registers a view. [path] may contain parameters, e.g. `/todo/{id}`, readable with
@@ -151,6 +150,40 @@ public class JetlinConfig {
      */
     public fun attributes(factory: suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>) {
         attributeFactory = factory
+    }
+
+    /**
+     * Wraps every view in a container composed once for the session, with [content] deciding where
+     * the view goes.
+     *
+     * Navigation swaps the view inside a composition that stays alive, so this is the one place
+     * whose `remember` outlives a page change:
+     *
+     * ```kotlin
+     * jetlin {
+     *     app { route ->
+     *         val filters = remember { Filters() }
+     *         CompositionLocalProvider(LocalFilters provides filters) {
+     *             Shell { route() }
+     *         }
+     *     }
+     *     view("/") { FleetPage() }
+     *     view("/vessels/{id}") { VesselPage() }
+     * }
+     * ```
+     *
+     * Chrome belongs here too, for a reason that shows up in the patches: navigation rebuilds the
+     * view, so a navigation bar composed inside each view is torn out and re-inserted on every move,
+     * while one composed here recomposes to the same markup and emits nothing.
+     *
+     * State that must also survive hibernation goes in `rememberSaved` rather than `remember` —
+     * inside the container that works, because the container is never disposed. What a view saves
+     * comes back when the view is returned to, without needing this.
+     *
+     * Call [route] exactly once. Not calling it renders an application with no pages in it.
+     */
+    public fun app(content: @Composable (route: @Composable () -> Unit) -> Unit) {
+        appContainer = content
     }
 }
 
@@ -183,7 +216,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         disconnectGrace = config.disconnectGrace,
         exposeTestTags = config.exposeTestTags,
         maxSessions = config.maxSessions,
-    ) { current -> RouteHost(router, current) }
+    ) { current -> RouteHost(router, current, config.appContainer, { NotFound(it) }) { it.content() } }
 
     routing {
         get("/jetlin/jetlin.js") {
@@ -380,27 +413,6 @@ private val AT_CAPACITY_PAGE: String = """
 
 /** What a client is told when its session has stopped for good and reloading is the only way on. */
 private const val SESSION_FAILED: String = "This session ended unexpectedly."
-
-/**
- * Chooses the view for the current location and gives it its path parameters.
- *
- * `key` on the matched pattern is deliberate: moving between two different routes must rebuild
- * rather than reuse state, while moving between two instances of the same route — `/todo/1` to
- * `/todo/2` — keeps the view and just re-runs it with new parameters.
- */
-@Composable
-private fun RouteHost(router: Router<ViewRegistration>, request: RequestContext) {
-    val match = router.resolve(request.path)
-    if (match == null) {
-        NotFound(request.path)
-        return
-    }
-    CompositionLocalProvider(LocalRequest provides request.withPathParams(match.pathParams)) {
-        key(match.pattern.pattern) {
-            match.value.content()
-        }
-    }
-}
 
 @Composable
 private fun NotFound(path: String) {

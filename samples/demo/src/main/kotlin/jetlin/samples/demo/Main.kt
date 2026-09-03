@@ -1,7 +1,11 @@
 package jetlin.samples.demo
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -80,6 +84,9 @@ fun main() {
             onError = { throwable ->
                 println("[demo] a session reported: ${throwable::class.simpleName}: ${throwable.message}")
             }
+            // Composed once for the session, above whichever view is current: the nav is not
+            // rebuilt on every move, and anything remembered here would outlive one.
+            app { route -> Shell(route) }
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
             view("/about", title = "About · Jetlin") { AboutPage() }
@@ -89,27 +96,50 @@ fun main() {
     }.start(wait = true)
 }
 
+/**
+ * The filter the nav holds, reachable from whichever view is composed under it.
+ *
+ * Declared here rather than by the framework: `app { }` provides somewhere for state to live, and
+ * an application says what that state is and who may read it. The default is a state nobody else
+ * holds, so a view composed on its own — as several tests do — reads an empty filter instead of
+ * failing.
+ */
+internal val LocalTodoFilter: ProvidableCompositionLocal<MutableState<String>> =
+    compositionLocalOf { mutableStateOf("") }
+
 @Composable
 internal fun Shell(content: @Composable () -> Unit) {
-    Div({ classes("page") }) {
-        Nav({ classes("nav") }) {
-            Link("/", { classes("brand") }) { Text("Jetlin") }
-            Link("/") { Text("Todos") }
-            Link("/about") { Text("About") }
-            Link("/shapes") { Text("Shapes") }
-            Link("/errors") { Text("Errors") }
-            Button({
-                classes("link")
-                testTag("reset")
-                onClick { TodoStore.reset() }
-            }) { Text("Reset demo data") }
+    // Remembered in the container, which is composed once for the session, so it is still here
+    // after opening a todo and coming back. The same `remember` inside a view would not be.
+    val filter = remember { mutableStateOf("") }
+    CompositionLocalProvider(LocalTodoFilter provides filter) {
+        Div({ classes("page") }) {
+            Nav({ classes("nav") }) {
+                Link("/", { classes("brand") }) { Text("Jetlin") }
+                Link("/") { Text("Todos") }
+                Link("/about") { Text("About") }
+                Link("/shapes") { Text("Shapes") }
+                Link("/errors") { Text("Errors") }
+                Input({
+                    classes("input")
+                    testTag("filter")
+                    attr("placeholder", "Filter todos")
+                    value(filter.value)
+                    onInput(150) { filter.value = it }
+                })
+                Button({
+                    classes("link")
+                    testTag("reset")
+                    onClick { TodoStore.reset() }
+                }) { Text("Reset demo data") }
+            }
+            content()
         }
-        content()
     }
 }
 
 @Composable
-internal fun TodoListPage() = Shell {
+internal fun TodoListPage() {
     // Saved rather than remembered: a half-typed todo is worth carrying across a dropped
     // connection or a deploy, and it is the one piece of state on this page the user authored.
     val draft = rememberSavedField("", key = "draft") {
@@ -139,8 +169,9 @@ internal fun TodoListPage() = Shell {
             P({ classes("error"); testTag("draft-error") }) { Text(message) }
         }
 
+        val filter = LocalTodoFilter.current.value
         Ul({ classes("todos") }) {
-            TodoStore.todos.forEach { todo ->
+            TodoStore.todos.filter { it.title.contains(filter, ignoreCase = true) }.forEach { todo ->
                 // Keyed by identity, so reordering moves the existing nodes rather than rewriting
                 // every row's text.
                 key(todo.id) { TodoRow(todo) }
@@ -173,7 +204,7 @@ internal fun TodoRow(todo: Todo) {
 }
 
 @Composable
-internal fun TodoDetailPage() = Shell {
+internal fun TodoDetailPage() {
     val id = pathParam("id").toIntOrNull()
     val todo = id?.let { TodoStore.find(it) }
     val navigator = LocalNavigator.current
@@ -184,7 +215,7 @@ internal fun TodoDetailPage() = Shell {
             P { Text("Item $id is not in the list.") }
             Link("/", { classes("btn") }) { Text("Back to the list") }
         }
-        return@Shell
+        return
     }
 
     // Keyed on the item, so moving between /todo/1 and /todo/2 refills the fields rather than
@@ -256,7 +287,7 @@ internal fun TodoDetailPage() = Shell {
  * again.
  */
 @Composable
-internal fun ErrorsPage() = Shell {
+internal fun ErrorsPage() {
     var clicks by remember { mutableStateOf(0) }
     var broken by remember { mutableStateOf(false) }
 
@@ -335,7 +366,7 @@ internal fun ErrorsPage() = Shell {
  * on load but several interactions later.
  */
 @Composable
-internal fun ShapesPage() = Shell {
+internal fun ShapesPage() {
     var first by remember { mutableStateOf("alpha") }
     var second by remember { mutableStateOf("beta") }
     var middle by remember { mutableStateOf("") }
@@ -500,7 +531,7 @@ private const val TOP = 20.0
 private const val BOTTOM = 72.0
 
 @Composable
-internal fun AboutPage() = Shell {
+internal fun AboutPage() {
     Div({ classes("card") }) {
         H1 { Text("About") }
         P {

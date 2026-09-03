@@ -1,9 +1,7 @@
 package jetlin.testing
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.key
-import jetlin.html.LocalRequest
+import jetlin.html.RouteHost
 import jetlin.html.RoutePattern
 import jetlin.html.Router
 
@@ -11,9 +9,20 @@ import jetlin.html.Router
 public class RoutesBuilder internal constructor() {
     internal val routes: MutableList<Pair<RoutePattern, @Composable () -> Unit>> = mutableListOf()
 
+    internal var container: (@Composable (route: @Composable () -> Unit) -> Unit)? = null
+
     /** Registers [content] at [pattern], e.g. `view("/todo/{id}") { TodoDetailPage() }`. */
     public fun view(pattern: String, content: @Composable () -> Unit) {
         routes += RoutePattern(pattern) to content
+    }
+
+    /**
+     * Wraps every view in a container composed once for the session, as `JetlinConfig.app` does.
+     *
+     * Needed to test anything that outlives a navigation, since a `remember` in a view does not.
+     */
+    public fun app(content: @Composable (route: @Composable () -> Unit) -> Unit) {
+        container = content
     }
 }
 
@@ -48,12 +57,13 @@ public suspend fun ViewTest.setRoutes(block: RoutesBuilder.() -> Unit) {
     val patterns = builder.routes.joinToString { it.first.pattern }
 
     setRoutedContent { request ->
-        val match = router.resolve(request.path)
-            ?: error("No route registered for '${request.path}'. Registered: $patterns")
-        CompositionLocalProvider(LocalRequest provides request.withPathParams(match.pathParams)) {
-            // Keyed by pattern so moving between routes builds the new view fresh rather than
-            // carrying the previous one's state into it.
-            key(match.pattern.pattern) { match.value() }
-        }
+        // The same host the server composes, so a test drives what an application runs: the
+        // container above, the matched view keyed below it, saved state restored on the way back.
+        RouteHost(
+            router = router,
+            request = request,
+            container = builder.container,
+            onMiss = { path -> error("No route registered for '$path'. Registered: $patterns") },
+        ) { it() }
     }
 }

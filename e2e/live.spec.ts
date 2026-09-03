@@ -560,3 +560,43 @@ test("a foreign object hands the browser back to HTML mid-drawing", async ({ pag
   });
   expect(languages).toEqual([HTML_NS, SVG_NS]);
 });
+
+/**
+ * State that outlives a navigation.
+ *
+ * Three lifetimes have to be distinguishable, and the browser is where the difference shows: state
+ * in the chrome lasts as long as the session, a view's saved state comes back when the view does,
+ * and a view's remembered state does not. The back button is the case a headless test cannot make,
+ * because it is the browser's own history driving the session rather than the session driving it.
+ */
+
+test("state in the chrome survives navigating away and back", async ({ page }) => {
+  await page.locator("[data-test=filter]").fill("architecture");
+  // The list narrowing is the server confirming it has the filter, not just the input holding text.
+  await expect(page.locator("[data-test=todo]")).toHaveCount(1);
+
+  await page.locator("[data-test=todo] .todo-text").first().click();
+  await expect(page).toHaveURL(/\/todo\/\d+$/);
+  // Composed above the route, so it is still there on a page that knows nothing about it.
+  await expect(page.locator("[data-test=filter]")).toHaveValue("architecture");
+
+  await page.goBack();
+  await expect(page).toHaveURL("/");
+  await expect(page.locator("[data-test=filter]")).toHaveValue("architecture");
+  await expect(page.locator("[data-test=todo]")).toHaveCount(1);
+});
+
+test("a half-typed todo comes back when its page does", async ({ page }) => {
+  await page.locator("[data-test=draft]").fill("half-typed todo");
+  // Add turns enabled once the server has a valid draft, so this waits for the round trip.
+  await expect(page.locator("[data-test=add]")).toBeEnabled();
+
+  await page.locator('a[href="/about"]').click();
+  await expect(page).toHaveURL("/about");
+  await expect(page.locator("[data-test=draft]")).toHaveCount(0);
+
+  await page.goBack();
+  await expect(page).toHaveURL("/");
+  // The view was torn down and rebuilt; what it declared saveable was handed back to it.
+  await expect(page.locator("[data-test=draft]")).toHaveValue("half-typed todo");
+});
