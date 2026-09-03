@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import jetlin.html.Button
 import jetlin.html.ClientComponent
 import jetlin.html.Div
 import jetlin.html.H1
@@ -44,9 +45,9 @@ fun VesselPage() {
     val vessel = FleetStore.find(id)
 
     if (vessel == null) {
-        Div({ classes("container mx-auto px-4 py-6") }) {
+        Div({ classes("container mx-auto space-y-6 p-6") }) {
             BackToFleet()
-            P({ classes("mt-6 text-muted-foreground"); testTag("missing") }) {
+            P({ classes("text-muted-foreground"); testTag("missing") }) {
                 Text("No vessel with id $id.")
             }
         }
@@ -73,7 +74,7 @@ fun VesselPage() {
         val loaded = detail
         if (loaded == null) {
             Div({
-                classes("mt-6 rounded-xl border border-border bg-card p-12 text-center")
+                classes("rounded-xl border border-border bg-card p-12 text-center")
                 testTag("loading")
             }) {
                 Span({ classes("text-sm text-muted-foreground") }) { Text("Loading vessel…") }
@@ -87,10 +88,10 @@ fun VesselPage() {
 @Composable
 private fun BackToFleet() {
     Link("/", {
-        classes("inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground")
+        classes("inline-flex items-center text-sm font-medium text-muted-foreground transition-colors hover:text-primary")
         testTag("back")
     }) {
-        Icon(Icon.ARROW_LEFT, "h-4 w-4")
+        Icon(Icon.ARROW_LEFT, "mr-2 h-4 w-4")
         Text("Back to Fleet")
     }
 }
@@ -98,71 +99,82 @@ private fun BackToFleet() {
 @Composable
 private fun VesselHeader(vessel: Vessel) {
     val device = FleetStore.deviceStatus(vessel)
-    Div({ classes("mt-4 flex items-start justify-between gap-4") }) {
-        Div({ classes("flex items-center gap-3") }) {
-            Div({ classes("flex h-12 w-12 items-center justify-center rounded-lg bg-accent") }) {
-                Icon(Icon.SHIP, "h-6 w-6 text-slate-700")
+    Div({ classes("flex items-center gap-3") }) {
+        Div({ classes("flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary") }) {
+            Icon(Icon.SHIP, "h-5 w-5")
+        }
+        Div({ classes("flex-1") }) {
+            Div({ classes("flex items-center gap-3") }) {
+                H1({ classes("text-2xl font-bold tracking-tight text-foreground"); testTag("vessel-name") }) {
+                    Text(vessel.name)
+                }
+                StatusBadge(device)
             }
-            Div {
-                Div({ classes("flex items-center gap-3") }) {
-                    H1({ classes("text-2xl font-bold tracking-tight"); testTag("vessel-name") }) {
-                        Text(vessel.name)
-                    }
-                    StatusBadge(device)
-                }
-                Div({ classes("mt-1 flex items-center gap-4 text-sm") }) {
-                    AdminLink("View in InControl")
-                    AdminLink("Remote Web Admin")
-                }
+            Div({ classes("mt-1 flex flex-wrap items-center gap-4") }) {
+                AdminLink("View in InControl")
+                AdminLink("Remote Web Admin")
             }
         }
         Div({ classes("flex items-center gap-2") }) {
-            Div({ classes("flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm") }) {
-                Icon(Icon.SCROLL_TEXT, "h-4 w-4 text-muted-foreground")
-                Text("Start RS")
-                Span({ classes("ml-1 inline-block h-4 w-7 rounded-full bg-switch-background") })
+            Div({ classes("flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-muted-foreground transition-colors") }) {
+                Icon(Icon.HEADSET, "h-4 w-4")
+                Span({ classes("whitespace-nowrap text-sm font-medium") }) { Text("Start RS") }
+                Div({ classes("inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent bg-input-background") }) {
+                    Div({ classes("h-4 w-4 rounded-full bg-background shadow-lg") })
+                }
             }
-            HeaderAction(Icon.NOTEBOOK_TEXT, "Notes", vessel.noteCount, "bg-blue-600")
-            HeaderAction(Icon.CLIPBOARD_LIST, "Tickets", vessel.openTicketCount, "bg-red-600")
-            HeaderAction(Icon.SCROLL_TEXT, "Events", vessel.attachmentCount, "bg-gray-500")
-            HeaderAction(Icon.LAYOUT_GRID, "Edit layout", 0, "bg-gray-500")
+            HeaderAction(Icon.NOTEBOOK_TEXT, "Notes", vessel.noteCount, "border-blue-200 bg-blue-100 text-blue-600 hover:bg-blue-200", "bg-blue-500")
+            HeaderAction(Icon.CLIPBOARD_LIST, "Tickets", vessel.openTicketCount, "border-green-200 bg-green-100 text-green-600 hover:bg-green-200", "bg-red-500")
+            PlainHeaderButton(Icon.SCROLL_TEXT, "Events")
+            PlainHeaderButton(Icon.LAYOUT_GRID, "Edit layout")
         }
     }
 }
 
 @Composable
 private fun StatusBadge(device: DeviceStatus?) {
-    val classes = when {
-        device == null -> "inline-flex rounded-md bg-gray-500 px-2 py-0.5 text-xs font-medium text-white"
-        device.online -> "inline-flex rounded-md bg-green-600 px-2 py-0.5 text-xs font-medium text-white"
-        else -> "inline-flex rounded-md bg-red-600 px-2 py-0.5 text-xs font-medium text-white"
-    }
-    Span({ classes(classes); testTag("vessel-status") }) {
-        Text(if (device == null) "Unknown" else if (device.online) "Online" else "Offline")
+    if (device == null) return
+    if (device.online) {
+        Badge("border-transparent bg-green-600 text-white", tag = "vessel-status") { Text("Online") }
+    } else {
+        Badge("border-transparent bg-secondary text-secondary-foreground", tag = "vessel-status") { Text("Offline") }
     }
 }
 
 @Composable
 private fun AdminLink(label: String) {
-    Span({ classes("inline-flex items-center gap-1 text-blue-600 hover:underline") }) {
+    Span({ classes("inline-flex items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-primary") }) {
         Text(label)
-        Icon(Icon.EXTERNAL_LINK, "h-3 w-3")
+        Icon(Icon.EXTERNAL_LINK, "h-3.5 w-3.5")
     }
 }
 
 @Composable
-private fun HeaderAction(icon: Icon, title: String, count: Int, badge: String) {
+private fun HeaderAction(icon: Icon, title: String, count: Int, activeClasses: String, badgeColour: String) {
     Div({ classes("relative") }) {
-        Div({
-            classes("flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card hover:bg-accent")
+        Button({
+            classes(
+                if (count > 0) "relative flex h-9 w-9 items-center justify-center rounded-lg border transition-colors $activeClasses"
+                else "relative flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+            )
             attr("title", title)
-        }) { Icon(icon, "h-4 w-4 text-muted-foreground") }
+        }) { Icon(icon, "h-4 w-4") }
         if (count > 0) {
             Span({
-                classes("absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white $badge")
-            }) { Text(count.toString()) }
+                classes(
+                    "absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none text-white tabular-nums $badgeColour",
+                )
+            }) { Text(if (count > 99) "99+" else count.toString()) }
         }
     }
+}
+
+@Composable
+private fun PlainHeaderButton(icon: Icon, title: String) {
+    Button({
+        classes("relative flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground")
+        attr("title", title)
+    }) { Icon(icon, "h-4 w-4") }
 }
 
 /**
@@ -173,7 +185,7 @@ private fun HeaderAction(icon: Icon, title: String, count: Int, badge: String) {
  */
 @Composable
 private fun Blocks(vessel: Vessel, detail: VesselDetail, telemetry: Telemetry) {
-    Div({ classes("mt-6 grid grid-cols-12 gap-4") }) {
+    Div({ classes("grid grid-cols-12 gap-4") }) {
         StatusBlock(detail, telemetry)
         NotesAndPortsBlock(detail)
         ThroughputBlock(detail, telemetry)
@@ -189,18 +201,18 @@ private fun Blocks(vessel: Vessel, detail: VesselDetail, telemetry: Telemetry) {
 @Composable
 private fun StatusBlock(detail: VesselDetail, telemetry: Telemetry) {
     Block("Status", "col-span-12 lg:col-span-8", "block-status") {
-        Div({ classes("grid grid-cols-1 gap-x-10 md:grid-cols-2") }) {
-            Div { detail.identity.forEach { (label, value) -> StatusMetricRow(label, value) } }
-            Div { detail.service.forEach { (label, value) -> StatusMetricRow(label, value) } }
-        }
-        Div({ classes("mt-4 grid grid-cols-1 gap-6 border-t border-border pt-4 md:grid-cols-2") }) {
-            Gauge(Icon.CPU, "CPU load", telemetry.cpuPercent, "cpu")
-            Gauge(Icon.MEMORY_STICK, "Memory", telemetry.memoryPercent, "memory")
-        }
-        Div({ classes("mt-4 flex flex-wrap gap-1.5") }) {
-            detail.tags.forEach { tag ->
-                Span({ classes("rounded border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground") }) {
-                    Text(tag)
+        Div({ classes("space-y-3") }) {
+            Div({ classes("grid gap-x-10 gap-y-0.5 md:grid-cols-2") }) {
+                Div({ classes("space-y-0.5") }) { detail.identity.forEach { (label, value) -> StatusMetricRow(label, value) } }
+                Div({ classes("space-y-0.5") }) { detail.service.forEach { (label, value) -> StatusMetricRow(label, value) } }
+            }
+            Div({ classes("grid gap-4 border-t border-border pt-3 sm:grid-cols-2") }) {
+                Gauge(Icon.CPU, "CPU load", telemetry.cpuPercent, "cpu")
+                Gauge(Icon.MEMORY_STICK, "Memory", telemetry.memoryPercent, "memory")
+            }
+            Div({ classes("flex flex-wrap gap-1.5 border-t border-border pt-3") }) {
+                detail.tags.forEach { tag ->
+                    Badge("text-foreground border-border") { Text(tag) }
                 }
             }
         }
@@ -639,14 +651,20 @@ private fun MonthChart(month: MonthUsage) {
     }
 }
 
-/** A card with the small uppercase heading the original gives every block. */
+/**
+ * A card with the small uppercase heading the original gives every block — `DashboardGrid`'s chrome,
+ * minus the drag handle and the height-filling flex it needs only for the resizable grid this replica
+ * does not build.
+ */
 @Composable
 private fun Block(title: String, span: String, tag: String, content: @Composable () -> Unit) {
-    Div({ classes("rounded-xl border border-border bg-card p-4 shadow-sm $span"); testTag(tag) }) {
-        Div({ classes("mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground") }) {
-            Text(title)
+    Div({ classes("overflow-hidden rounded-xl border border-border bg-card text-card-foreground $span"); testTag(tag) }) {
+        Div({ classes("flex items-center gap-1.5 px-4 py-2.5") }) {
+            Span({ classes("text-sm font-medium uppercase tracking-wider text-muted-foreground") }) { Text(title) }
         }
-        content()
+        Div({ classes("px-4 pt-1 pb-4") }) {
+            content()
+        }
     }
 }
 
@@ -692,16 +710,16 @@ internal fun Badge(extra: String, tag: String? = null, content: @Composable () -
 @Composable
 private fun Gauge(icon: Icon, label: String, percent: Int, tag: String) {
     Div {
-        Div({ classes("flex items-center justify-between text-sm") }) {
+        Div({ classes("mb-1 flex items-center justify-between text-sm") }) {
             Span({ classes("flex items-center gap-1.5 text-muted-foreground") }) {
                 Icon(icon, "h-3.5 w-3.5")
                 Text(label)
             }
-            Span({ classes("font-medium"); testTag("gauge-$tag") }) { Text("$percent%") }
+            Span({ classes("font-medium text-foreground"); testTag("gauge-$tag") }) { Text("$percent%") }
         }
-        Div({ classes("mt-1 h-1.5 w-full rounded-full bg-gray-200") }) {
+        Div({ classes("relative h-2 w-full overflow-hidden rounded-full bg-border") }) {
             Div({
-                classes("h-1.5 rounded-full bg-slate-800")
+                classes("h-full rounded-full bg-primary transition-all")
                 style("width: $percent%")
             })
         }
