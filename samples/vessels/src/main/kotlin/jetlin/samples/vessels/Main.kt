@@ -119,14 +119,15 @@ internal fun Shell(content: @Composable () -> Unit) {
                     NavLink("/map", Icon.MAP, "Map")
                     NavLink("/starlink", Icon.SATELLITE, "Starlink")
                     NavLink("/tickets", Icon.CLIPBOARD_LIST, "Tickets")
-                    Div({ classes("ml-6 flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-accent") }) {
-                        OrgTile()
-                        Div({ classes("flex flex-col leading-tight") }) {
-                            Span({ classes("text-sm font-medium text-foreground") }) { Text("Johan") }
-                            Span({ classes("text-xs text-muted-foreground") }) {
+                    Div({ classes("ml-6 flex items-center gap-3 rounded-md px-2 py-1.5 outline-none hover:bg-accent") }) {
+                        OrgAvatar("flex h-9 w-9 items-center justify-center rounded-md bg-blue-100", "h-5 w-5 text-blue-600")
+                        Div({ classes("flex flex-col items-start leading-tight") }) {
+                            Span({ classes("text-sm font-semibold text-foreground") }) { Text("Johan") }
+                            Span({ classes("text-xs font-normal text-muted-foreground") }) {
                                 Text(FleetStore.organizationName)
                             }
                         }
+                        Icon(Icon.CHEVRON_DOWN, "h-4 w-4 text-muted-foreground")
                     }
                 }
             }
@@ -145,14 +146,12 @@ private fun NavLink(href: String, icon: Icon, label: String) {
     }
 }
 
-/** The organisation's initials, as the original renders them: a square tile of letters. */
+/**
+ * The organisation's avatar where it has no logo of its own: a ship icon in a tinted box, as the
+ * original falls back to in both the nav bar and the fleet header — not an initials tile, which
+ * nothing in the original renders.
+ */
 @Composable
-internal fun OrgTile(classes: String = "h-9 w-9 text-[10px]") {
-    Div({
-        classes("grid shrink-0 grid-cols-2 place-items-center rounded bg-blue-700 font-bold leading-none text-white $classes")
-    }) {
-        Span { Text("N") }
-        Span { Text("O") }
-        Span { Text("S") }
-    }
+internal fun OrgAvatar(boxClasses: String, iconClasses: String) {
+    Div({ classes(boxClasses) }) { Icon(Icon.SHIP, iconClasses) }
 }

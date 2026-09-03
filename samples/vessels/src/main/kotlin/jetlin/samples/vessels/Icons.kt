@@ -20,6 +20,7 @@ import jetlin.html.Svg
  * Regenerated from `lucide-static` when an icon is added; nothing reads it at runtime but this file.
  */
 internal enum class Icon(private val encoded: String) {
+    ACTIVITY("path;d=M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"),
     ALERT_CIRCLE("circle;cx=12;cy=12;r=10|line;x1=12;x2=12;y1=8;y2=12|line;x1=12;x2=12.01;y1=16;y2=16"),
     ALERT_TRIANGLE("path;d=m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3|path;d=M12 9v4|path;d=M12 17h.01"),
     ANCHOR("path;d=M12 6v16|path;d=m19 13 2-1a9 9 0 0 1-18 0l2 1|path;d=M9 11h6|circle;cx=12;cy=4;r=2"),
@@ -34,6 +35,7 @@ internal enum class Icon(private val encoded: String) {
     CPU("path;d=M12 20v2|path;d=M12 2v2|path;d=M17 20v2|path;d=M17 2v2|path;d=M2 12h2|path;d=M2 17h2|path;d=M2 7h2|path;d=M20 12h2|path;d=M20 17h2|path;d=M20 7h2|path;d=M7 20v2|path;d=M7 2v2|rect;x=4;y=4;width=16;height=16;rx=2|rect;x=8;y=8;width=8;height=8;rx=1"),
     EXTERNAL_LINK("path;d=M15 3h6v6|path;d=M10 14 21 3|path;d=M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"),
     EYE_OFF("path;d=M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49|path;d=M14.084 14.158a3 3 0 0 1-4.242-4.242|path;d=M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143|path;d=m2 2 20 20"),
+    HEADSET("path;d=M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm0 0a9 9 0 1 1 18 0m0 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3Z|path;d=M21 16v2a4 4 0 0 1-4 4h-5"),
     LAYOUT_GRID("rect;width=7;height=7;x=3;y=3;rx=1|rect;width=7;height=7;x=14;y=3;rx=1|rect;width=7;height=7;x=14;y=14;rx=1|rect;width=7;height=7;x=3;y=14;rx=1"),
     MAP("path;d=M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z|path;d=M15 5.764v15|path;d=M9 3.236v15"),
     MAP_PIN("path;d=M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0|circle;cx=12;cy=10;r=3"),

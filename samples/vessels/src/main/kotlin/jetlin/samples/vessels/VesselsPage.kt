@@ -45,10 +45,10 @@ fun VesselsPage() {
     val ascending = queryParam("dir") != "desc"
     val vessels = FleetStore.list(view.query, sort, ascending)
 
-    Div({ classes("container mx-auto px-4 py-6") }) {
+    Div({ classes("container mx-auto p-8 space-y-6") }) {
         FleetHeader()
 
-        Div({ classes("mt-6 rounded-xl border border-border bg-card shadow-sm") }) {
+        Div({ classes("rounded-xl border border-border bg-card text-card-foreground") }) {
             Div({ classes("flex flex-col space-y-1.5 px-6 pt-6 pb-3") }) {
                 Div({ classes("flex flex-col sm:flex-row sm:items-center justify-between gap-3") }) {
                     Div({ classes("flex items-center gap-2 text-base font-medium text-foreground") }) {
@@ -73,7 +73,7 @@ fun VesselsPage() {
                 }
             }
 
-            Div({ classes("px-2 py-2") }) {
+            Div({ classes("p-6 pt-0") }) {
                 if (vessels.isEmpty()) {
                     P({ classes("px-4 py-12 text-center text-sm text-muted-foreground"); testTag("empty") }) {
                         Text(
@@ -115,43 +115,46 @@ fun VesselsPage() {
 /** The organisation, and the counts across the whole fleet rather than the filtered view. */
 @Composable
 private fun FleetHeader() {
-    Div({ classes("flex items-start justify-between gap-4") }) {
+    Div({ classes("flex flex-col sm:flex-row sm:items-center justify-between gap-4") }) {
         Div({ classes("flex items-center gap-4") }) {
-            OrgTile("h-16 w-16 text-base")
+            OrgAvatar("flex h-16 w-16 items-center justify-center rounded-xl bg-blue-100", "h-8 w-8 text-blue-600")
             Div {
-                H1({ classes("text-3xl font-bold tracking-tight text-foreground") }) {
+                H1({ classes("text-2xl font-bold text-gray-900") }) {
                     Text(FleetStore.organizationName)
                 }
-                P({ classes("text-muted-foreground") }) { Text("Fleet Management Dashboard") }
+                P({ classes("text-gray-600") }) { Text("Fleet Management Dashboard") }
             }
         }
         Div({ classes("flex flex-col items-end gap-2") }) {
             Button({
-                classes("flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-accent")
+                classes("inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border border-border bg-card text-xs font-medium transition-colors outline-none hover:bg-accent hover:text-accent-foreground h-8 px-3")
                 testTag("wan-analysis")
             }) {
-                Icon(Icon.WAVES, "h-4 w-4")
+                Icon(Icon.ACTIVITY, "h-4 w-4")
                 Text("Start WAN analysis")
             }
-            Div({ classes("flex items-center gap-1.5 text-sm text-muted-foreground") }) {
-                Icon(Icon.SHIP, "h-4 w-4")
+            Div({ classes("flex items-center gap-1.5 text-sm font-medium text-gray-700") }) {
+                Icon(Icon.SHIP, "h-4 w-4 text-blue-600")
                 Span({ testTag("vessel-count") }) { Text("${FleetStore.size} vessels") }
             }
             Div({ classes("flex items-center gap-4 text-sm") }) {
-                StatusCount("bg-green-500", FleetStore.onlineCount(), "online", "count-online")
-                StatusCount("bg-red-500", FleetStore.offlineCount(), "offline", "count-offline")
-                StatusCount("bg-gray-400", FleetStore.unknownCount(), "unknown", "count-unknown")
+                StatusCount("bg-green-500", "text-green-700", "text-green-600/70", FleetStore.onlineCount(), "online", "count-online")
+                StatusCount("bg-red-500", "text-red-700", "text-red-600/70", FleetStore.offlineCount(), "offline", "count-offline")
+                val unknown = FleetStore.unknownCount()
+                if (unknown > 0) {
+                    StatusCount("bg-gray-400", "text-gray-500", "text-gray-400", unknown, "unknown", "count-unknown")
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StatusCount(dot: String, count: Int, label: String, tag: String) {
-    Div({ classes("flex items-center gap-1.5"); testTag(tag) }) {
-        Span({ classes("inline-block h-2 w-2 rounded-full $dot") })
-        Span({ classes("font-medium text-foreground") }) { Text(count.toString()) }
-        Span({ classes("text-muted-foreground") }) { Text(label) }
+private fun StatusCount(dot: String, textColour: String, labelColour: String, count: Int, label: String, tag: String) {
+    Span({ classes("flex items-center gap-1.5 $textColour"); testTag(tag) }) {
+        Span({ classes("h-2.5 w-2.5 rounded-full $dot shrink-0") })
+        Span({ classes("font-semibold") }) { Text(count.toString()) }
+        Span({ classes(labelColour) }) { Text(label) }
     }
 }
 
