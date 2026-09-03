@@ -60,10 +60,64 @@ Every measured iteration runs on a session that has never been used before, whic
 of the harness reloading the page — a composition that has already built and torn down ten thousand
 rows has a slot table sized for them.
 
-## Where the results live
+## Results
 
-Run the task; it prints the tables. The findings that came out of the first run, and which the tests
-now pin, are:
+Ten iterations each, after five discarded passes, on a 4-core container running OpenJDK 21.0.10.
+Time is the server's share only; `ops` and `wire` are exact.
+
+| operation | min ms | median ms | ops | the patch | wire |
+|---|---|---|---|---|---|
+| create rows | 95.27 | 99.66 | 1,000 | 1,000 inserts | 678.6 kB |
+| replace all rows | 117.10 | 143.39 | 2,000 | 1,000 inserts + 1,000 removals | 723.6 kB |
+| partial update | 1.02 | 1.15 | 100 | 100 text writes | 6.5 kB |
+| select row | 0.55 | 0.73 | 2 | 2 class attributes | 139 B |
+| swap rows | 836.06 | 851.98 | 2 | 2 moves | 139 B |
+| remove row | 814.43 | 837.55 | 1 | 1 removal | 80 B |
+| create many rows | 3400.14 | 3738.64 | 10,000 | 10,000 inserts | 6.7 MB |
+| append to large table | 101.36 | 103.04 | 1,000 | 1,000 inserts | 679.7 kB |
+| clear rows | 7.28 | 7.45 | 1,000 | 1,000 single-row removals | 42.0 kB |
+
+Recomposition is 68–99% of each figure; the rest is JSON encoding.
+
+Retained heap per live session:
+
+| state | rows | per session |
+|---|---|---|
+| page composed, no rows | 0 | 57.2 kB |
+| after creating 1,000 rows | 1,000 | 15.1 MB |
+| after 5 updates on 1,000 rows | 1,000 | 15.6 MB |
+| after 5 create/clear cycles | 0 | 4.9 MB |
+| after creating 10,000 rows | 10,000 | 100.0 MB |
+
+First paint, server-rendered: 0.34 ms and 1.7 kB for an empty table, 8.76 ms and 435.1 kB for a
+thousand rows.
+
+And the scaling sweep, which is the part the published benchmark has no equivalent of:
+
+| rows | build | swap 2 | remove 1 | update every 10th | rows changed |
+|---|---|---|---|---|---|
+| 250 | 19.17 | 54.26 | 53.68 | 0.76 | 25 |
+| 500 | 44.90 | 215.41 | 213.53 | 0.94 | 50 |
+| 1,000 | 141.61 | 867.16 | 883.29 | 1.64 | 100 |
+| 2,000 | 398.36 | 3525.62 | 3465.83 | 2.83 | 200 |
+| 4,000 | 1460.02 | 13772.87 | 13897.19 | 3.85 | 400 |
+| **per doubling** | **×3.0** | **×4.0** | **×4.0** | **×1.5** | ×2 |
+
+## A note on warmup
+
+The benchmark's own warmup clicks exercise the operation but not the JVM. One `#run` click runs the
+element and applier code some ten thousand times, so those paths cross HotSpot's compilation
+threshold inside the first iteration. The two operations that touch a handful of nodes do not:
+comparing minimums across 0, 5 and 15 discarded passes, `partial update` goes 1.37 → 1.02 → 0.88 ms
+and `select row` 0.75 → 0.55 → 0.51, while every other operation moves less than 3%. Five passes is
+the default because it captures nearly all of that and costs half a minute.
+
+Worth noting that swap and remove sit at ~820 ms with 0 passes and with 15, so the finding below is
+not a warmup artifact.
+
+## Findings
+
+These are what the tests now pin:
 
 1. **Keyed reuse works, and is visible in the op counts.** Swapping two rows of a thousand emits two
    moves. Updating every tenth row emits a hundred text writes. Moving the highlight emits two
@@ -81,6 +135,20 @@ now pin, are:
    `Li { Text(...) }` with nothing else in it. Compose's own UI never meets it because a `LazyColumn`
    only composes what is on screen; a server-side framework rendering whole tables does.
 
-The third is the reason the report includes a scaling sweep the published benchmark has no equivalent
-of. Nine operations at one table size cannot tell a large constant from a curve, and the difference
-decides whether a number is a fact about the machine it ran on or a fact about the framework.
+4. **A session keeps the memory of the largest table it ever held.** A freshly composed session with
+   no rows costs 57 kB. A session that has built and cleared a thousand rows five times, and is empty
+   again, costs 4.9 MB — eighty-five times the floor for the same visible page. The slot table is
+   sized for the peak and never shrinks. On a server that is the figure that decides capacity: a user
+   who once opened a large table pays for it until they disconnect, not until they close it.
+
+The third is the reason the harness includes a scaling sweep the published benchmark has no
+equivalent of. Nine operations at one table size cannot tell a large constant from a curve, and the
+difference decides whether a number is a fact about the machine it ran on or a fact about the
+framework.
+
+Note what the third finding is *not* about. "Update every 10th row" changes a tenth of the table, so
+its cost has to grow with the table — and it grows more slowly than the work it is doing: sixteen
+times the rows changed for five times the time, as the fixed overhead amortizes. That is cost
+tracking rows changed, which is what the design promises. Swapping two rows changes two rows at any
+size and emits two ops at any size, and still quadruples per doubling. That is the one place the
+promise does not hold.
