@@ -42,12 +42,26 @@ fun main() {
                 }
                 call.respondText(css.readText(), ContentType.Text.CSS)
             }
+            get("/vessels/map.js") {
+                val script = checkNotNull(object {}.javaClass.getResource("/vessels/map.js"))
+                call.respondText(script.readText(), ContentType.Text.JavaScript)
+            }
         }
         jetlin {
             // Written into the markup so browser tests have something real to select on. A shipping
             // application would leave this off, which is the default.
             exposeTestTags = true
-            head = """<link rel="stylesheet" href="/vessels/app.css">"""
+            head = """
+                <link rel="stylesheet" href="/vessels/app.css">
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+            """.trimIndent()
+
+            // Registered before the session connects, so the map's implementation is there when the
+            // runtime takes up the markup it was served. Leaflet first: map.js needs it at load.
+            clientSetup = """
+                <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+                <script src="/vessels/map.js"></script>
+            """.trimIndent()
 
             // Composed once for the session, above whichever page is current. That is what lets the
             // search box still hold its text after opening a vessel and coming back: a `remember`
