@@ -1,11 +1,19 @@
-# The vessels sample — state of the branch, and the plan it came from
+# The vessels sample — the plan it came from
 
-Branch: `claude/vessels-sample`, branched from
+> **Done. This is history now.** The sample is built: both pages, all nine detail blocks, sixteen
+> tests. What was learned is in **[FINDINGS.md](FINDINGS.md)**, which is the document to read; this
+> one is kept for the record of how the work was aimed, and because section 2's findings are worth
+> seeing in the wording they were first written in, alongside what became of them.
+>
+> Section 1 below describes a branch that no longer exists — it says the code does not compile, which
+> was true when it was written and is not now.
+
+Branch: `claude/vessels-sample`, rebased onto
 `claude/kotlin-compose-reactive-framework-mexz47`.
 
-This document exists so the work can be picked up cold. It has three parts: what is
-actually on the branch right now, what was learned about the framework (the durable
-part), and the plan as it stood when work stopped.
+This document exists so the work can be picked up cold. It has three parts: what was
+on the branch when work stopped, what was learned about the framework (the durable
+part), and the plan as it stood at that point.
 
 ---
 
