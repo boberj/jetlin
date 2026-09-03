@@ -78,7 +78,7 @@ This is the part worth keeping regardless of what gets built next.
 their original wording, marked FIXED, because the record of what a real page needed is the
 point of this document. Findings 1, 3, 4, 7 and 8 are still open.
 
-**1. Nothing holds per-session state across a navigation.**
+**1. Nothing holds per-session state across a navigation. — FIXED (`a1bfa8a`).**
 `remember` dies when the view is swapped. `rememberSaved` looks right and is not: its
 provider is registered in a `DisposableEffect`, so leaving the composition
 unregisters it — it survives *hibernation*, where `performSave()` runs on a live
@@ -90,6 +90,25 @@ per session and which `RequestContext.forUrl` carries across navigation. It is
 documented for authentication, tenancy and locale — not view state — and it is not
 restored on rehydration, so a hibernated session comes back with an empty search box.
 Every dashboard has state of exactly this shape.
+
+> **Correction, and it is the reason this turned out to be cheap.** The last sentence of
+> the finding above is wrong. `view(path) { … }` does *not* give each route its own
+> composable root: one `Composition` and one `Recomposer` serve the whole session and are
+> disposed only when it ends, navigation is a single `mutableStateOf` write, and there
+> already was a shared retained root — the private `RouteHost` — which wrapped the matched
+> view in `key(pattern)`. Everything an application wrote sat under that key. So the gap
+> was a hole in the API surface rather than an architectural limit, and the fix was to open
+> the root rather than to invent a state system: `app { }` composes above the key, where
+> `remember` survives a move and `rememberSaved` survives hibernation as well.
+>
+> A `SaveableStateHolder` was added alongside it, so a view's own saved state comes back
+> when the view is returned to — `rememberSaved` now means "survives being torn down"
+> rather than only "survives hibernation".
+>
+> The `attributes { }` workaround was worse than recorded, too: the factory did not run
+> once per session. It was evaluated eagerly at every socket handshake and discarded on a
+> live reattach, so it ran at least twice and usually for nothing. Fixed separately in
+> `006a72e`.
 
 **2. No SVG. — FIXED (`8179bfe`).** `document.createElement(tag)` in `jetlin.ts` has no `createElementNS`
 beside it, and neither does `Ssr.kt`. An `<svg>` built that way is an
@@ -148,12 +167,17 @@ map is a third-party widget that patches its own DOM. Both are exactly what
 `ClientComponent` is for — recording them as such is a point in the framework's
 favour, not against it.
 
-**Verdict as it stands:** the ergonomic ones are cheap, and three of them are now done —
-the framework went from 180 to 200 tests in the process, and the demo's `/shapes` page gained
-a real chart with a `<select>`, a `<polyline>`, `<circle>` markers and a `<foreignObject>`
-caption. What remains open is the interesting half: **finding 1** (no per-session state across
-a navigation) and **finding 3** (no virtualization) are architectural, and neither is
-something a self-designed test suite would ever have surfaced.
+**Verdict as it stands:** the ergonomic ones were cheap, and four are now done — the
+framework went from 180 to 210 tests in the process, the demo's `/shapes` page gained a real
+chart with a `<select>`, a `<polyline>`, `<circle>` markers and a `<foreignObject>` caption,
+and its nav moved into an `app { }` container that a navigation no longer rebuilds.
+
+**Finding 1 turned out not to be architectural at all**, once the diagnosis was checked
+against the code rather than carried forward from this document — see the correction under it.
+What remains open is **finding 3** (no virtualization), which is: a server that cannot see the
+scroll position cannot window a list, and no amount of API surface changes that. Both were
+found the same way, by building something the framework had never been asked for, and neither
+is something a self-designed test suite would have surfaced.
 
 ---
 
