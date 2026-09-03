@@ -1,0 +1,12 @@
+{
+  "name": "jetlin-sample-vessels",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Builds the vessels sample's stylesheet. Tailwind scans the Kotlin for class names, so this has to run whenever new ones are written.",
+  "scripts": {
+    "build": "tailwindcss -i src/main/css/app.css -o src/main/resources/vessels/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0"
+  }
+}

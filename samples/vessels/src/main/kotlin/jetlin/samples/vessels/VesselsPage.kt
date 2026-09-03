@@ -1,12 +1,9 @@
 package jetlin.samples.vessels
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import jetlin.html.Button
+import jetlin.html.Circle
 import jetlin.html.Div
 import jetlin.html.H1
 import jetlin.html.Input
@@ -14,6 +11,7 @@ import jetlin.html.Link
 import jetlin.html.LocalNavigator
 import jetlin.html.P
 import jetlin.html.Span
+import jetlin.html.Svg
 import jetlin.html.Table
 import jetlin.html.Tbody
 import jetlin.html.Td
@@ -22,374 +20,416 @@ import jetlin.html.Th
 import jetlin.html.Thead
 import jetlin.html.Tr
 import jetlin.html.queryParam
+import jetlin.protocol.ListenerSpec
+import kotlin.math.PI
 
 /**
  * The fleet list.
  *
- * Everything that decides what is on screen — the search text, the sort column and direction, the
- * page — lives in the query string rather than in composition state. That is what the original does
- * not do, and it is the more useful thing to build: a filtered fleet is something an operator sends
- * to a colleague, and the back button then means what a browser's back button should mean.
+ * Two pieces of state decide what is on screen, and they live in different places on purpose. The
+ * **sort** is in the query string, because a fleet sorted by priority is a link an operator sends a
+ * colleague and expects to survive a reload. The **search** is in the session's container, because a
+ * half-typed name is not worth a URL and putting it there would mean a history entry per keystroke —
+ * and because it has to still be there after opening a vessel and pressing back, which is the thing
+ * the container exists for.
  *
- * It is also the harder path, which is the point of the exercise. Reading it back is `queryParam`;
- * writing it is a navigation, so every keystroke, header click and page step goes through
- * `LocalNavigator` and re-resolves the route.
+ * Every matching vessel is rendered. The original virtualizes instead; a server cannot, because it
+ * cannot see the scroll position. What that costs is measured in FINDINGS.md rather than argued.
  */
 @Composable
-fun VesselsPage() = Shell {
+fun VesselsPage() {
     val navigator = LocalNavigator.current
+    val view = LocalFleetView.current
 
-    val query = queryParam("q").orEmpty()
     val sort = SortKey.from(queryParam("sort"))
     val ascending = queryParam("dir") != "desc"
-    val page = queryParam("page")?.toIntOrNull() ?: 0
+    val vessels = FleetStore.list(view.query, sort, ascending)
 
-    val result = FleetStore.page(query, sort, ascending, page)
+    Div({ classes("container mx-auto px-4 py-6") }) {
+        FleetHeader()
 
-    fun go(
-        newQuery: String = query,
-        newSort: SortKey = sort,
-        newAscending: Boolean = ascending,
-        newPage: Int = page,
-        replace: Boolean = false,
-    ) {
-        val url = fleetUrl(newQuery, newSort, newAscending, newPage)
-        if (replace) navigator.replace(url) else navigator.push(url)
-    }
-
-    FleetHeader()
-
-    Div({ classes("card") }) {
-        Div({ classes("card-head") }) {
-            Div({ classes("card-title") }) {
-                Span({ classes("icon-ship") }) { Text("⚓") }
-                Text("Fleet Status Overview")
-            }
-            Div({ classes("search") }) {
-                Span({ classes("search-icon") }) { Text("⌕") }
-                Input({
-                    type("search")
-                    classes("search-input")
-                    testTag("search")
-                    attr("placeholder", "Search vessels...")
-                    // The value comes from the URL on every render rather than from a remembered
-                    // field. That is what makes the back button restore the search box as well as
-                    // the results; a field would keep whatever was last typed into it.
-                    value(query)
-                    // Replace rather than push: a history entry per keystroke would make going back
-                    // an exercise in deleting one letter at a time.
-                    onInput(debounceMs = 200) { typed -> go(newQuery = typed, newPage = 0, replace = true) }
-                })
-            }
-        }
-
-        Div({ classes("card-body") }) {
-            if (result.total == 0) {
-                P({ classes("empty"); testTag("empty") }) {
-                    Text(
-                        if (query.isBlank()) "No vessels found."
-                        else "No vessels match “$query”.",
-                    )
+        Div({ classes("mt-6 rounded-xl border border-border bg-card shadow-sm") }) {
+            Div({ classes("flex items-center justify-between gap-4 border-b border-border px-6 py-4") }) {
+                Div({ classes("flex items-center gap-2 text-base font-medium text-foreground") }) {
+                    Icon(Icon.SHIP, "h-5 w-5 text-blue-600")
+                    Text("Fleet Status Overview")
                 }
-            } else {
-                Table({ classes("fleet") }) {
-                    Thead {
-                        Tr {
-                            SortHeader("Vessel", SortKey.NAME, sort, ascending, ::go)
-                            Th({ classes("col-status") }) { Text("Status") }
-                            SortHeader("Data Usage", SortKey.USAGE, sort, ascending, ::go, "col-usage")
-                            SortHeader("Progress", SortKey.PROGRESS, sort, ascending, ::go, "col-progress")
-                            SortHeader("Priority", SortKey.PRIORITY, sort, ascending, ::go, "col-priority")
-                            Th({ classes("col-actions") }) { Text("Actions") }
-                        }
+                Div({ classes("relative w-72") }) {
+                    Span({ classes("pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground") }) {
+                        Icon(Icon.SEARCH, "h-4 w-4")
                     }
-                    Tbody({ testTag("rows") }) {
-                        result.vessels.forEach { vessel ->
-                            // Keyed by identity, so re-sorting moves the existing rows rather than
-                            // rewriting every cell in the table. The one assertion in this sample
-                            // that no client-side framework could make is that this holds.
-                            key(vessel.id) { VesselRow(vessel) }
+                    Input({
+                        type("search")
+                        classes("h-9 w-full rounded-md border border-border bg-input-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring")
+                        testTag("search")
+                        attr("placeholder", "Search vessels...")
+                        value(view.query)
+                        // Debounced, so a name is one round trip rather than one per keystroke. No
+                        // navigation: this writes session state, which invalidates only the table.
+                        onInput(debounceMs = 200) { typed -> view.query = typed }
+                    })
+                }
+            }
+
+            Div({ classes("px-2 py-2") }) {
+                if (vessels.isEmpty()) {
+                    P({ classes("px-4 py-12 text-center text-sm text-muted-foreground"); testTag("empty") }) {
+                        Text(
+                            if (view.query.isBlank()) "No vessels found."
+                            else "No vessels match “${view.query}”.",
+                        )
+                    }
+                } else {
+                    Table({ classes("w-full border-collapse text-sm") }) {
+                        Thead {
+                            Tr({ classes("border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground") }) {
+                                SortHeader("Vessel", SortKey.NAME, sort, ascending)
+                                Th({ classes("px-2 py-2 font-medium") }) { Text("Status") }
+                                SortHeader("Data usage", SortKey.USAGE, sort, ascending)
+                                SortHeader("Progress", SortKey.PROGRESS, sort, ascending)
+                                SortHeader("Priority", SortKey.PRIORITY, sort, ascending)
+                                Th({ classes("px-2 py-2 font-medium") }) { Text("Actions") }
+                            }
+                        }
+                        Tbody({ testTag("rows") }) {
+                            vessels.forEach { vessel ->
+                                // Keyed by identity, so re-sorting moves the existing rows rather
+                                // than rewriting every cell of every one of them. The assertion that
+                                // this holds is the one no diffing framework can make.
+                                key(vessel.id) { VesselRow(vessel, navigator::push) }
+                            }
                         }
                     }
                 }
-                Pager(result, ::go)
             }
         }
     }
 }
 
-/** The counts across the whole fleet, not the page: what the original puts beside the org name. */
+/** The organisation, and the counts across the whole fleet rather than the filtered view. */
 @Composable
 private fun FleetHeader() {
-    Div({ classes("page-head") }) {
-        Div({ classes("page-head-left") }) {
-            Div({ classes("org-mark") }) { Text("⚓") }
+    Div({ classes("flex items-start justify-between gap-4") }) {
+        Div({ classes("flex items-center gap-4") }) {
+            OrgTile("h-16 w-16 text-base")
             Div {
-                H1 { Text(FleetStore.organizationName) }
-                P({ classes("subtitle") }) { Text("Fleet Management Dashboard") }
+                H1({ classes("text-3xl font-bold tracking-tight text-foreground") }) {
+                    Text(FleetStore.organizationName)
+                }
+                P({ classes("text-muted-foreground") }) { Text("Fleet Management Dashboard") }
             }
         }
-        Div({ classes("page-head-right") }) {
-            Div({ classes("fleet-count"); testTag("fleet-count") }) {
-                Text("${FleetStore.size} vessels")
+        Div({ classes("flex flex-col items-end gap-2") }) {
+            Button({
+                classes("flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-accent")
+                testTag("wan-analysis")
+            }) {
+                Icon(Icon.WAVES, "h-4 w-4")
+                Text("Start WAN analysis")
             }
-            Div({ classes("status-counts") }) {
-                StatusCount("online", FleetStore.onlineCount())
-                StatusCount("offline", FleetStore.offlineCount())
-                val unknown = FleetStore.unknownCount()
-                if (unknown > 0) StatusCount("unknown", unknown)
+            Div({ classes("flex items-center gap-1.5 text-sm text-muted-foreground") }) {
+                Icon(Icon.SHIP, "h-4 w-4")
+                Span({ testTag("vessel-count") }) { Text("${FleetStore.size} vessels") }
+            }
+            Div({ classes("flex items-center gap-4 text-sm") }) {
+                StatusCount("bg-green-500", FleetStore.onlineCount(), "online", "count-online")
+                StatusCount("bg-red-500", FleetStore.offlineCount(), "offline", "count-offline")
+                StatusCount("bg-gray-400", FleetStore.unknownCount(), "unknown", "count-unknown")
             }
         }
     }
 }
 
 @Composable
-private fun StatusCount(kind: String, count: Int) {
-    Span({ classes("status-count status-$kind"); testTag("count-$kind") }) {
-        Span({ classes("dot") }) { Text("") }
-        Span({ classes("count-value") }) { Text("$count") }
-        Span({ classes("count-label") }) { Text(kind) }
+private fun StatusCount(dot: String, count: Int, label: String, tag: String) {
+    Div({ classes("flex items-center gap-1.5"); testTag(tag) }) {
+        Span({ classes("inline-block h-2 w-2 rounded-full $dot") })
+        Span({ classes("font-medium text-foreground") }) { Text(count.toString()) }
+        Span({ classes("text-muted-foreground") }) { Text(label) }
     }
 }
 
 /**
- * A column header that sorts.
+ * A sortable column heading.
  *
- * Clicking the active column flips direction; clicking another switches to it, ascending for the
- * name and descending for the numbers — which is what the original does, and what people expect
- * from a column of scores.
+ * Clicking the active column flips direction; clicking a new one starts ascending for the name and
+ * descending for the numbers, which is the original's rule and the one that puts the interesting end
+ * of each column first.
  */
 @Composable
-private fun SortHeader(
-    label: String,
-    key: SortKey,
-    current: SortKey,
-    ascending: Boolean,
-    go: (String, SortKey, Boolean, Int, Boolean) -> Unit,
-    extraClass: String = "",
-) {
+private fun SortHeader(label: String, key: SortKey, current: SortKey, ascending: Boolean) {
+    val navigator = LocalNavigator.current
     val active = current == key
-    Th({ classes(listOf("sortable", extraClass).filter { it.isNotEmpty() }.joinToString(" ")) }) {
+    Th({ classes("px-2 py-2 font-medium") }) {
         Button({
-            classes(if (active) "sort-button active" else "sort-button")
+            classes(
+                if (active) "flex items-center gap-1 uppercase tracking-wider text-foreground"
+                else "flex items-center gap-1 uppercase tracking-wider text-muted-foreground hover:text-foreground",
+            )
             testTag("sort-${key.param}")
             onClick {
                 val nextAscending = if (active) !ascending else key == SortKey.NAME
-                go("", key, nextAscending, 0, false)
+                navigator.push(fleetUrl(key, nextAscending))
             }
         }) {
             Text(label)
-            Span({ classes(if (active) "chevron active" else "chevron") }) {
-                Text(if (active && ascending) "▲" else "▼")
-            }
+            Icon(if (active && ascending) Icon.CHEVRON_UP else Icon.CHEVRON_DOWN, "h-3 w-3")
         }
     }
 }
 
 @Composable
-private fun VesselRow(vessel: Vessel) {
+private fun VesselRow(vessel: Vessel, open: (String) -> Unit) {
     val usage = FleetStore.usage(vessel)
     val device = FleetStore.deviceStatus(vessel)
 
-    Tr({ classes(rowClass(vessel)); testTag("row") }) {
-        Td({ classes("cell-name") }) {
-            Div({ classes("name-cell") }) {
-                Span({ classes("status-dot status-${device.dotClass()}") }) { Text("") }
-                Link("/vessels/${vessel.id}", { classes("vessel-link"); testTag("vessel-link") }) {
-                    Text(vessel.name)
-                }
+    Tr({
+        classes(rowClass(vessel))
+        testTag("row")
+        onClick { open("/vessels/${vessel.id}") }
+    }) {
+        Td({ classes("px-2 py-2") }) {
+            Div({ classes("flex items-center gap-2") }) {
                 if (vessel.emergency) {
-                    Span({ classes("badge badge-emergency") }) { Text("EMERGENCY") }
+                    Icon(Icon.ALERT_TRIANGLE, "h-5 w-5 shrink-0 text-red-600 bell-ringing")
+                } else {
+                    Icon(Icon.SHIP, "h-4 w-4 shrink-0 text-blue-600")
                 }
-            }
-        }
-
-        Td({ classes("cell-status") }) {
-            Span({ classes("badge badge-${vessel.statusLabel.lowercase()}"); testTag("status") }) {
-                Text(vessel.statusLabel)
-            }
-        }
-
-        Td({ classes("cell-usage") }) {
-            if (usage == null) {
-                Span({ classes("muted") }) { Text("—") }
-            } else {
-                Div({ classes("usage") }) {
-                    Div({ classes("usage-bar") }) {
-                        Div({
-                            classes("usage-fill usage-${usage.level}")
-                            style("width: ${(usage.fraction * 100).toInt()}%")
-                        }) { Text("") }
-                    }
-                    Span({ classes("usage-text"); testTag("usage") }) {
-                        Text("${formatGb(usage.usedGb)} / ${formatGb(usage.planGb)}")
+                Div({ classes("flex min-w-0 flex-col") }) {
+                    Link("/vessels/${vessel.id}", {
+                        classes("truncate font-medium text-foreground hover:underline")
+                        testTag("name")
+                    }) { Text(vessel.name) }
+                    Div({ classes("flex items-center gap-3 font-mono text-xs text-muted-foreground") }) {
+                        Span { Text(vessel.serial) }
+                        Span { Text(vessel.lanIp) }
                     }
                 }
             }
         }
 
-        Td({ classes("cell-progress") }) { ProgressCell(vessel) }
-        Td({ classes("cell-priority") }) { PriorityCell(vessel) }
+        Td({ classes("px-2 py-2") }) { StatusPill(device) }
 
-        Td({ classes("cell-actions") }) {
-            Div({ classes("actions") }) {
-                VesselFlag.entries.forEach { flag ->
-                    val on = FleetStore.isSet(vessel, flag)
-                    Button({
-                        classes(if (on) "action on action-${flag.name.lowercase()}" else "action")
-                        testTag("flag-${flag.name.lowercase()}")
-                        attr("title", flag.label)
-                        onClick { FleetStore.toggle(vessel, flag) }
-                    }) { Text(flag.glyph()) }
-                }
-                Badged("notes", "✎", vessel.noteCount)
-                Badged("tickets", "☰", vessel.openTicketCount)
-                Badged("files", "🖿", vessel.attachmentCount)
+        Td({ classes("px-2 py-2") }) {
+            Div({ classes("flex flex-col gap-1") }) {
+                UsageMeter("SL", usage, dotted = false)
+                UsageMeter("5G", FleetStore.usage(vessel)?.let { UsageStatus(it.usedGb * 0.6, it.planGb) }, dotted = true)
             }
         }
+
+        Td({ classes("px-2 py-2") }) { ProgressCell(vessel) }
+        Td({ classes("px-2 py-2") }) { PriorityCell(vessel) }
+        Td({ classes("px-2 py-2") }) { ActionsCell(vessel) }
     }
 }
 
-/** An action carrying a count, the way the original hangs a number off the corner of a button. */
 @Composable
-private fun Badged(name: String, glyph: String, count: Int) {
-    Button({
-        classes(if (count > 0) "action has-count" else "action")
-        testTag("action-$name")
-        attr("title", name)
-    }) {
-        Text(glyph)
-        if (count > 0) {
-            Span({ classes("count-badge") }) { Text(if (count > 99) "99+" else "$count") }
+private fun StatusPill(device: DeviceStatus?) {
+    val classes = when {
+        device == null -> "inline-flex rounded-md border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"
+        device.online -> "inline-flex rounded-md border border-green-300 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700"
+        else -> "inline-flex rounded-md border border-red-300 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700"
+    }
+    Span({ classes(classes); testTag("status") }) {
+        Text(if (device == null) "Unknown" else if (device.online) "Online" else "Offline")
+    }
+}
+
+/**
+ * One labelled meter: Starlink on a solid track, cellular on a dotted one.
+ *
+ * The fill is coloured by how close the plan is to being spent, not by the raw percentage — the
+ * original's reason, which is that going over costs money rather than merely being a big number.
+ */
+@Composable
+private fun UsageMeter(label: String, usage: UsageStatus?, dotted: Boolean) {
+    Div({ classes("flex items-center gap-2") }) {
+        Span({ classes("w-5 shrink-0 text-[10px] font-medium text-muted-foreground") }) { Text(label) }
+        Div({
+            classes(
+                if (dotted) "track-dotted h-1.5 w-28 shrink-0 rounded-full"
+                else "h-1.5 w-28 shrink-0 rounded-full bg-gray-200",
+            )
+        }) {
+            if (usage != null) {
+                Div({
+                    classes(
+                        when (usage.level) {
+                            "critical" -> "h-1.5 rounded-full bg-red-500"
+                            "warning" -> "h-1.5 rounded-full bg-yellow-500"
+                            else -> "h-1.5 rounded-full bg-green-500"
+                        },
+                    )
+                    // The one number here that is genuinely continuous, so it is a style rather
+                    // than a class: Tailwind cannot generate a utility per percentage.
+                    style("width: ${(usage.fraction * 100).toInt()}%")
+                })
+            }
+        }
+        Span({ classes("w-14 shrink-0 text-right text-xs text-muted-foreground") }) {
+            Text(usage?.let { formatGb(it.usedGb) } ?: "—")
         }
     }
 }
 
 /**
- * Progress, editable in place.
+ * The progress ring, ported from the original's `CircleProgress`.
  *
- * Click to turn the number into a field, type, and it commits on blur or Enter — the original's
- * behaviour, and the reason this cell keeps composition state rather than putting the editing flag
- * in the URL. Whether a cell is mid-edit is not something anybody would share a link to.
+ * A stroked circle with its dash pattern set to the circumference and the gap moved round to the
+ * fraction wanted — the standard trick, and the reason this needs real SVG rather than a div.
  */
 @Composable
 private fun ProgressCell(vessel: Vessel) {
-    var editing by remember { mutableStateOf(false) }
-
-    if (!editing) {
-        Button({
-            classes("inline-value")
-            testTag("progress")
-            onClick { editing = true }
+    val radius = 12.0
+    val circumference = 2 * PI * radius
+    val offset = circumference - (vessel.progress / 100.0) * circumference
+    Div({ classes("flex items-center gap-2") }) {
+        Svg({
+            classes("h-7 w-7 shrink-0")
+            attr("viewBox", "0 0 28 28")
+            attr("aria-hidden", "true")
         }) {
-            Span({ classes("ring ring-${if (vessel.progress >= 100) "done" else "part"}") }) { Text("") }
+            Circle({
+                attr("cx", "14"); attr("cy", "14"); attr("r", "12")
+                attr("fill", "none"); attr("stroke", "#e5e7eb"); attr("stroke-width", "3")
+            })
+            Circle({
+                attr("cx", "14"); attr("cy", "14"); attr("r", "12")
+                attr("fill", "none")
+                attr("stroke", if (vessel.progress >= 100) "#16a34a" else "#6b7280")
+                attr("stroke-width", "3")
+                attr("stroke-dasharray", "%.2f".format(circumference))
+                attr("stroke-dashoffset", "%.2f".format(offset))
+                attr("stroke-linecap", "round")
+                attr("transform", "rotate(-90 14 14)")
+            })
+        }
+        Span({ classes("text-xs text-muted-foreground"); testTag("progress") }) {
             Text("${vessel.progress}%")
         }
-    } else {
-        Input({
-            type("number")
-            classes("inline-input")
-            testTag("progress-input")
-            value(vessel.progress.toString())
-            attr("min", "0")
-            attr("max", "100")
-            onInput(debounceMs = 150) { typed ->
-                vessel.progress = typed.toIntOrNull()?.coerceIn(0, 100) ?: vessel.progress
-            }
-            onKeyDown { key -> if (key == "Enter" || key == "Escape") editing = false }
-        })
     }
 }
 
-/** Priority, on the same pattern: a number worth changing without leaving the table. */
+/**
+ * Priority, edited in place.
+ *
+ * The sharpest thing in this sample: one click writes one vessel's field, and because the rows are
+ * keyed, the update should touch a handful of cells in one row out of eighty. When the table is
+ * sorted by priority it also reorders, which makes it the one interaction producing moves and
+ * content edits in the same patch.
+ */
 @Composable
 private fun PriorityCell(vessel: Vessel) {
-    Div({ classes("stepper") }) {
-        Button({
-            classes("step")
-            testTag("priority-down")
-            attr("title", "Lower priority")
-            onClick { vessel.priority = (vessel.priority - 1).coerceAtLeast(0) }
-        }) { Text("−") }
-        Span({ classes("priority-value"); testTag("priority") }) { Text("${vessel.priority}") }
-        Button({
-            classes("step")
-            testTag("priority-up")
-            attr("title", "Raise priority")
-            onClick { vessel.priority = (vessel.priority + 1).coerceAtMost(9) }
-        }) { Text("+") }
+    Div({ classes("flex items-center gap-1") }) {
+        Stepper(Icon.CHEVRON_UP, "priority-up-${vessel.id}") {
+            vessel.priority = (vessel.priority + 1).coerceAtMost(9)
+        }
+        Span({ classes("w-4 text-center text-sm font-medium"); testTag("priority-${vessel.id}") }) {
+            Text(vessel.priority.toString())
+        }
+        Stepper(Icon.CHEVRON_DOWN, "priority-down-${vessel.id}") {
+            vessel.priority = (vessel.priority - 1).coerceAtLeast(0)
+        }
     }
 }
 
+@Composable
+private fun Stepper(icon: Icon, tag: String, onPress: () -> Unit) {
+    Button({
+        classes("rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground")
+        testTag(tag)
+        // The row navigates on click; a button inside it must not also do that.
+        on("click", ListenerSpec(stopPropagation = true)) { onPress() }
+    }) { Icon(icon, "h-3 w-3") }
+}
+
 /**
- * Paging controls.
+ * The eleven per-row actions.
  *
- * The original virtualizes instead — it holds every vessel and renders the visible window. That
- * cannot be done from a server that has no idea where the scroll bar is, so this pages. See
- * FINDINGS.md.
+ * Five of them toggle the flags that tint the row; two carry counts; the rest stand in for dialogs
+ * the replica does not open. Every one has a `title`, which is the honest fallback for a tooltip —
+ * see FINDINGS.md.
  */
 @Composable
-private fun Pager(
-    result: VesselPage,
-    go: (String, SortKey, Boolean, Int, Boolean) -> Unit,
-) {
-    Div({ classes("pager") }) {
-        Span({ classes("pager-text"); testTag("pager-text") }) {
-            Text("${result.firstShown}–${result.lastShown} of ${result.total}")
-        }
-        Div({ classes("pager-buttons") }) {
-            Button({
-                classes("pager-button")
-                testTag("prev")
-                disabled(result.page == 0)
-                onClick { go("", SortKey.PRIORITY, true, result.page - 1, false) }
-            }) { Text("Previous") }
-            Span({ classes("pager-page"); testTag("page-of") }) {
-                Text("Page ${result.page + 1} of ${result.pageCount}")
-            }
-            Button({
-                classes("pager-button")
-                testTag("next")
-                disabled(result.page >= result.pageCount - 1)
-                onClick { go("", SortKey.PRIORITY, true, result.page + 1, false) }
-            }) { Text("Next") }
+private fun ActionsCell(vessel: Vessel) {
+    Div({ classes("grid grid-cols-6 gap-0.5") }) {
+        FlagAction(vessel, VesselFlag.CONSTRUCTION, Icon.CONSTRUCTION, "text-orange-600")
+        FlagAction(vessel, VesselFlag.MAINTENANCE, Icon.WRENCH, "text-purple-600")
+        FlagAction(vessel, VesselFlag.ALERT, Icon.BELL, "text-red-600")
+        FlagAction(vessel, VesselFlag.EMERGENCY, Icon.ALERT_CIRCLE, "text-red-600")
+        FlagAction(vessel, VesselFlag.DISABLED, Icon.EYE_OFF, "text-gray-600")
+        Badged(Icon.NOTEBOOK_TEXT, "Notes", vessel.noteCount, "bg-blue-600")
+        Badged(Icon.CLIPBOARD_LIST, "Tickets", vessel.openTicketCount, "bg-red-600")
+        InertAction(Icon.MAP_PIN, "Show on map")
+        InertAction(Icon.PHONE, "Contact")
+        InertAction(Icon.SETTINGS, "Settings")
+        InertAction(Icon.EXTERNAL_LINK, "Open in InControl")
+    }
+}
+
+@Composable
+private fun FlagAction(vessel: Vessel, flag: VesselFlag, icon: Icon, activeColour: String) {
+    val on = FleetStore.isSet(vessel, flag)
+    Button({
+        classes(
+            if (on) "rounded border border-border bg-accent p-1 $activeColour"
+            else "rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground",
+        )
+        attr("title", flag.label)
+        testTag("flag-${flag.name.lowercase()}-${vessel.id}")
+        on("click", ListenerSpec(stopPropagation = true)) { FleetStore.toggle(vessel, flag) }
+    }) { Icon(icon, "h-3.5 w-3.5") }
+}
+
+@Composable
+private fun Badged(icon: Icon, title: String, count: Int, badgeColour: String) {
+    Div({ classes("relative") }) {
+        Button({
+            classes("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground")
+            attr("title", title)
+            on("click", ListenerSpec(stopPropagation = true)) { }
+        }) { Icon(icon, "h-3.5 w-3.5") }
+        if (count > 0) {
+            Span({
+                classes("absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold text-white $badgeColour")
+            }) { Text(count.toString()) }
         }
     }
 }
 
-private fun rowClass(vessel: Vessel): String = when {
-    vessel.emergency || vessel.alert -> "row row-alert"
-    vessel.construction -> "row row-construction"
-    vessel.disabled -> "row row-disabled"
-    else -> "row"
-}
-
-private fun DeviceStatus?.dotClass(): String = when {
-    this == null -> "unknown"
-    online -> "online"
-    else -> "offline"
-}
-
-private fun VesselFlag.glyph(): String = when (this) {
-    VesselFlag.CONSTRUCTION -> "⚒"
-    VesselFlag.MAINTENANCE -> "⚙"
-    VesselFlag.ALERT -> "⚠"
-    VesselFlag.EMERGENCY -> "!"
-    VesselFlag.DISABLED -> "⊘"
+@Composable
+private fun InertAction(icon: Icon, title: String) {
+    Button({
+        classes("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground")
+        attr("title", title)
+        on("click", ListenerSpec(stopPropagation = true)) { }
+    }) { Icon(icon, "h-3.5 w-3.5") }
 }
 
 /**
- * Builds the fleet URL from the state that belongs in it.
+ * The row's tint, straight from the original's `rowClass`.
+ *
+ * Whole class strings rather than assembled ones, and for the same reason the original writes them
+ * that way: Tailwind reads its class names out of this file, and one built at runtime is not there
+ * to be read.
+ */
+private fun rowClass(vessel: Vessel): String = when {
+    vessel.emergency || vessel.alert -> "cursor-pointer border-b border-border bg-red-50 border-l-4 border-l-red-400 hover:bg-red-100"
+    vessel.construction -> "cursor-pointer border-b border-border bg-orange-50 border-l-4 border-l-orange-400 hover:bg-orange-100"
+    vessel.disabled -> "cursor-pointer border-b border-border bg-gray-200 opacity-70 hover:bg-gray-300"
+    else -> "cursor-pointer border-b border-border hover:bg-gray-50"
+}
+
+/**
+ * The fleet URL, carrying the sort and nothing else.
  *
  * Written out by hand because there is nothing in the framework for "the current URL with one
- * parameter changed", which is the only operation a page like this ever wants. See FINDINGS.md.
+ * parameter changed", which is the only URL operation a page like this ever wants. See FINDINGS.md.
  */
-internal fun fleetUrl(query: String, sort: SortKey, ascending: Boolean, page: Int): String {
+internal fun fleetUrl(sort: SortKey, ascending: Boolean): String {
     val parts = buildList {
-        if (query.isNotBlank()) add("q=$query")
         if (sort != SortKey.PRIORITY) add("sort=${sort.param}")
         if (!ascending) add("dir=desc")
-        if (page > 0) add("page=$page")
     }
     return if (parts.isEmpty()) "/" else "/?" + parts.joinToString("&")
 }
