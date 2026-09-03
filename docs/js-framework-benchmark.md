@@ -89,8 +89,13 @@ Retained heap per live session:
 | after 5 create/clear cycles | 0 | 4.9 MB |
 | after creating 10,000 rows | 10,000 | 100.0 MB |
 
-First paint, server-rendered: 0.34 ms and 1.7 kB for an empty table, 8.76 ms and 435.1 kB for a
-thousand rows.
+A cold request, composing the page and then writing it out — both halves on the clock, with the rows
+in the store before the composition starts:
+
+| page | compose | write html | total | html |
+|---|---|---|---|---|
+| empty table | 1.92 ms | 0.52 ms | 2.44 ms | 1.7 kB |
+| 1,000 rows | 21.15 ms | 3.15 ms | 24.30 ms | 435.1 kB |
 
 And the scaling sweep, which is the part the published benchmark has no equivalent of:
 
@@ -102,6 +107,44 @@ And the scaling sweep, which is the part the published benchmark has no equivale
 | 2,000 | 398.36 | 3525.62 | 3465.83 | 2.83 | 200 |
 | 4,000 | 1460.02 | 13772.87 | 13897.19 | 3.85 | 400 |
 | **per doubling** | **×3.0** | **×4.0** | **×4.0** | **×1.5** | ×2 |
+
+## Where the time goes
+
+Three measurements place it, and none of them point here:
+
+- Turning op recording off — `LiveView.clientDetached()`, which removes the `toSpec()` deep copy of
+  every inserted subtree and the op buffer with it — moves `create rows` from 133.9 ms to 136.3 and
+  `swap rows` from 720.7 to 728.4. Inside the noise. The whole of this framework's contribution to an
+  update is free relative to what surrounds it.
+- JSON encoding is 7% of a patch. Writing 435 kB of HTML takes 3.15 ms.
+- The same thousand rows cost 21 ms composed from scratch and ~93 ms added to a live page.
+
+So the expensive thing is Compose reconciling the children of a keyed group that has a thousand of
+them. Compose's own UI never does that — a `LazyColumn` composes only what is on screen — so the
+path was never under pressure to handle a table rendered whole.
+
+An application can shrink the group without any framework change, by nesting the rows in groups of a
+fixed size. `CHUNK=50` does that here; the default is the single group the benchmark is written
+against, so the numbers above are unaffected.
+
+| operation | one group | groups of 50 | | ops, one group | ops, groups of 50 |
+|---|---|---|---|---|---|
+| create rows | 99.66 | 29.66 | ×3.4 | 1,000 ins | 1,000 ins |
+| replace all rows | 143.39 | 115.17 | ×1.2 | 2,000 | 2,000 |
+| partial update | 1.15 | 1.17 | ×1.0 | 100 text | 100 text |
+| select row | 0.73 | 0.79 | ×0.9 | 2 attr | 2 attr |
+| swap rows | 851.98 | 63.12 | ×13.5 | 2 mv · 139 B | 2 ins + 2 rm · 1.5 kB |
+| remove row | 837.55 | 636.24 | ×1.3 | 1 rm · 80 B | 19 ins + 20 rm · 13.8 kB |
+| create many rows | 3738.64 | 519.57 | ×7.2 | 10,000 ins | 10,000 ins |
+| append to large table | 103.04 | 37.57 | ×2.7 | 1,000 ins | 1,000 ins |
+| clear rows | 7.45 | 6.68 | ×1.1 | 1,000 rm · 42.0 kB | 20 rm · 919 B |
+
+It is a trade rather than a fix. Swapping goes from quadratic to linear (×2.0 per doubling instead
+of ×4.0) and clearing collapses to one op per group, but rows now cross group boundaries: a swap
+rebuilds two rows instead of moving them, and a removal shifts every row behind it into the next
+group — which is why removal barely improves, stays quadratic, and sends 172 times the bytes. A
+scheme keying groups by their contents rather than by position ought to avoid the shifting; that is
+a guess, not a result.
 
 ## A note on warmup
 
