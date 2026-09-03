@@ -144,10 +144,19 @@ public class SessionRegistry(
      * application derives from them. On a restore that matters: the principal has to be recomputed
      * from the new connection rather than trusted from a snapshot that may be minutes old.
      *
+     * It is a function because most attaches never need it. A socket reconnecting to a composition
+     * that is still up keeps the context it already has, and computing one to discard would run the
+     * application's `attributes` factory — a database or directory lookup, for all this knows — on
+     * every reconnect, for nothing.
+     *
      * [url] is where the client says it is, which beats the snapshot's idea of where the session
      * was: the user may have used the back button while disconnected.
      */
-    public suspend fun attach(token: String, base: RequestContext, url: String?): JetlinSession? {
+    public suspend fun attach(
+        token: String,
+        base: suspend () -> RequestContext,
+        url: String?,
+    ): JetlinSession? {
         sessions[token]?.let { live ->
             if (live.attached) return null
             live.attached = true
@@ -169,7 +178,7 @@ public class SessionRegistry(
 
         val restored = JetlinSession(
             token = token,
-            view = LiveView(base.forUrl(url ?: snapshot.url), framePolicy, snapshot.state, exposeTestTags, content),
+            view = LiveView(base().forUrl(url ?: snapshot.url), framePolicy, snapshot.state, exposeTestTags, content),
             // Composed afresh, so its node ids bear no relation to the data-jl values in whatever
             // markup the browser is still holding. It has to be sent the tree.
             adoptable = false,

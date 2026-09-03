@@ -142,11 +142,17 @@ public class JetlinConfig {
     }
 
     /**
-     * Computes session-scoped values from the originating HTTP call, once per session.
+     * Computes session-scoped values from the originating HTTP call.
      *
      * This is where an authenticated principal, tenant or locale enters the composition; the values
      * are read back through [RequestContext.get] with the keys the application declared. It runs on
      * the HTTP call because that is the only point at which Ktor's call context still exists.
+     *
+     * Once when the page is rendered, and once more only if a socket wakes a hibernated session —
+     * there the principal has to be recomputed from the connection that arrived rather than trusted
+     * from a snapshot that may be minutes old. A socket reattaching to a composition that is still
+     * running does not call it: that session already has its context. So the factory may do real
+     * work, but it should be idempotent, since a woken session runs it a second time.
      */
     public fun attributes(factory: suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>) {
         attributeFactory = factory
@@ -277,7 +283,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             val hello = receiveMessage() as? ClientMessage.Hello ?: return@webSocket
             // The socket's own request supplies headers and any attributes derived from them, so a
             // session woken from storage recomputes its principal instead of trusting a stale one.
-            val session = registry.attach(hello.token, call.toRequestContext(config), hello.url)
+            val session = registry.attach(hello.token, { call.toRequestContext(config) }, hello.url)
             if (session == null) {
                 sendMessage(ServerMessage.Error("Unknown or already-attached session", fatal = true))
                 return@webSocket

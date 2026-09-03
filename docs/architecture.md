@@ -355,8 +355,11 @@ fun TodoDetailPage() {
 ```
 
 `RequestContext` carries the path, path parameters, query and headers. Application-specific values —
-a principal, a tenant, a locale — enter through `AttributeKey`, computed once per session from the
-originating HTTP call, which avoids threading a type parameter through the whole configuration DSL.
+a principal, a tenant, a locale — enter through `AttributeKey`, computed from the originating HTTP
+call, which avoids threading a type parameter through the whole configuration DSL. That happens when
+the page is rendered, and again only when a socket wakes a hibernated session, where the principal
+has to be recomputed rather than trusted from a snapshot; a socket reattaching to a composition that
+is still running keeps the context it has.
 
 Because `Link` is a real anchor, it works without JavaScript: middle-click and "open in new tab"
 behave normally, crawlers follow it, and with scripting disabled it falls back to a plain request
