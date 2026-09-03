@@ -5,7 +5,6 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlin.random.Random
-import kotlinx.coroutines.delay
 
 /**
  * A vessel as the fleet list needs it.
@@ -44,6 +43,28 @@ class Vessel(
     var emergency: Boolean by mutableStateOf(emergency)
     var priority: Int by mutableStateOf(priority)
     var progress: Int by mutableStateOf(progress)
+
+    /**
+     * The device serial and LAN gateway the fleet list prints in small type under the name.
+     *
+     * Derived from the id rather than stored, so they are stable across a restart without a table to
+     * keep them in. The shape follows the real hardware's: a batch number, then two hex groups.
+     */
+    val serial: String
+        get() {
+            val random = Random(id.hashCode())
+            val batch = listOf(1931, 1933, 1936).random(random)
+            fun group() = (0..3).joinToString("") { "0123456789ABCDEF"[random.nextInt(16)].toString() }
+            return "$batch-${group()}-${group()}"
+        }
+
+    val lanIp: String
+        get() {
+            val random = Random(id.hashCode() * 31)
+            // A handful of vessels sit on a 192.168 network instead, as they do in the original.
+            return if (random.nextInt(12) == 0) "192.168.${random.nextInt(1, 200)}.1"
+            else "10.${random.nextInt(50, 120)}.0.1"
+        }
 
     /**
      * Ordering by severity, applied before whatever column the user sorted by.
@@ -95,18 +116,6 @@ enum class SortKey(val param: String) {
     }
 }
 
-/** One page of a query against the fleet, plus what the query would have returned in total. */
-class VesselPage(
-    val vessels: List<Vessel>,
-    val total: Int,
-    val page: Int,
-    val pageSize: Int,
-) {
-    val pageCount: Int get() = if (total == 0) 1 else (total + pageSize - 1) / pageSize
-    val firstShown: Int get() = if (total == 0) 0 else page * pageSize + 1
-    val lastShown: Int get() = minOf(total, (page + 1) * pageSize)
-}
-
 /** What the original reads from Peplink, per device: whether it is up, and how it is doing. */
 class DeviceStatus(val online: Boolean, val uptimeSeconds: Long, val clients: Int)
 
@@ -123,16 +132,17 @@ class UsageStatus(val usedGb: Double, val planGb: Double) {
 /**
  * Stands in for the database and the three external services the real pages call.
  *
- * Deliberately shaped like the API rather than like the view. `page(...)` filters, sorts and slices
- * here and hands back only the rows asked for plus a total, exactly as a paginated endpoint would.
- * Letting the view hold every vessel and filter it itself would have been less code and would have
- * skipped the part worth testing, which is a page that never has the whole dataset.
+ * Deliberately shaped like the API rather than like the view: `list(...)` filters and sorts here
+ * rather than handing the page a collection to sift through itself.
+ *
+ * It returns everything that matches, with no paging and no windowing. The original virtualizes the
+ * table instead — 52-pixel rows, eight of overscan — which a server cannot do, because a server
+ * cannot see the scroll position. So this renders all of it, and the cost of that is a number in
+ * FINDINGS.md rather than an argument.
  */
 object FleetStore {
 
-    const val PAGE_SIZE = 12
-
-    val organizationName: String = "Northern Star Marine"
+    val organizationName: String = "Northern Offshore Services"
 
     private val vessels = mutableStateListOf<Vessel>()
 
@@ -156,7 +166,7 @@ object FleetStore {
      * stays visible whatever anybody sorted by. Name breaks every remaining tie, which keeps the
      * order stable and therefore keeps the keyed rows meaningful across a re-sort.
      */
-    fun page(query: String, sort: SortKey, ascending: Boolean, page: Int): VesselPage {
+    fun list(query: String, sort: SortKey, ascending: Boolean): List<Vessel> {
         val needle = query.trim().lowercase()
         val matching = if (needle.isEmpty()) {
             vessels.toList()
@@ -179,15 +189,7 @@ object FleetStore {
                 .thenByDescending { if (sort == SortKey.NAME && direction < 0) it.name else "" },
         )
 
-        val safePage = page.coerceAtLeast(0)
-        val from = (safePage * PAGE_SIZE).coerceAtMost(maxOf(0, sorted.size - 1))
-        val to = minOf(sorted.size, from + PAGE_SIZE)
-        return VesselPage(
-            vessels = if (sorted.isEmpty()) emptyList() else sorted.subList(from, to),
-            total = sorted.size,
-            page = safePage,
-            pageSize = PAGE_SIZE,
-        )
+        return sorted
     }
 
     fun toggle(vessel: Vessel, flag: VesselFlag) {
@@ -229,27 +231,8 @@ object FleetStore {
     fun usage(vessel: Vessel): UsageStatus? {
         if (vessel.starlinkDataSource == null && vessel.kvhTerminalId == null) return null
         val random = Random(vessel.id.hashCode())
-        val plan = listOf(500.0, 1_000.0, 2_000.0, 5_000.0).random(random)
-        return UsageStatus(usedGb = random.nextDouble(10.0, plan * 1.05), planGb = plan)
-    }
-
-    /**
-     * Stands in for a call that leaves the process.
-     *
-     * The delay is the point: the original's detail page shows loading states while Peplink and
-     * Starlink answer, and a fake that returns instantly would render a page that never has one.
-     */
-    suspend fun slowLookup(vessel: Vessel): List<Pair<String, String>> {
-        delay(600)
-        val device = deviceStatus(vessel)
-        return listOfNotNull(
-            "Serial" to "PEP-${vessel.id.uppercase()}",
-            "Firmware" to "8.5.1 build 5407",
-            device?.let { "Uptime" to formatUptime(it.uptimeSeconds) },
-            device?.let { "Connected clients" to it.clients.toString() },
-            vessel.starlinkServiceLineNumber?.let { "Service line" to it },
-            vessel.kvhTerminalId?.let { "KVH terminal" to it },
-        )
+        val plan = listOf(50.0, 100.0, 150.0, 250.0).random(random)
+        return UsageStatus(usedGb = random.nextDouble(0.5, plan * 0.55), planGb = plan)
     }
 
     /** Puts the fleet back to its seeded state, so browser tests start from a known list. */
@@ -263,14 +246,14 @@ object FleetStore {
                 name = name,
                 peplinkGroupId = if (hasPeplink) 4000 + index else null,
                 peplinkMainDeviceId = if (hasPeplink) 90_000 + index else null,
-                starlinkDataSource = if (index % 3 == 0) "starlink" else null,
-                kvhTerminalId = if (index % 3 == 1) "KVH-${8000 + index}" else null,
-                starlinkServiceLineNumber = if (index % 3 == 0) "SL-${500_000 + index}" else null,
-                alert = index % 11 == 0,
-                construction = index % 13 == 0,
+                starlinkDataSource = if (index % 9 != 4) "starlink" else null,
+                kvhTerminalId = if (index % 9 == 4) "KVH-${8000 + index}" else null,
+                starlinkServiceLineNumber = if (index % 9 != 4) "SL-${500_000 + index}" else null,
+                alert = index % 31 == 0,
+                construction = index % 5 == 0,
                 maintenance = index % 9 == 0,
                 disabled = index % 29 == 0,
-                emergency = index % 37 == 0,
+                emergency = index % 53 == 0,
                 priority = random.nextInt(0, 6),
                 progress = listOf(0, 15, 30, 45, 60, 75, 90, 100).random(random),
                 openTicketCount = if (index % 4 == 0) random.nextInt(1, 9) else 0,
