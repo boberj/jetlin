@@ -137,6 +137,9 @@ has the full design: the update path, the protocol, sessions, input handling, de
 file uploads, and it runs on one node.
 [`docs/comparison.md`](docs/comparison.md) sets it against Phoenix LiveView, Livewire, Blazor Server
 and others, including where it is behind.
+[`docs/js-framework-benchmark.md`](docs/js-framework-benchmark.md) runs the keyed
+js-framework-benchmark operations against it and says what they cost — including the one place the
+numbers are bad.
 
 Session state lives on the server, so per-session cost sets how many users a node can carry:
 
@@ -233,8 +236,9 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 210 unit tests, asserting exact op streams
+./gradlew test                       # 222 unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
+./gradlew :samples:keyed-benchmark:keyedBenchmark    # js-framework-benchmark, keyed
 
 cd e2e && npm install && npx playwright test    # 36 browser tests (server must be running)
 ```
@@ -268,6 +272,7 @@ period.
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
 | `jetlin-testing` | Driving a view headlessly, for testing an application's own UI logic |
 | `samples/demo` | Runnable five-page demo and the memory benchmark |
+| `samples/keyed-benchmark` | The keyed [js-framework-benchmark](https://krausest.github.io/js-framework-benchmark/current.html) implementation, its op-level tests and its measurement harness |
 | `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
 
 ## CI
