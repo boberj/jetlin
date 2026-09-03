@@ -146,6 +146,64 @@ group — which is why removal barely improves, stays quadratic, and sends 172 t
 scheme keying groups by their contents rather than by position ought to avoid the shifting; that is
 a guess, not a result.
 
+### Why removing one row costs most of a second
+
+Black-box timings say "reconciliation"; a profiler says which frames. Forty seconds of removals under
+JFR, 3,501 execution samples, and 92% of them are in two methods:
+
+| | share of samples |
+|---|---|
+| `SlotWriter.fixParentAnchorsFor` | 58.4% |
+| `SlotWriter.moveGroupGapTo` | 34.0% |
+| `SlotTableKt.updateParentAnchor` | 2.0% |
+
+Both sit under `SlotWriter.moveGroup`, reached through `removeGroups` (18%) and `insertGroups` (16%).
+
+Compose's slot table is a gap buffer. Relocating a group means moving the gap to it — an arraycopy —
+and then walking the moved subtree rewriting the parent anchor of every group in it, recursively.
+That is fine once. It is not fine per surviving sibling, and removing the row at index 3 of a
+thousand leaves 996 siblings whose slot positions have all shifted. One `Remove(tbody, 3, 1)` op
+reaches the browser; the second before it is spent inside the slot table.
+
+The cost model that falls out of it is `rows × total groups`, not `rows` alone. Holding the row count
+at a thousand and varying only the markup inside each row:
+
+| nodes in the table | remove one row |
+|---|---|
+| 3,002 | 131.7 ms |
+| 5,002 | 208.2 ms |
+| 9,002 | 413.6 ms |
+| 17,002 | 892.3 ms |
+
+Roughly linear in nodes at a fixed row count, and quadratic in rows at fixed nodes per row. So markup
+per row is a plain multiplier — the benchmark's row is eight nodes and its markup is fixed by the
+rules, but an application's is not.
+
+To reproduce: `./gradlew :samples:keyed-benchmark:installDist`, then
+
+```bash
+OP=remove SECONDS=40 java -XX:StartFlightRecording=duration=45s,filename=remove.jfr,settings=profile \
+  -cp 'samples/keyed-benchmark/build/install/keyed-benchmark/lib/*' jetlin.samples.keyed.ProfileKt
+jfr print --events jdk.ExecutionSample remove.jfr
+```
+
+### What does not fix it
+
+Three things were tried and measured rather than assumed:
+
+- **A newer Compose runtime.** The obvious lever, and still blocked. `org.jetbrains.compose.runtime`
+  POMs resolve from Maven Central up to 1.12.0 and 1.8.2 even compiles, but its *runtime* classpath
+  wants `androidx.annotation` and `androidx.collection`, which are published only to Google's Maven.
+  The note at the bottom of the README is accurate.
+- **`@NonRestartableComposable` on `Element` and `Text`**, to cut a restart group per element. It made
+  things worse: swap 648 → 795 ms, remove 661 → 786 ms, on the same page. The node groups that
+  dominate slot movement are still there, and the restart scopes were paying for themselves.
+- **Chunking**, covered above: 13.5× on swap, 1.3× on removal, because index-based groups shift.
+
+What is left is either a Compose fix or not composing the whole table — the same answer
+`LazyColumn` is on Android. A server-side framework rendering a thousand rows into one composition
+has no equivalent of it today, and windowing the rows is the shape the fix would take.
+
 ## A note on warmup
 
 The benchmark's own warmup clicks exercise the operation but not the JVM. One `#run` click runs the
