@@ -90,6 +90,12 @@ enum class State { UP, DEGRADED, IDLE }
 /** A row in ROUTING or VLANS: a name, the VLAN it is on, and a network. */
 class NetRow(val name: String, val vlan: Int, val gateway: String, val cidr: String)
 
+/** A port chip in NOTES & PORTS: its label (`W1`, `1`, …) and its link state. */
+class Port(val label: String, val state: PortState)
+
+/** Whether a port's chip is green (link up), red (enabled but down) or grey (disabled). */
+enum class PortState { LINK_UP, ENABLED, DISABLED }
+
 /** The SPEEDFUSION VPN block: a peer and the tunnels under it. */
 class Peer(val name: String, val links: List<Link>) {
     val connected: Int get() = links.count { it.connected }
@@ -122,7 +128,7 @@ class VesselDetail(
     val service: List<Pair<String, String>>,
     val tags: List<String>,
     val note: String?,
-    val ports: List<String>,
+    val ports: List<Port>,
     val licences: List<Licence>,
     val connections: List<Connection>,
     val starlink: List<Pair<String, String>>,
@@ -218,7 +224,12 @@ fun FleetStore.describe(vessel: Vessel): VesselDetail {
         ),
         tags = listOf("map-marker-yacht", "#star", "GEO", "Offshore", "TRANSIT", "api", "GEOFENCE", "sea"),
         note = if (random.nextInt(3) == 0) "Crew reported intermittent VOIP drops on the bridge." else null,
-        ports = listOf("W1", "1", "2", "3"),
+        ports = listOf(
+            Port("W1", PortState.LINK_UP),
+            Port("1", PortState.LINK_UP),
+            Port("2", PortState.ENABLED),
+            Port("3", PortState.DISABLED),
+        ),
         licences = listOf(
             Licence("SpeedFusion Cloud Activation by Sales Registration", "2025-11-17", "10 months ago"),
             Licence(

@@ -67,7 +67,7 @@ fun VesselPage() {
         }
     }
 
-    Div({ classes("container mx-auto px-4 py-6") }) {
+    Div({ classes("container mx-auto space-y-6 p-6") }) {
         BackToFleet()
         VesselHeader(vessel)
 
@@ -191,8 +191,8 @@ private fun Blocks(vessel: Vessel, detail: VesselDetail, telemetry: Telemetry) {
         ThroughputBlock(detail, telemetry)
         MapBlock(detail)
         ConnectionsBlock(detail, telemetry)
-        NetworkBlock("Routing", "block-routing", detail.routing, showCidr = true)
-        NetworkBlock("VLANs", "block-vlans", detail.vlans, showCidr = false)
+        RoutingBlock(detail.routing)
+        VlansBlock(detail.vlans)
         SpeedFusionBlock(detail)
         DataUsageBlock(vessel, detail)
     }
@@ -222,37 +222,37 @@ private fun StatusBlock(detail: VesselDetail, telemetry: Telemetry) {
 @Composable
 private fun NotesAndPortsBlock(detail: VesselDetail) {
     Block("Notes & Ports", "col-span-12 lg:col-span-4", "block-notes") {
-        Div({ classes("flex items-center justify-between") }) {
-            SubHeading("Note")
-            Span({ classes("flex items-center gap-1 text-xs text-blue-600 hover:underline") }) {
-                Icon(Icon.PENCIL, "h-3 w-3")
-                Text("Add")
-            }
-        }
-        Div({ classes("mt-1 rounded-md border border-border bg-background px-3 py-2 text-sm") }) {
-            if (detail.note == null) {
-                Span({ classes("italic text-muted-foreground") }) { Text("No note") }
-            } else {
-                Span { Text(detail.note) }
-            }
-        }
-
-        Div({ classes("mt-4") }) { SubHeading("Ports") }
-        Div({ classes("mt-1.5 flex gap-1.5") }) {
-            detail.ports.forEach { port ->
-                Span({ classes("flex h-7 min-w-7 items-center justify-center rounded border border-green-300 bg-green-50 px-1 text-[11px] font-semibold text-green-700") }) {
-                    Text(port)
+        Div({ classes("space-y-4") }) {
+            Div {
+                Div({ classes("mb-1 flex items-center justify-between gap-2") }) {
+                    SubHeading("Note")
+                    Span({ classes("flex items-center gap-1 rounded text-xs text-muted-foreground transition-colors hover:text-foreground") }) {
+                        Icon(Icon.PENCIL, "h-3 w-3")
+                        Text(if (detail.note == null) "Add" else "Edit")
+                    }
+                }
+                if (detail.note == null) {
+                    Div({ classes("rounded-md bg-muted/50 p-2 text-xs italic text-muted-foreground") }) { Text("No note") }
+                } else {
+                    Div({ classes("whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs text-foreground") }) { Text(detail.note) }
                 }
             }
-        }
 
-        Div({ classes("mt-4") }) { SubHeading("Applied licenses") }
-        Div({ classes("mt-1.5 space-y-2") }) {
-            detail.licences.forEach { licence ->
-                Div {
-                    Div({ classes("text-sm leading-snug") }) { Text(licence.name) }
-                    Div({ classes("text-xs text-muted-foreground") }) {
-                        Text("${licence.relative} (${licence.granted})")
+            Div {
+                Div({ classes("mb-1.5") }) { SubHeading("Ports") }
+                PortChips(detail.ports)
+            }
+
+            Div {
+                Div({ classes("mb-1") }) { SubHeading("Applied licenses") }
+                Div({ classes("space-y-1") }) {
+                    detail.licences.forEach { licence ->
+                        Div({ classes("text-xs") }) {
+                            Div({ classes("text-foreground") }) { Text(licence.name) }
+                            Div({ classes("text-muted-foreground") }) {
+                                Text("${licence.relative} (${licence.granted})")
+                            }
+                        }
                     }
                 }
             }
@@ -261,26 +261,53 @@ private fun NotesAndPortsBlock(detail: VesselDetail) {
 }
 
 @Composable
+private fun PortChips(ports: List<Port>) {
+    Div({ classes("flex flex-wrap gap-1.5") }) {
+        ports.forEach { port ->
+            Span({ classes(portChipClasses(port.state)) }) { Text(port.label) }
+        }
+    }
+}
+
+private fun portChipClasses(state: PortState): String = when (state) {
+    PortState.LINK_UP -> "flex h-7 min-w-[28px] items-center justify-center rounded border border-green-600/40 bg-green-600/15 px-1 text-[11px] font-semibold text-green-700"
+    PortState.ENABLED -> "flex h-7 min-w-[28px] items-center justify-center rounded border border-red-500/40 bg-red-500/10 px-1 text-[11px] font-semibold text-red-600"
+    PortState.DISABLED -> "flex h-7 min-w-[28px] items-center justify-center rounded border border-border bg-muted px-1 text-[11px] font-semibold text-muted-foreground"
+}
+
+@Composable
 private fun ThroughputBlock(detail: VesselDetail, telemetry: Telemetry) {
     Block("Speed & data transfer", "col-span-12 lg:col-span-4", "block-throughput") {
-        Div({ classes("flex items-baseline justify-between") }) {
-            SubHeading("Bandwidth")
-            Span({ classes("text-xs text-muted-foreground") }) { Text("last 10 min") }
-        }
-        Div({ classes("mt-1 flex items-baseline gap-4 text-sm") }) {
-            Span({ classes("text-muted-foreground") }) { Text("Download ") }
-            Span({ classes("font-semibold"); testTag("download") }) { Text("${telemetry.downMbps} Mbps") }
-            Span({ classes("text-muted-foreground") }) { Text("Upload ") }
-            Span({ classes("font-semibold"); testTag("upload") }) { Text("${telemetry.upMbps} Mbps") }
-        }
-        BandwidthChart(telemetry)
+        Div({ classes("flex flex-col gap-5") }) {
+            Div {
+                Div({ classes("mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1") }) {
+                    Div {
+                        Span({ classes("text-xs font-medium uppercase tracking-wider text-muted-foreground") }) { Text("Bandwidth") }
+                        Span({ classes("ml-2 text-xs text-muted-foreground") }) { Text("last 10 min") }
+                    }
+                    Div({ classes("flex flex-wrap gap-x-4 gap-y-1 text-xs") }) {
+                        Span({ classes("text-muted-foreground") }) { Text("Download ") }
+                        Span({ classes("font-semibold tabular-nums text-foreground"); testTag("download") }) {
+                            Text("${telemetry.downMbps} Mbps")
+                        }
+                        Span({ classes("text-muted-foreground") }) { Text("Upload ") }
+                        Span({ classes("font-semibold tabular-nums text-foreground"); testTag("upload") }) {
+                            Text("${telemetry.upMbps} Mbps")
+                        }
+                    }
+                }
+                BandwidthChart(telemetry)
+            }
 
-        Div({ classes("mt-5 flex items-baseline justify-between") }) {
-            SubHeading("Data usage per hour")
-            Span({ classes("text-xs text-muted-foreground") }) { Text("last 3 days") }
+            Div {
+                Div({ classes("mb-1 flex items-baseline justify-between") }) {
+                    SubHeading("Data usage per hour")
+                    Span({ classes("text-xs text-muted-foreground") }) { Text("last 3 days") }
+                }
+                HourlyChart(detail.hours)
+                Legend()
+            }
         }
-        HourlyChart(detail.hours)
-        Legend()
     }
 }
 
@@ -397,8 +424,8 @@ private fun Legend() {
  */
 @Composable
 private fun MapBlock(detail: VesselDetail) {
-    Block("Map", "col-span-12 lg:col-span-8", "block-map") {
-        Div({ classes("relative") }) {
+    Block("Map", "col-span-12 lg:col-span-8", "block-map", showHeader = false) {
+        Div({ classes("relative min-h-[160px]") }) {
             ClientComponent(
                 name = "vessel-map",
                 props = buildJsonObject {
@@ -407,26 +434,36 @@ private fun MapBlock(detail: VesselDetail) {
                     put("zoom", 6)
                 },
                 attrs = {
-                    classes("h-80 w-full overflow-hidden rounded-md border border-border bg-muted")
+                    classes("isolate h-80 min-h-[160px] w-full overflow-hidden rounded-lg border border-border bg-muted")
                     testTag("map")
                 },
                 onEvent = { _, _ -> },
             )
-            Div({ classes("pointer-events-none absolute left-3 top-3 z-[800] flex items-center gap-1.5 rounded-md bg-card/90 px-2 py-1 text-xs shadow") }) {
-                Span({ classes("text-muted-foreground") }) { Text("Current geofence") }
-                detail.geofences.forEach { fence ->
-                    Span({ classes("rounded border border-border bg-background px-1.5 py-0.5") }) { Text(fence) }
+            if (detail.geofences.isNotEmpty()) {
+                Div({
+                    classes(
+                        "absolute left-14 top-3 z-[500] flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-card/90 px-2 py-1 text-sm shadow-sm backdrop-blur",
+                    )
+                }) {
+                    Span({ classes("text-muted-foreground") }) { Text("Current geofence") }
+                    detail.geofences.forEach { fence ->
+                        Badge("border-transparent bg-secondary text-secondary-foreground") { Text(fence) }
+                    }
                 }
             }
-            Div({ classes("mt-2 flex items-center justify-between") }) {
-                Span({ classes("flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-xs") }) {
-                    Icon(Icon.BELL, "h-3 w-3")
-                    Text("Geo e-mail alerts")
-                }
-                Span({ classes("rounded-md border border-border bg-card px-2 py-1 text-xs") }) {
-                    Text("View on map")
-                }
+            Button({
+                classes(
+                    "absolute bottom-3 left-3 z-[500] inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-card/95 px-4 text-sm font-medium text-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent",
+                )
+            }) {
+                Icon(Icon.BELL, "h-4 w-4")
+                Text("Geo e-mail alerts")
             }
+            Span({
+                classes(
+                    "absolute bottom-3 right-3 z-[500] inline-flex h-9 items-center justify-center rounded-lg border border-border bg-card/95 px-4 text-sm font-medium text-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent",
+                )
+            }) { Text("View on map") }
         }
     }
 }
@@ -434,23 +471,31 @@ private fun MapBlock(detail: VesselDetail) {
 @Composable
 private fun ConnectionsBlock(detail: VesselDetail, telemetry: Telemetry) {
     Block("Connections", "col-span-12", "block-connections") {
-        Div({ classes("grid grid-cols-1 gap-4 lg:grid-cols-3") }) {
+        Div({ classes("grid gap-3 sm:grid-cols-2 xl:grid-cols-3") }) {
             detail.connections.forEach { connection ->
-                Div({ classes("rounded-md border-l-2 border-border pl-3") }) {
+                val colour = stateColour(connection.state)
+                Div({
+                    classes("rounded-lg border border-l-4 border-border bg-card p-3 text-sm text-card-foreground")
+                    style("border-left-color: $colour")
+                }) {
                     Div({ classes("flex items-center justify-between gap-2") }) {
                         Div({ classes("flex items-center gap-2") }) {
-                            Span({ classes(dotClass(connection.state)) })
-                            Span({ classes("font-medium") }) { Text(connection.title) }
+                            Span({ classes("h-2.5 w-2.5 shrink-0 rounded-full"); style("background-color: $colour") })
+                            Span({ classes("font-medium text-foreground") }) { Text(connection.title) }
                         }
-                        Div({ classes("flex items-center gap-1") }) {
+                        Div({ classes("flex items-center gap-1.5") }) {
                             connection.pills.forEach { pill ->
-                                Span({ classes("rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-600") }) {
-                                    Text(pill)
+                                if (pill == "Roaming") {
+                                    Span({ classes("rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-600") }) {
+                                        Text(pill)
+                                    }
+                                } else {
+                                    Badge("border-transparent bg-secondary text-secondary-foreground") { Text(pill) }
                                 }
                             }
                         }
                     }
-                    Div({ classes("mt-2") }) {
+                    Div({ classes("mt-2 space-y-0.5") }) {
                         connection.rows.forEach { (label, value) -> MetricRow(label, value) }
                         if (connection.title == "Cellular") {
                             MetricRow(
@@ -476,54 +521,67 @@ private fun ConnectionsBlock(detail: VesselDetail, telemetry: Telemetry) {
 /** The dish, nested under WAN as the original nests it. Every number here is live. */
 @Composable
 private fun StarlinkPanel(telemetry: Telemetry) {
-    Div({ classes("mt-3 rounded-md border border-border bg-background p-3"); testTag("starlink") }) {
-        Div({ classes("flex items-center justify-between") }) {
+    Div({ classes("mt-2 space-y-0.5 border-t border-border pt-2"); testTag("starlink") }) {
+        Div({ classes("mb-1 flex items-center justify-between") }) {
             Span({ classes("flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground") }) {
-                Icon(Icon.SATELLITE, "h-3 w-3")
+                Icon(Icon.SATELLITE, "h-3.5 w-3.5")
                 Text("Starlink dish")
             }
-            Div({ classes("flex gap-1") }) {
-                Span({ classes("rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground") }) {
-                    Text("BUSINESS")
-                }
-                Span({ classes("rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700") }) {
-                    Text("Serving")
-                }
+            Div({ classes("flex items-center gap-1.5") }) {
+                Badge("text-foreground border-border") { Text("BUSINESS") }
+                Badge("border-transparent bg-green-600 text-white") { Text("Serving") }
             }
         }
-        Div({ classes("mt-2") }) {
-            MetricRow("Throughput", "↓ ${telemetry.downKbps} kbps · ↑ ${telemetry.upKbps} kbps")
-            MetricRow("Latency", "${telemetry.latencyMs} ms")
-            MetricRow("Obstruction", "%.2f%%".format(telemetry.obstructionPercent))
-            MetricRow("Dish uptime", formatUptime(telemetry.dishUptimeSeconds))
-            MetricRow("GPS", "Locked (${telemetry.satellites} sats)")
+        MetricRow("Throughput", "↓ ${telemetry.downKbps} kbps · ↑ ${telemetry.upKbps} kbps")
+        MetricRow("Latency", "${telemetry.latencyMs} ms")
+        MetricRow("Obstruction", "%.2f%%".format(telemetry.obstructionPercent))
+        MetricRow("Dish uptime", formatUptime(telemetry.dishUptimeSeconds))
+        MetricRow("GPS", "Locked (${telemetry.satellites} sats)")
+    }
+}
+
+private fun stateColour(state: State): String = when (state) {
+    State.UP -> "#16a34a"
+    State.DEGRADED -> "#f59e0b"
+    State.IDLE -> "var(--color-muted-foreground)"
+}
+
+/**
+ * The original groups routes by kind (WAN, LAN, SpeedFusion, OSPF) under their own uppercase
+ * sub-heading; this sample's fake routes are all LAN-side, so there is exactly one group.
+ */
+@Composable
+private fun RoutingBlock(rows: List<NetRow>) {
+    Block("Routing", "col-span-12 lg:col-span-4", "block-routing") {
+        Div({ classes("space-y-1.5") }) {
+            SubHeading("LAN")
+            Div({ classes("divide-y divide-border") }) {
+                rows.forEach { row ->
+                    Div({ classes("flex items-start justify-between gap-3 py-1 text-xs") }) {
+                        Span({ classes("flex items-center gap-2") }) {
+                            Span({ classes("font-medium text-foreground") }) {
+                                Text(row.name.ifEmpty { row.gateway })
+                            }
+                            Badge("text-foreground border-border") { Text("VLAN ${row.vlan}") }
+                        }
+                        Span({ classes("text-right font-mono text-xs text-muted-foreground") }) { Text(row.cidr) }
+                    }
+                }
+            }
         }
     }
 }
 
-private fun dotClass(state: State): String = when (state) {
-    State.UP -> "inline-block h-2 w-2 shrink-0 rounded-full bg-green-500"
-    State.DEGRADED -> "inline-block h-2 w-2 shrink-0 rounded-full bg-amber-500"
-    State.IDLE -> "inline-block h-2 w-2 shrink-0 rounded-full bg-gray-400"
-}
-
 @Composable
-private fun NetworkBlock(title: String, tag: String, rows: List<NetRow>, showCidr: Boolean) {
-    Block(title, "col-span-12 lg:col-span-4", tag) {
-        if (showCidr) Div({ classes("mb-1") }) { SubHeading("LAN") }
+private fun VlansBlock(rows: List<NetRow>) {
+    Block("VLANs", "col-span-12 lg:col-span-4", "block-vlans") {
         Div({ classes("divide-y divide-border") }) {
             rows.forEach { row ->
-                Div({ classes("flex items-center justify-between gap-2 py-1.5 text-sm") }) {
-                    Div({ classes("flex min-w-0 items-center gap-2") }) {
-                        if (row.name.isNotEmpty()) {
-                            Span({ classes("truncate") }) { Text(row.name) }
-                        }
-                        Span({ classes("shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground") }) {
-                            Text("VLAN ${row.vlan}")
-                        }
-                    }
-                    Span({ classes("shrink-0 font-mono text-xs text-muted-foreground") }) {
-                        Text(if (showCidr) row.cidr else row.gateway)
+                Div({ classes("flex items-center justify-between gap-3 py-1 text-xs") }) {
+                    Span({ classes("font-medium text-foreground") }) { Text(row.name.ifEmpty { row.gateway }) }
+                    Span({ classes("flex items-center gap-2") }) {
+                        Span({ classes("font-mono text-xs text-muted-foreground") }) { Text(row.gateway) }
+                        Badge("text-foreground border-border") { Text("VLAN ${row.vlan}") }
                     }
                 }
             }
@@ -575,46 +633,50 @@ private fun DataUsageBlock(vessel: Vessel, detail: VesselDetail) {
     val month = detail.months.firstOrNull { it.label == selected } ?: detail.months.last()
 
     Block("Data usage", "col-span-12", "block-data-usage") {
-        Div({ classes("text-sm text-muted-foreground") }) { Text("Total download this month") }
-        Div({ classes("text-4xl font-bold tracking-tight"); testTag("usage-total") }) {
-            Text("%.1f GB".format(month.totalGb))
-        }
-
-        Div({ classes("mt-4 flex flex-wrap gap-1") }) {
-            detail.months.forEach { candidate ->
-                val active = candidate.label == selected
-                Span({
-                    classes(
-                        if (active) "cursor-pointer rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground"
-                        else "cursor-pointer rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent",
-                    )
-                    testTag("month-${candidate.label.substringBefore(' ')}")
-                    onClick { selected = candidate.label }
-                }) { Text(candidate.label) }
-            }
-        }
-
-        Div({ classes("mt-4 flex gap-4") }) {
-            MonthChart(month)
-            Div({ classes("w-40 shrink-0 space-y-2 text-sm") }) {
-                Div({ classes("flex items-center justify-between") }) {
-                    Span({ classes("flex items-center gap-1.5") }) {
-                        Span({ classes("inline-block h-0.5 w-4 bg-orange-500") })
-                        Text("WAN")
-                    }
-                    Span({ classes("text-muted-foreground") }) { Text("%.1f GB".format(month.wanGb)) }
-                }
-                Div({ classes("flex items-center justify-between") }) {
-                    Span({ classes("flex items-center gap-1.5") }) {
-                        Span({ classes("inline-block h-0.5 w-4 bg-teal-600") })
-                        Text("Cellular")
-                    }
-                    Span({ classes("text-muted-foreground") }) { Text("%.1f GB".format(month.cellularGb)) }
+        Div({ classes("space-y-4") }) {
+            Div {
+                Div({ classes("text-sm text-muted-foreground") }) { Text("Total download this month") }
+                Div({ classes("text-3xl font-bold tabular-nums text-foreground"); testTag("usage-total") }) {
+                    Text("%.1f GB".format(month.totalGb))
                 }
             }
-        }
-        P({ classes("mt-4 text-xs text-muted-foreground") }) {
-            Text("Download usage per WAN, reported by InControl.")
+
+            Div({ classes("flex flex-wrap gap-1 text-sm") }) {
+                detail.months.forEach { candidate ->
+                    val active = candidate.label == selected
+                    Span({
+                        classes(
+                            if (active) "cursor-pointer rounded-md px-2.5 py-1 font-medium transition-colors bg-accent text-foreground"
+                            else "cursor-pointer rounded-md px-2.5 py-1 font-medium transition-colors text-muted-foreground hover:text-foreground",
+                        )
+                        testTag("month-${candidate.label.substringBefore(' ')}")
+                        onClick { selected = candidate.label }
+                    }) { Text(candidate.label) }
+                }
+            }
+
+            Div({ classes("grid gap-4 lg:grid-cols-[1fr_220px]") }) {
+                Div({ classes("overflow-x-auto") }) { MonthChart(month) }
+                Div({ classes("space-y-2") }) {
+                    Div({ classes("flex items-center justify-between gap-3 text-sm") }) {
+                        Span({ classes("flex items-center gap-2") }) {
+                            Span({ classes("h-0.5 w-4 shrink-0 rounded-full bg-orange-500") })
+                            Span({ classes("font-medium text-foreground") }) { Text("WAN") }
+                        }
+                        Span({ classes("tabular-nums text-muted-foreground") }) { Text("%.1f GB".format(month.wanGb)) }
+                    }
+                    Div({ classes("flex items-center justify-between gap-3 text-sm") }) {
+                        Span({ classes("flex items-center gap-2") }) {
+                            Span({ classes("h-0.5 w-4 shrink-0 rounded-full bg-teal-600") })
+                            Span({ classes("font-medium text-foreground") }) { Text("Cellular") }
+                        }
+                        Span({ classes("tabular-nums text-muted-foreground") }) { Text("%.1f GB".format(month.cellularGb)) }
+                    }
+                }
+            }
+            P({ classes("text-xs text-muted-foreground") }) {
+                Text("Download usage per WAN, reported by InControl.")
+            }
         }
     }
 }
@@ -657,12 +719,20 @@ private fun MonthChart(month: MonthUsage) {
  * does not build.
  */
 @Composable
-private fun Block(title: String, span: String, tag: String, content: @Composable () -> Unit) {
+private fun Block(
+    title: String,
+    span: String,
+    tag: String,
+    showHeader: Boolean = true,
+    content: @Composable () -> Unit,
+) {
     Div({ classes("overflow-hidden rounded-xl border border-border bg-card text-card-foreground $span"); testTag(tag) }) {
-        Div({ classes("flex items-center gap-1.5 px-4 py-2.5") }) {
-            Span({ classes("text-sm font-medium uppercase tracking-wider text-muted-foreground") }) { Text(title) }
+        if (showHeader) {
+            Div({ classes("flex items-center gap-1.5 px-4 py-2.5") }) {
+                Span({ classes("text-sm font-medium uppercase tracking-wider text-muted-foreground") }) { Text(title) }
+            }
         }
-        Div({ classes("px-4 pt-1 pb-4") }) {
+        Div({ classes(if (showHeader) "px-4 pt-1 pb-4" else "px-4 pt-4 pb-4") }) {
             content()
         }
     }
