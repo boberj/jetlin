@@ -214,7 +214,53 @@ Allocation was the obvious suspect and it is not the answer: 2.8 s of GC pause a
 clock, 6.3%, while a build allocates a hundred megabytes of nodes and 6.7 MB of JSON. Worth stating
 because it was measured rather than assumed.
 
-The second of the two is the one chunking addresses, and building is where chunking is at its best:
+Both of those are **per-group** bookkeeping rather than per-table, which is the answer to the obvious
+objection that grouping the rows does not shrink the slot table or its gap. It does not. What it
+shrinks is the number of children in the group being reconciled, and that is what both frames are
+sized by — the gap belongs to the insert region being closed, and the map belongs to the `Pending`
+for one group.
+
+How much it takes is startling. Building ten thousand rows, varying only how many rows share a group:
+
+| rows per group | build 10,000 |
+|---|---|
+| flat — one group of 10,000 | 3,551 ms |
+| 5,000 — two groups | **357 ms** |
+| 1,000 | 397 ms |
+| 200 | 423 ms |
+| 50 | 446 ms |
+| 10 | 751 ms |
+
+Nearly all of it comes from splitting one group into *two*. Going finer buys nothing, and at ten rows
+a group the per-group overhead starts winning. A profile at two groups of 5,000 confirms it: the two
+hot frames are gone — `clearSlotGap` from 61.4% of samples to 1.5%, `Pending.updateNodeCount` from
+18.1% to 0.1%.
+
+Halving the children in a group should, on an O(k²)-per-group model, buy 2×; it buys 10. Something
+non-linear sits on top of the quadratic, and the most likely candidate is the working set — a
+ten-thousand-entry map walked ten thousand times does not fit in cache while a five-thousand-entry
+one is closer to it. That is a hypothesis. It is consistent with the flat build's growth per doubling
+*rising* through the scaling sweep (×2.3, ×3.1, ×2.8, ×3.7) rather than sitting at a constant ×4, but
+it has not been isolated and should not be repeated as fact.
+
+**And it does not generalize to the reordering operations.** On a thousand-row table, where building
+collapses at the first split, swapping wants groups genuinely small and removing barely cares:
+
+| rows per group | swap 2 | remove 1 | remove sends |
+|---|---|---|---|
+| flat | 1,082 ms | 1,073 ms | 1 op · 81 B |
+| 500 | 674 ms | 959 ms | 3 ops · 817 B |
+| 200 | 317 ms | 877 ms | 9 ops · 3.0 kB |
+| 50 | 84 ms | 837 ms | 39 ops · 14.1 kB |
+
+(Less warmed than the benchmark proper, so read the ratios rather than the absolutes.) Swapping
+improves monotonically because a move that stays inside a small group moves fewer slots. Removal
+does not, because every row behind the deleted one shifts across a boundary, and the more boundaries
+there are the more rows get rebuilt instead of moved — which is also why its op count grows from one
+to thirty-nine. There is no single group size that is right for all of them.
+
+The second of the two mechanisms is the one grouping addresses, and building is where it is at its
+best:
 `create many rows` goes from 3,739 ms to 520, `create rows` from 99.7 to 29.7, `append` from 103 to
 37.6 — **and unlike the swap and the removal, the ops are byte-for-byte identical**, because nothing
 crosses a group boundary when rows are only ever appended. For the three building operations and for

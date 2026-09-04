@@ -14,8 +14,9 @@ fun main(): Unit = runBlocking {
     val op = System.getenv("OP") ?: "remove"
     val seconds = System.getenv("SECONDS")?.toLong() ?: 30
     val size = System.getenv("ROWS")?.toInt() ?: ROWS
+    val chunk = System.getenv("CHUNK")?.toInt() ?: FLAT
 
-    Driver.open().use { driver ->
+    Driver.open(chunk = chunk).use { driver ->
         driver.mutate { run(size) }
         val deadline = System.nanoTime() + seconds * 1_000_000_000L
         var iterations = 0
@@ -39,6 +40,6 @@ fun main(): Unit = runBlocking {
             }
             iterations++
         }
-        println("$op at $size rows: $iterations iterations in ${seconds}s")
+        println("$op at $size rows, chunk $chunk: $iterations iterations in ${seconds}s")
     }
 }
