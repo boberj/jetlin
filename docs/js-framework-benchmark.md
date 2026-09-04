@@ -179,109 +179,37 @@ Roughly linear in nodes at a fixed row count, and quadratic in rows at fixed nod
 per row is a plain multiplier — the benchmark's row is eight nodes and its markup is fixed by the
 rules, but an application's is not.
 
-To reproduce: `./gradlew :samples:keyed-benchmark:installDist`, then
+To reproduce:
 
 ```bash
-OP=remove SECONDS=40 java -XX:StartFlightRecording=duration=45s,filename=remove.jfr,settings=profile \
-  -cp 'samples/keyed-benchmark/build/install/keyed-benchmark/lib/*' jetlin.samples.keyed.ProfileKt
+OP=remove SECONDS=40 JFR=remove.jfr ./gradlew :samples:keyed-benchmark:profile
 jfr print --events jdk.ExecutionSample remove.jfr
 ```
 
-### Why building ten thousand rows costs most of four seconds
-
-A different question with a different answer, which is why it needed its own recording rather than an
-assumption. Forty-five seconds of building a ten-thousand-row table from empty, 3,593 samples:
-
-| | share of samples |
-|---|---|
-| `Arrays.fill` ← `SlotWriter.clearSlotGap` ← `SlotWriter.close` | 61.4% |
-| `Pending.updateNodeCount`, iterating a `HashMap` of group info | 17.9% |
-| Jetlin's own `Element` / `Text` / `Td` | ~4% |
-| GC pause | 6.3% of wall clock |
-
-Neither of the two frames behind a removal appears. Building is quadratic for its own reasons:
-
-- **`clearSlotGap`.** The slot table is a gap buffer, and closing a writer nulls out the unused gap so
-  the collector can reclaim what used to be in it. The gap is capacity minus size, the arrays grow
-  geometrically, and a ten-thousand-row table has tens of thousands of spare slots — so every close
-  fills a very large region with nulls, and a build does many closes (from `ComposerImpl.end`, from
-  `recordInsert`, from `moveFrom`).
-- **`Pending.updateNodeCount`.** `Pending` holds a map of group info for the children being
-  reconciled, and this walks its values. With n children in the group the map has O(n) entries and it
-  is walked once per child.
-
-Allocation was the obvious suspect and it is not the answer: 2.8 s of GC pause across 45 s of wall
-clock, 6.3%, while a build allocates a hundred megabytes of nodes and 6.7 MB of JSON. Worth stating
-because it was measured rather than assumed.
-
-Both of those are **per-group** bookkeeping rather than per-table, which is the answer to the obvious
-objection that grouping the rows does not shrink the slot table or its gap. It does not. What it
-shrinks is the number of children in the group being reconciled, and that is what both frames are
-sized by — the gap belongs to the insert region being closed, and the map belongs to the `Pending`
-for one group.
-
-How much it takes is startling. Building ten thousand rows, varying only how many rows share a group:
-
-| rows per group | build 10,000 |
-|---|---|
-| flat — one group of 10,000 | 3,551 ms |
-| 5,000 — two groups | **357 ms** |
-| 1,000 | 397 ms |
-| 200 | 423 ms |
-| 50 | 446 ms |
-| 10 | 751 ms |
-
-Nearly all of it comes from splitting one group into *two*. Going finer buys nothing, and at ten rows
-a group the per-group overhead starts winning. A profile at two groups of 5,000 confirms it: the two
-hot frames are gone — `clearSlotGap` from 61.4% of samples to 1.5%, `Pending.updateNodeCount` from
-18.1% to 0.1%.
-
-Halving the children in a group should, on an O(k²)-per-group model, buy 2×; it buys 10. Something
-non-linear sits on top of the quadratic, and the most likely candidate is the working set — a
-ten-thousand-entry map walked ten thousand times does not fit in cache while a five-thousand-entry
-one is closer to it. That is a hypothesis. It is consistent with the flat build's growth per doubling
-*rising* through the scaling sweep (×2.3, ×3.1, ×2.8, ×3.7) rather than sitting at a constant ×4, but
-it has not been isolated and should not be repeated as fact.
-
-**And it does not generalize to the reordering operations.** On a thousand-row table, where building
-collapses at the first split, swapping wants groups genuinely small and removing barely cares:
-
-| rows per group | swap 2 | remove 1 | remove sends |
-|---|---|---|---|
-| flat | 1,082 ms | 1,073 ms | 1 op · 81 B |
-| 500 | 674 ms | 959 ms | 3 ops · 817 B |
-| 200 | 317 ms | 877 ms | 9 ops · 3.0 kB |
-| 50 | 84 ms | 837 ms | 39 ops · 14.1 kB |
-
-(Less warmed than the benchmark proper, so read the ratios rather than the absolutes.) Swapping
-improves monotonically because a move that stays inside a small group moves fewer slots. Removal
-does not, because every row behind the deleted one shifts across a boundary, and the more boundaries
-there are the more rows get rebuilt instead of moved — which is also why its op count grows from one
-to thirty-nine. There is no single group size that is right for all of them.
-
-The second of the two mechanisms is the one grouping addresses, and building is where it is at its
-best:
-`create many rows` goes from 3,739 ms to 520, `create rows` from 99.7 to 29.7, `append` from 103 to
-37.6 — **and unlike the swap and the removal, the ops are byte-for-byte identical**, because nothing
-crosses a group boundary when rows are only ever appended. For the three building operations and for
-`clear`, chunking is free or better on the wire; it is only the reordering operations that pay.
+(`OP` is create, swap or remove; `ROWS` and `CHUNK` set the table. A Gradle task rather than
+`installDist` and a classpath glob: that distribution is assembled by file name, and two of the
+dependencies are both called `runtime-desktop-<version>.jar` — one from JetBrains, one from androidx.
+One is dropped silently and the run dies on an unrelated missing class.)
 
 ### What does not fix it
 
-Three things were tried and measured rather than assumed:
-
-- **A newer Compose runtime.** The obvious lever, and still blocked. `org.jetbrains.compose.runtime`
-  POMs resolve from Maven Central up to 1.12.0 and 1.8.2 even compiles, but its *runtime* classpath
-  wants `androidx.annotation` and `androidx.collection`, which are published only to Google's Maven.
-  The note at the bottom of the README is accurate.
 - **`@NonRestartableComposable` on `Element` and `Text`**, to cut a restart group per element. It made
   things worse: swap 648 → 795 ms, remove 661 → 786 ms, on the same page. The node groups that
   dominate slot movement are still there, and the restart scopes were paying for themselves.
-- **Chunking**, covered above: 13.5× on swap, 1.3× on removal, because index-based groups shift.
+- **Chunking**, covered above: large gains on building and swapping, almost none on removal, and it
+  costs ops on both the operations that reorder.
 
-What is left is either a Compose fix or not composing the whole table — the same answer
-`LazyColumn` is on Android. A server-side framework rendering a thousand rows into one composition
-has no equivalent of it today, and windowing the rows is the shape the fix would take.
+### What does: a newer Compose
+
+The lever that was out of reach for as long as `dl.google.com` was. See *Compose 1.12.0* below — a
+version bump makes swapping and removing between four and five times cheaper, and makes building a
+very large table more than twice as expensive.
+
+What it does not change is the shape. Reordering is still quadratic on 1.12, just with a constant
+four to five times smaller, so the ceiling moves up about a factor of two in rows and stays a
+ceiling. The structural answer is the same as it was: either Compose changes further, or a
+server-side framework stops composing whole tables — the thing `LazyColumn` does for Compose's own
+UI, and which Jetlin has no equivalent of.
 
 ## A note on warmup
 
@@ -332,3 +260,91 @@ times the rows changed for five times the time, as the fixed overhead amortizes.
 tracking rows changed, which is what the design promises. Swapping two rows changes two rows at any
 size and emits two ops at any size, and still quadruples per doubling. That is the one place the
 promise does not hold.
+
+## Compose 1.12.0
+
+Everything above ran on Compose Multiplatform 1.5.12, pinned since 2023 because its successors reach
+Google's Maven for `androidx.annotation` and `androidx.collection` and the machine could not. On a
+machine that can, `org.jetbrains.compose.runtime:runtime:1.12.0` is a redirect to
+`androidx.compose.runtime:runtime:1.12.0` — Jetpack Compose itself, latest stable — and the bump is
+the one line the README always said it was, plus `google()` scoped to the androidx groups.
+
+Both runs below are the same machine (8 cores, WSL2, OpenJDK 21.0.7), same harness, ten iterations
+after five discarded passes. They are **not** comparable with the 4-core figures above.
+
+| operation | 1.5.12 | 1.12.0 | |
+|---|---|---|---|
+| swap rows | 878.49 | **184.81** | ×4.8 faster |
+| remove row | 824.95 | **173.81** | ×4.8 faster |
+| create rows | 119.71 | **52.94** | ×2.3 faster |
+| append to large table | 120.46 | **69.39** | ×1.7 faster |
+| replace all rows | 163.60 | **99.73** | ×1.6 faster |
+| clear rows | 20.03 | **15.19** | ×1.3 faster |
+| select row | 0.89 | 1.04 | ×1.2 slower |
+| partial update | 1.75 | 2.13 | ×1.2 slower |
+| **create many rows (10k)** | 4363.01 | **10385.04** | **×2.4 slower** |
+
+Ops and wire are byte-identical on both, so nothing about the emitted patches changed.
+
+The two operations this document spends the most effort explaining are four to five times cheaper,
+and the scaling sweep says why — and what did not change:
+
+| rows | swap, 1.5.12 | swap, 1.12.0 | remove, 1.5.12 | remove, 1.12.0 |
+|---|---|---|---|---|
+| 250 | 51.11 | 17.12 | 50.82 | 13.46 |
+| 500 | 244.66 | 51.03 | 213.80 | 48.68 |
+| 1,000 | 885.26 | 197.37 | 861.19 | 219.30 |
+| 2,000 | 3686.47 | 752.96 | 3568.67 | 751.16 |
+| 4,000 | 14338.26 | 4010.47 | 13944.96 | 3026.36 |
+
+Still ×4 per doubling. **The quadratic is not gone — its constant shrank by four to five.** That moves
+the practical ceiling up about a factor of two in rows and leaves it a ceiling, so the structural
+conclusion stands unchanged.
+
+### The one regression, and it is not GC
+
+Building ten thousand rows more than doubled in cost, and a recording says exactly why:
+
+| | 1.5.12 | 1.12.0 |
+|---|---|---|
+| `Arrays.fill` ← `SlotWriter.clearSlotGap` | 61.4% | **88.4%** |
+| `Pending.updateNodeCount` | 18.1% | **3.0%** |
+| GC pause, share of wall clock | 6.3% | **1.4%** |
+
+Per build, `clearSlotGap` goes from about 221 samples to about 749 — 3.4× more, which accounts for
+the regression on its own. So 1.12 has largely fixed the `Pending` map walk that made reordering
+quadratic, and made the gap clearing that dominates a large build substantially worse. One bottleneck
+traded for the other. (The classes have moved to
+`androidx.compose.runtime.composer.gapbuffer`, with `GapComposer` and `GapPending` alongside them:
+the runtime is being refactored toward a pluggable composer, and the gap buffer is now one
+implementation rather than the implementation.)
+
+Building is faster at every size the sweep covers — 728.81 ms against 1515.60 at 4,000 rows, ×2.1 —
+so the crossover sits somewhere between four and ten thousand.
+
+### Memory, and one behaviour change
+
+| state | 1.5.12 | 1.12.0 | |
+|---|---|---|---|
+| page composed, no rows | 59.0 kB | 50.5 kB | 14% less |
+| after 1,000 rows | 15.1 MB | 13.0 MB | 14% less |
+| after 5 updates on 1,000 | 15.6 MB | 13.0 MB | 17% less |
+| after 5 create/clear cycles, empty | 4.9 MB | **1.8 MB** | **2.7× less** |
+| after 10,000 rows | 100.3 MB | 122.6 MB | 22% more |
+
+The fourth row is the "a session keeps the memory of the largest table it ever held" finding, and it
+is substantially better: an emptied session that once held a thousand rows costs 1.8 MB instead of
+4.9. The last row moves the other way, with the build regression.
+
+And one thing that is not a number. `rememberSaved` keys itself by `currentCompositeKeyHash`, and
+until 1.12 two calls side by side in one composable landed on the same position — so they collided,
+and the collision was reported rather than allowed to lose a value. On 1.12 they do not:
+
+```
+saved={d9ucqg="first value", d9ucqi="second value"}
+```
+
+Adjacent `rememberSaved` calls no longer need explicit keys. The guard stays, because position is
+still not an identity in a loop over reorderable data, but it is covered at the registry now rather
+than by arranging a real collision through the composer — which is a test pinned to one runtime's key
+derivation, and is exactly what the upgrade broke.

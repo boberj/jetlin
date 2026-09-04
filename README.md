@@ -291,8 +291,13 @@ npm --prefix jetlin-client install && npm --prefix jetlin-client run build
 
 ## Note on dependency versions
 
-Compose Multiplatform is pinned to **1.5.12**, the newest release that resolves entirely from Maven
-Central; 1.6 and later pull androidx artifacts published only to Google's Maven repo, which the
-development environment could not reach. Nothing here depends on anything newer — `Applier`,
-`Composition`, `Recomposer` and the snapshot system are stable across all of these — so it is a
-one-line bump.
+Compose Multiplatform is **1.12.0**, which is `androidx.compose.runtime:runtime:1.12.0` behind a
+redirect. It was pinned to 1.5.12 for a long time because 1.6 and later pull `androidx.annotation`
+and `androidx.collection` from Google's Maven repo, which the development environment could not
+reach; `settings.gradle.kts` now adds `google()`, scoped to the androidx groups so everything else
+still comes from Maven Central.
+
+The upgrade is worth knowing about beyond the version number. Swapping and removing a row in a
+thousand-row table got four to five times cheaper, building ten thousand rows got twice as expensive,
+and two `rememberSaved` calls side by side in one composable no longer collide on their automatic
+key. [`docs/js-framework-benchmark.md`](docs/js-framework-benchmark.md) has both runs side by side.
