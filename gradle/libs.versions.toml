@@ -1,11 +1,10 @@
 [versions]
 kotlin = "2.4.10"
-# 1.5.12 is the newest Compose Multiplatform release that resolves entirely from Maven Central.
-# 1.6.x and later reach Google's Maven repo (dl.google.com) for androidx.collection / androidx
-# .compose.runtime, which this build environment's egress policy blocks. Nothing in Jetlin depends
-# on anything newer -- Applier, Composition, Recomposer and the snapshot system are stable across
-# all of these -- so this is a one-line bump once Google Maven is reachable.
-compose-runtime = "1.5.12"
+# org.jetbrains.compose.runtime:runtime is a redirect: 1.12.0 of it is androidx.compose.runtime
+# :runtime 1.12.0, which is to say Jetpack Compose itself. The androidx artifacts it brings with it
+# -- androidx.annotation, androidx.collection -- are published only to Google's Maven, which is why
+# `google()` is in settings.gradle.kts and why this stayed on 1.5.12 for as long as it did.
+compose-runtime = "1.12.0"
 coroutines = "1.11.0"
 serialization = "1.11.0"
 ktor = "3.5.2"

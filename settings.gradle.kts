@@ -20,6 +20,12 @@ plugins {
 dependencyResolutionManagement {
     repositories {
         mavenCentral()
+        // Compose's runtime depends on androidx.annotation and androidx.collection, and those are
+        // published here and nowhere else. Scoped to the androidx groups so that every other
+        // dependency in the build is still answered by Maven Central alone.
+        google {
+            content { includeGroupByRegex("androidx\\..*") }
+        }
     }
 }
 
