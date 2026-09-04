@@ -12,6 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Tearing a session down and building it back.
@@ -152,23 +153,29 @@ class HibernationTest {
     }
 
     @Test
-    fun `colliding keys are reported instead of losing a value`(): Unit = runBlocking {
-        // Two auto-keyed values side by side in one composable. Their positions are
-        // indistinguishable on this Compose runtime, so without this check the second would
-        // silently overwrite the first and the user would lose whatever was in it.
-        val view = LiveView { _ ->
+    fun `two auto-keyed values side by side keep their own state`(): Unit = runBlocking {
+        // Compose derives the automatic key from the composable's position, and until 1.12 two calls
+        // sitting side by side in one composable landed on the same position — so this pair used to
+        // collide, and the collision had to be reported to stop the second silently eating the first.
+        // Newer runtimes tell them apart, so the pair round trips and the report is for the case that
+        // can still happen: a position that is not an identity, in a loop over reorderable data.
+        val saved = LiveView { _ ->
             Div {
                 val first = rememberSaved { "a" }
                 val second = rememberSaved { "b" }
+                first.value = "first value"
+                second.value = "second value"
                 Span { Text(first.value + second.value) }
             }
+        }.use {
+            it.start()
+            it.hibernate()
         }
-        view.start()
 
-        val failure = runCatching { view.hibernate() }.exceptionOrNull()
-        assertTrue(
-            failure?.message?.contains("share a key") == true,
-            "expected a collision to be reported, got $failure",
+        assertEquals(2, saved.size, "each value should have kept its own key, got $saved")
+        assertEquals(
+            listOf("first value", "second value"),
+            saved.values.map { it.jsonPrimitive.content },
         )
     }
 }

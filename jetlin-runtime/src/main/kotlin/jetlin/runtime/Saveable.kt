@@ -81,8 +81,8 @@ private class DefaultSaveableStateRegistry(
 internal const val COLLISION_MESSAGE: String =
     "Two rememberSaved values share a key, so one would overwrite the other. Pass an explicit " +
         "key to each: rememberSaved(key = \"draft\") { ... }. Automatic keys come from the " +
-        "composable's position in the tree, and on this Compose runtime two calls sitting side by " +
-        "side in the same composable are indistinguishable."
+        "composable's position in the tree, which is not unique where the tree itself moves — a " +
+        "loop over reorderable data being the usual way to arrive here."
 
 public val LocalSaveableStateRegistry: ProvidableCompositionLocal<SaveableStateRegistry?> =
     staticCompositionLocalOf { null }
@@ -100,12 +100,11 @@ internal val SavedStateJson: Json = Json {
  * restart — a half-typed form, a selected tab, an expanded row. Leave everything derived or
  * cheap to recompute in plain `remember`, so the saved payload stays small.
  *
- * [key] defaults to the composable's position in the composition, which is enough to tell apart
- * saved values living in different composables. **Two calls side by side in the same composable
- * need explicit keys**: on this Compose runtime their positions are indistinguishable, and without
- * keys one value would silently overwrite the other. That case is detected at save time and
- * reported rather than allowed to lose data. Prefer an explicit key for anything inside a loop
- * over reorderable data too, where position is not stable to begin with.
+ * [key] defaults to the composable's position in the composition, which tells apart saved values
+ * living in different composables and, since Compose 1.12, two sitting side by side in the same
+ * one. Position is still not an identity where the tree itself moves, so prefer an explicit key for
+ * anything inside a loop over reorderable data. Any collision that does happen is detected at save
+ * time and reported rather than allowed to lose data.
  *
  * A value that no longer deserializes — because the type changed since it was written — falls back
  * to [init] rather than failing the session. Stored state outlives deployments, so encountering
