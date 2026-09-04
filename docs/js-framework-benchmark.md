@@ -187,6 +187,39 @@ OP=remove SECONDS=40 java -XX:StartFlightRecording=duration=45s,filename=remove.
 jfr print --events jdk.ExecutionSample remove.jfr
 ```
 
+### Why building ten thousand rows costs most of four seconds
+
+A different question with a different answer, which is why it needed its own recording rather than an
+assumption. Forty-five seconds of building a ten-thousand-row table from empty, 3,593 samples:
+
+| | share of samples |
+|---|---|
+| `Arrays.fill` ← `SlotWriter.clearSlotGap` ← `SlotWriter.close` | 61.4% |
+| `Pending.updateNodeCount`, iterating a `HashMap` of group info | 17.9% |
+| Jetlin's own `Element` / `Text` / `Td` | ~4% |
+| GC pause | 6.3% of wall clock |
+
+Neither of the two frames behind a removal appears. Building is quadratic for its own reasons:
+
+- **`clearSlotGap`.** The slot table is a gap buffer, and closing a writer nulls out the unused gap so
+  the collector can reclaim what used to be in it. The gap is capacity minus size, the arrays grow
+  geometrically, and a ten-thousand-row table has tens of thousands of spare slots — so every close
+  fills a very large region with nulls, and a build does many closes (from `ComposerImpl.end`, from
+  `recordInsert`, from `moveFrom`).
+- **`Pending.updateNodeCount`.** `Pending` holds a map of group info for the children being
+  reconciled, and this walks its values. With n children in the group the map has O(n) entries and it
+  is walked once per child.
+
+Allocation was the obvious suspect and it is not the answer: 2.8 s of GC pause across 45 s of wall
+clock, 6.3%, while a build allocates a hundred megabytes of nodes and 6.7 MB of JSON. Worth stating
+because it was measured rather than assumed.
+
+The second of the two is the one chunking addresses, and building is where chunking is at its best:
+`create many rows` goes from 3,739 ms to 520, `create rows` from 99.7 to 29.7, `append` from 103 to
+37.6 — **and unlike the swap and the removal, the ops are byte-for-byte identical**, because nothing
+crosses a group boundary when rows are only ever appended. For the three building operations and for
+`clear`, chunking is free or better on the wire; it is only the reordering operations that pay.
+
 ### What does not fix it
 
 Three things were tried and measured rather than assumed:

@@ -13,9 +13,10 @@ import kotlinx.coroutines.runBlocking
 fun main(): Unit = runBlocking {
     val op = System.getenv("OP") ?: "remove"
     val seconds = System.getenv("SECONDS")?.toLong() ?: 30
+    val size = System.getenv("ROWS")?.toInt() ?: ROWS
 
     Driver.open().use { driver ->
-        driver.mutate { run(ROWS) }
+        driver.mutate { run(size) }
         val deadline = System.nanoTime() + seconds * 1_000_000_000L
         var iterations = 0
         while (System.nanoTime() < deadline) {
@@ -24,14 +25,20 @@ fun main(): Unit = runBlocking {
                 // a list of roughly a thousand rather than from a list that has dwindled to nothing.
                 "remove" -> {
                     driver.mutate { remove(rows[3]) }
-                    if (driver.rowCount() <= ROWS / 2) driver.mutate { run(ROWS) }
+                    if (driver.rowCount() <= size / 2) driver.mutate { run(size) }
                 }
-                "swap" -> driver.mutate { swap(1, ROWS - 2) }
-                "create" -> driver.mutate { run(ROWS) }
+                "swap" -> driver.mutate { swap(1, size - 2) }
+                // Cleared in its own transaction first, so the create that follows starts from an
+                // empty table as the benchmark's does. Calling run() on a populated table would be a
+                // replace, and would put ten thousand removals into the samples.
+                "create" -> {
+                    driver.mutate { clear() }
+                    driver.mutate { run(size) }
+                }
                 else -> error("Unknown OP '$op'")
             }
             iterations++
         }
-        println("$op: $iterations iterations in ${seconds}s")
+        println("$op at $size rows: $iterations iterations in ${seconds}s")
     }
 }
