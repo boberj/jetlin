@@ -101,9 +101,34 @@ there is work. `Paced(interval)` caps the rate, which matters for sessions fed b
 server-side source where a client cannot usefully consume every change. One frame produces at most
 one patch message.
 
+**Knowing when a session is done** does not use the recomposer's state at all.
+`Recomposer.currentState` is a cached value, rewritten only at particular points, and movable
+content reaches two paths that empty its inputs without rewriting it: composing movable content in
+the first frame, and removing it. The state then reads `PendingWork` indefinitely with nothing
+pending and the loop asleep. A host that waited for `Idle` waited until something unrelated happened
+— and a live session, whose inbound loop handles one event at a time and whose sender waits before
+every patch, deadlocked. The same code is still present in Compose 1.13.0-alpha02.
+
+So `CompositionHost` answers from `Recomposer.hasPendingWork`, which is computed when read, together
+with a count of the tasks still queued on the session's dispatcher (`SessionActivity`) — the pairing
+the desktop scene and both Compose test harnesses use. Two questions, on two lanes over the same
+serial dispatcher:
+
+- `awaitApplied()` — everything signalled has been recomposed and applied. Asked on every client
+  event and before every outgoing message, so it waits for nothing else.
+- `awaitIdle()` — the session has settled: effects already queued have run and writes made outside a
+  snapshot have been published. For tests, the first render and hibernation, the last two with a
+  budget so an effect that never settles delays them instead of hanging them.
+
+A count and a condition cannot be read together atomically, so the check reads the count on both
+sides of the condition and a dispatch sequence number too, and believes the condition only if no task
+could have run while it was being read. Waiters are woken when a lane drains rather than by polling,
+because a server has thousands of mostly idle sessions and waits on every event.
+
 > Worth recording: when a composable throws, the recomposer ends up `Inactive`, not `ShutDown`.
-> Recomposer state alone therefore cannot distinguish "died" from "not started yet", and waiting on
-> it hangs forever. `awaitIdle()` races the idle wait against the runner job instead.
+> Recomposer state alone therefore cannot distinguish "died" from "not started yet". The runner job
+> completing is the signal instead, and it wakes every waiter so a wait on a dead composition throws
+> rather than hangs.
 
 ---
 
