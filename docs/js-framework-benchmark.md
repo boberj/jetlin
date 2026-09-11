@@ -348,3 +348,65 @@ Adjacent `rememberSaved` calls no longer need explicit keys. The guard stays, be
 still not an identity in a loop over reorderable data, but it is covered at the registry now rather
 than by arranging a real collision through the composer — which is a test pinned to one runtime's key
 derivation, and is exactly what the upgrade broke.
+
+## The other composer
+
+Since 1.12 the runtime carries two complete composers. `CompositionImpl` reads
+`ComposeRuntimeFlags.isLinkBufferComposerEnabled` when it is built and constructs one or the other:
+
+| | gap buffer | link buffer |
+|---|---|---|
+| composer | `GapComposer`, `GapPending` | `LinkComposer`, `LinkPending` |
+| storage | `gapbuffer.SlotTable`, `SlotReader` / `SlotWriter` | `linkbuffer.SlotTable`, `SlotTableReader` / `SlotTableEditor` / `SlotTableBuilder` |
+| also | `GapAnchor`, `PrioritySet`, `BitVector` | `SlotTableAddressSpace`, `SlotMoveManager`, `GroupHandle`, `LinkAnchor` |
+| status | the default | off by default, `@ExperimentalComposeApi` |
+
+The gap buffer is every Compose before it, and every figure above. `COMPOSER=link` runs the
+benchmark on the other one; the header records which a run used.
+
+**Correctness.** With the flag on for the entire suite, and a probe confirming `LinkComposer` was the
+one live, 225 of 226 tests pass — including every framework test that asserts an exact op list. The
+one failure is the keyed swap, and it is the test doing its job: the swap sends **997 moves instead
+of 2**. Still nothing but moves, so no row is rebuilt, but where the gap composer sends
+`Move(998→1)` and `Move(3→2, count=996)`, the link composer sends `Move(998→1)` and then 996
+single-step `Move(k+1→k)`. Those runs are mechanically coalescible, which is the same fix clearing a
+table has always needed.
+
+**Speed.** Same machine, same harness, median ms:
+
+| operation | 1.5.12 gap | 1.12.0 gap | 1.12.0 link | link against 1.5.12 |
+|---|---|---|---|---|
+| remove row | 824.95 | 173.81 | **6.36** | ×130 faster |
+| swap rows | 878.49 | 184.81 | **9.89** | ×89 faster, 997 ops · 51.4 kB |
+| create rows | 119.71 | 52.94 | **27.15** | ×4.4 faster |
+| append to large table | 120.46 | 69.39 | **35.46** | ×3.4 faster |
+| create many rows | 4363.01 | 10385.04 | **1899.98** | ×2.3 faster |
+| replace all rows | 163.60 | 99.73 | 115.55 | ×1.4 faster |
+| clear rows | 20.03 | 15.19 | 18.24 | about the same |
+| partial update / select row | 1.75 / 0.89 | 2.13 / 1.04 | 1.74 / 1.01 | about the same |
+
+The removal this document profiled into `fixParentAnchorsFor` drops from most of a second to six
+milliseconds, still sending one 80-byte op. The ten-thousand-row regression on the 1.12 gap buffer
+is gone and then some. Memory is the same as the 1.12 gap buffer to within a few per cent in every
+state, so what changed there is the runtime version rather than the slot table; the cold request is
+23.56 ms to compose a thousand rows.
+
+**What it does not fix.** From 1,000 to 4,000 rows swapping and removing still grow ×3.4–3.7 per
+doubling — 88 ms to remove one row of 4,000 — so the shape is not obviously gone, only the constant,
+by twenty to thirty-five times against the gap buffer on the same runtime. A recording at 4,000 rows
+puts all of it in Compose, and none of it in Jetlin (the applier and serialization are under 1%
+between them):
+
+| at 4,000 rows | remove | swap |
+|---|---|---|
+| `LinkPending.registerMoveSlot` | 47.9% | 31.1% |
+| `SlotTableEditor.seek` | 42.5% | 28.3% |
+| `LinkPending.registerMoveNode` | — | 32.6% |
+
+`seek` is the linked structure's side of the trade: relinking is cheap and reaching a position means
+walking to it, once per sibling. `registerMoveNode` per sibling is where the 997 moves come from.
+
+The default is left alone. The flag is experimental, and turning it on today trades 139 bytes for
+51 kB on every swap — which is a Jetlin problem with a Jetlin fix, coalescing adjacent ops as the
+buffer drains, but one that should land before the switch rather than after it.
+

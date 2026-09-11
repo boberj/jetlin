@@ -1,5 +1,7 @@
 package jetlin.samples.keyed
 
+import androidx.compose.runtime.ComposeRuntimeFlags
+import androidx.compose.runtime.ExperimentalComposeApi
 import java.util.Locale
 import jetlin.protocol.Op
 import kotlinx.coroutines.runBlocking
@@ -40,6 +42,7 @@ import kotlinx.coroutines.runBlocking
 private var chunk: Int = FLAT
 
 fun main(): Unit = runBlocking {
+    selectComposer()
     val iterations = System.getenv("ITERATIONS")?.toInt() ?: 10
     val warmupPasses = System.getenv("WARMUP_PASSES")?.toInt() ?: 5
     // Which sections to run, for when only one of them is the question. The memory benchmarks and
@@ -385,6 +388,16 @@ private const val WARM_REQUESTS = 12
 // Reporting.
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Which of Compose's two slot-table implementations the run used.
+ *
+ * Read from the flag `CompositionImpl` consults when it is built, so it is the answer and not a
+ * guess about it. Reported because the two do not produce the same numbers, or even the same ops.
+ */
+@OptIn(ExperimentalComposeApi::class)
+private fun composerName(): String =
+    if (ComposeRuntimeFlags.isLinkBufferComposerEnabled) "link buffer" else "gap buffer"
+
 private fun header(iterations: Int, warmupPasses: Int): String = """
     |Jetlin — js-framework-benchmark (keyed), server side
     |${"=".repeat(78)}
@@ -396,6 +409,7 @@ private fun header(iterations: Int, warmupPasses: Int): String = """
     |so these numbers do not compare with the published ones.
     |
     |rows per keyed group:     ${if (chunk == FLAT) "the whole table, as the benchmark defines it" else "$chunk"}
+    |composer:                 ${composerName()}
     |iterations per benchmark: $iterations (min / median / mean reported)
     |discarded warmup passes:  $warmupPasses
     |jvm:                      ${System.getProperty("java.vm.name")} ${System.getProperty("java.version")}

@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
  * which frames, which only a profiler can answer.
  */
 fun main(): Unit = runBlocking {
+    selectComposer()
     val op = System.getenv("OP") ?: "remove"
     val seconds = System.getenv("SECONDS")?.toLong() ?: 30
     val size = System.getenv("ROWS")?.toInt() ?: ROWS
