@@ -12,6 +12,8 @@ import jetlin.runtime.FramePolicy
 import jetlin.runtime.LocalSaveableStateRegistry
 import jetlin.runtime.SaveableStateRegistry
 import jetlin.runtime.rememberSaved
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonElement
@@ -75,6 +77,14 @@ public class LiveView(
                 content(request)
             }
         }
+        // Settled rather than merely applied, and for a reason that only shows up later. The page is
+        // rendered from this tree after start returns, and a socket that adopts that page keeps every
+        // op recorded after the drain below — see adopt(). An effect that runs after the drain but
+        // before the render would therefore reach the browser twice: once in the markup, once as a
+        // patch, and an insert applied twice is a corrupt page. Letting effects that were already
+        // queued run first folds them into the ops thrown away here. Bounded, so that an effect that
+        // never lets the session settle delays a first render instead of preventing it.
+        host.awaitIdle(effectsBudget = START_EFFECTS_BUDGET)
         host.confined { owner.drainOps() }
     }
 
@@ -111,10 +121,12 @@ public class LiveView(
     public suspend fun rootAttributes(): String = host.confined { rootAttributes(owner) }
 
     /**
-     * Suspends until every pending recomposition has been applied.
+     * Suspends until the view has settled: every pending recomposition applied, effects that were
+     * already queued run, and state written from outside a snapshot taken into account.
      *
      * Needed by anything driving a view without a browser — a test, a renderer, a screenshot tool —
-     * to know that state written from outside has finished taking effect.
+     * to know that state written from outside has finished taking effect. Waits as long as it takes;
+     * an effect that never lets the view settle is a bug, and a test is the right place to hang on it.
      */
     public suspend fun awaitIdle(): Unit = host.awaitIdle()
 
@@ -171,7 +183,10 @@ public class LiveView(
         // reports its failure from awaitIdle, and leaving that outside the try meant the one kind of
         // session most in need of releasing was the one kind that never was.
         return try {
-            awaitIdle()
+            // Settled, so that a value an effect was about to save is saved. Bounded, because a
+            // session is hibernated when nobody is looking at it, and one whose effects never settle
+            // still has to be released.
+            host.awaitIdle(effectsBudget = HIBERNATE_EFFECTS_BUDGET)
             host.confined { stateRegistry.performSave() }
         } finally {
             close()
@@ -217,7 +232,10 @@ public class LiveView(
      */
     public val messages: Flow<ServerMessage> = flow {
         for (signal in owner.dirtySignals) {
-            host.awaitIdle()
+            // Applied, not settled: this runs before every message a session sends, so it waits for
+            // the recomposition that produced the ops and for nothing else. Changes an effect makes
+            // afterwards record ops of their own, signal again, and go out in the next message.
+            host.awaitApplied()
             val batch = host.confined {
                 buildList {
                     if (owner.hasOverflowed) {
@@ -238,3 +256,13 @@ public class LiveView(
 
     override fun close(): Unit = host.close()
 }
+
+/**
+ * How long a first render waits for effects that were already queued, once the initial composition
+ * has been applied. Effects that settle do so in microseconds; this only ever runs out for one that
+ * never does.
+ */
+private val START_EFFECTS_BUDGET = 250.milliseconds
+
+/** How long a hibernation waits for effects before saving what it has. */
+private val HIBERNATE_EFFECTS_BUDGET = 1.seconds
