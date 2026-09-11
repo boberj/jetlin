@@ -233,10 +233,10 @@ whichever runner you already use.
 ## Test
 
 ```bash
-./gradlew test                       # 210 unit tests, asserting exact op streams
+./gradlew test                       # unit tests, asserting exact op streams
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
 
-cd e2e && npm install && npx playwright test    # 36 browser tests (server must be running)
+cd e2e && npm install && npx playwright test    # browser tests (server must be running)
 ```
 
 The framework's own tests assert on exact op lists rather than `contains`, so an update that touches

@@ -7,7 +7,7 @@ plugins {
 subprojects {
     plugins.withId("org.jetbrains.kotlin.jvm") {
         extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension>("kotlin") {
-            jvmToolchain(21)
+            jvmToolchain(24)
             // Library modules are consumed by other people's code, so visibility and return types
             // have to be stated rather than inferred. Samples are applications and exempt.
             if (project.name.startsWith("jetlin-")) {
