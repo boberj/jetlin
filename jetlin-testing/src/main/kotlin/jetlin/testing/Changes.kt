@@ -160,3 +160,33 @@ private fun NodeSpec.ids(): List<NodeId> = when (this) {
     is NodeSpec.Text -> listOf(id)
     is NodeSpec.Element -> listOf(id) + children.flatMap { it.ids() }
 }
+
+/**
+ * Asserts the page contains nothing derived from [values].
+ *
+ * For the question a multi-user application has to keep answering: is anything of another viewer's on this
+ * page? Pass the other viewer's rows — their titles, names, anything they authored — and this fails if any
+ * of it reached the markup.
+ *
+ * Checked against the rendered HTML rather than against the node tree, because the tree is not the only way
+ * data leaks: an attribute, a property, a test tag or a title discloses just as well as text does, and the
+ * markup is what actually reaches a browser.
+ *
+ * ```kotlin
+ * setAttribute(ViewerKey, bob)
+ * setRoutes(appRoutes)
+ *
+ * assertNotDisclosed("Alice's private note", "Carol's private note")
+ * ```
+ */
+public suspend fun ViewTest.assertNotDisclosed(vararg values: String) {
+    val markup = renderHtml()
+    val found = values.filter { it.isNotEmpty() && it in markup }
+    if (found.isNotEmpty()) {
+        throw AssertionError(
+            "The page discloses data this viewer should not see: " +
+                found.joinToString { "\"$it\"" } +
+                "\n\nThe tree was:\n" + debugTree(),
+        )
+    }
+}

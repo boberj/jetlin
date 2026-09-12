@@ -2,6 +2,11 @@ build/
 .gradle/
 *.log
 
+# A sample's local database. The schema and its migrations are checked in; the data is not.
+*.db
+*.db-shm
+*.db-wal
+
 node_modules/
 test-results/
 playwright-report/

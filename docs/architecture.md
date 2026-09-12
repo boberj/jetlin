@@ -45,8 +45,10 @@ counter increment produces one `SetText`; reordering a keyed list produces `Move
 nodes themselves alone.
 
 The same chain runs when nothing came from the browser at all. A coroutine that writes state — a
-timer, a database subscription, a message from another user's session — invalidates the composables
-that read it, and a patch follows. Sending updates to a connected client needs no separate API.
+timer, a message from another user's session, a committed database transaction — invalidates the
+composables that read it, and a patch follows. Sending updates to a connected client needs no separate
+API. `jetlin-db` is built on exactly that: a stored row *is* composition state, so committing a write
+recomposes whoever was reading it. See [`db.md`](db.md).
 
 ---
 
@@ -881,6 +883,11 @@ Ordered by what it stops you doing, not by size.
 
 ### Would stop a real application
 
+- **Persistence is covered, with known holes.** `jetlin-db` stores entities in SQLite with row-level
+  access control, generated migrations and reactive revocation; [`db.md`](db.md) §8 is its own list of
+  what is missing. The four that matter here: a leaked record reference carries its access with it,
+  transitive visibility changes do not fan out to already-open pages, SQLite offers no second
+  enforcement layer underneath the policies, and there are no indexes.
 - **File uploads.** A WebSocket is the wrong pipe for bulk binary, so this needs a separate HTTP
   endpoint, progress reporting, and correlation back to the session that asked for it.
 - **Event coverage is thin.** Six handlers (`onClick`, `onInput`, `onChange`, `onChecked`,
@@ -907,6 +914,13 @@ Ordered by what it stops you doing, not by size.
   described in section 9, which has to be decided first. Two changes go with it whenever it happens:
   a generation counter on the snapshot so two processes cannot resurrect each other's state, and
   moving `SessionStore` out of `jetlin-server-ktor` so an implementation need not depend on Ktor.
+- **The resident graph is per-process.** An application using `jetlin-db` keeps its working set in
+  memory, as live Compose state, and a second node would hold a second copy: two graphs accepting
+  writes against one file, each recomposing only its own sessions. This is a *harder* blocker for
+  multi-node than `SessionStore`, because a shared session store is an implementation and this is a
+  design question — one writer with followers, or a shared log every node applies. `jetlin-db` detects
+  the situation rather than tolerating it: `PRAGMA data_version` moving under it refuses the write
+  (see [`db.md`](db.md) §6), so the failure is loud instead of silent divergence.
 
 ### Known and deliberate
 

@@ -135,6 +135,9 @@ live navigation, forms and hibernation on top of it. [`docs/architecture.md`](do
 has the full design: the update path, the protocol, sessions, input handling, design decisions, and
 §13 lists everything missing — most importantly that nothing is published to Maven, there are no
 file uploads, and it runs on one node.
+[`docs/db.md`](docs/db.md) is the same for `jetlin-db` — entities, policies, route guards, migrations —
+and its §8 lists what that is missing: a leaked reference is authority, transitive visibility on write is
+not caught, there is no defense in depth, and there are no indexes.
 [`docs/comparison.md`](docs/comparison.md) sets it against Phoenix LiveView, Livewire, Blazor Server
 and others, including where it is behind.
 
@@ -159,6 +162,7 @@ val expanded = remember { mutableStateOf(false) }   // does not; recomputing cos
 
 ```bash
 ./gradlew :samples:demo:run          # http://localhost:8080
+./gradlew :samples:teams:run         # http://localhost:8081
 ```
 
 A small app: a keyed todo list, a detail page with server-side validation reached by a real
@@ -230,11 +234,51 @@ onNode(hasTestTag("draft")).assertValue("half-typed")
 The module depends on no test framework — assertions throw `AssertionError` — so it works with
 whichever runner you already use.
 
+## Storing things
+
+`jetlin-db` makes a stored row an ordinary Kotlin object. Reading a field subscribes the composable that
+read it; writing one commits to SQLite and *then* recomposes every session that was reading it, so nothing
+ever renders a value the database refused.
+
+```kotlin
+@Entity
+class Todo(@Owner val owner: User, title: String, done: Boolean = false) : Record() {
+    var title: String by column(title)
+    var done: Boolean by column(done)
+    var team: Team? by reference()
+
+    companion object : Policy<Todo, User> {
+        // Mine, or my team's. A plain Kotlin expression over live objects — no query language.
+        override fun canRead(row: Todo, viewer: User) =
+            row.owner == viewer || (row.team != null && row.team == viewer.team)
+        override fun canWrite(row: Todo, viewer: User) = row.owner == viewer
+    }
+}
+
+// `update` takes the viewer as a context parameter: a write with nobody in scope does not compile.
+todo.update { done = !done }
+```
+
+Access control is reactive, which is the part worth seeing. Alice takes a todo off the team:
+
+```kotlin
+with(alice) { todo.update { team = null } }
+```
+
+Bob is looking at his list in another session. It iterated a policy-filtered collection, so Alice's write
+invalidates exactly the compositions that read what the policy read, and the row leaves his page. No
+subscription, no broadcast, no invalidation code. The same holds for route guards — revoke someone's admin
+role and they are moved off `/admin/users` while they are sitting on it.
+
+[`docs/db.md`](docs/db.md) is the full design, including migrations, the memory cliff, and what is missing.
+
 ## Test
 
 ```bash
 ./gradlew test                       # unit tests, asserting exact op streams
+./gradlew check                      # the above, plus the conventions and the migration tooling
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
+./gradlew :samples:teams:benchmark   # retained heap, resident graph vs sessions
 
 cd e2e && npm install && npx playwright test    # browser tests (server must be running)
 ```
@@ -267,7 +311,11 @@ period.
 | `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
 | `jetlin-testing` | Driving a view headlessly, for testing an application's own UI logic |
+| `jetlin-db` | Records, cells, the identity map, policies, the gate, snapshot transactions, SQLite |
+| `jetlin-db-ksp` | KSP processor: tables, column objects, drafts, gated accessors, schema snapshot |
+| `jetlin-db-gradle` | `dbDiff`, `dbMigrate`, `dbVerify` and the migration engine behind them |
 | `samples/demo` | Runnable five-page demo and the memory benchmark |
+| `samples/teams` | Two-login sample: owner-only, team-shared, and an admin-only column |
 | `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
 
 ## CI

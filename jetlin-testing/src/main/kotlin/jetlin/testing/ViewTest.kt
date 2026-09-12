@@ -1,6 +1,7 @@
 package jetlin.testing
 
 import androidx.compose.runtime.Composable
+import jetlin.html.AttributeKey
 import jetlin.html.HtmlOwner
 import jetlin.html.LiveView
 import jetlin.html.RequestContext
@@ -58,7 +59,7 @@ public fun runViewTest(
  * not the shape of the protocol underneath it.
  */
 public class ViewTest internal constructor(
-    private val request: RequestContext,
+    private var request: RequestContext,
     private val framePolicy: FramePolicy,
 ) : AutoCloseable {
 
@@ -100,8 +101,36 @@ public class ViewTest internal constructor(
     private val live: LiveView
         get() = view ?: error("No content set; call setContent { ... } first")
 
+    /**
+     * Attaches a session attribute — the viewer, normally.
+     *
+     * ```kotlin
+     * setAttribute(ViewerKey, root)
+     * setRoutes(appRoutes)
+     * ```
+     *
+     * Takes effect for every view composed from here on, which includes the one
+     * [hibernateAndRestore] builds. That is how the wake case is tested: a session that slept wakes with
+     * its attributes recomputed from the connection that woke it, so changing the viewer and waking is
+     * exactly what a role revoked while hibernated looks like.
+     */
+    public fun <T> setAttribute(key: AttributeKey<T>, value: T?) {
+        request = request.with(key, value)
+    }
+
     /** Where the view currently thinks it is, as it would appear in the address bar. */
     public val currentUrl: String get() = live.currentUrl
+
+    /**
+     * The document title the composition asked for.
+     *
+     * Worth asserting on its own: a route's title is rendered into `<head>` before the body, so a title
+     * derived from a record discloses it even when the body refused to show it.
+     */
+    public suspend fun title(): String? {
+        live.awaitIdle()
+        return live.title
+    }
 
     public fun assertUrl(expected: String) {
         assertSame("Current URL", expected, currentUrl)

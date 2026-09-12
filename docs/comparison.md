@@ -76,6 +76,9 @@ Present, partial and absent, with no attempt to make the last column shorter tha
 | Third-party widget integration | `ClientComponent` | hooks | `wire:ignore` + Alpine | JS interop |
 | Idle-session hibernation | yes | no | n/a (stateless) | no |
 | Headless test kit | `jetlin-testing` | `LiveViewTest` | Livewire test helpers | bUnit |
+| Data layer in the box | `jetlin-db` (SQLite, resident) | Ecto | Eloquent | EF Core |
+| Row-level access control in it | yes, as Kotlin functions | Ecto scopes, by hand | policies, by hand | by hand |
+| Database-level second layer | **no** | Postgres RLS | Postgres RLS | Postgres RLS |
 | Asserting *how much* re-rendered | yes | no | no | no |
 | File uploads | **no** | yes | yes | yes |
 | More than one node | **no** | yes | yes | yes (with backplane) |
@@ -83,6 +86,39 @@ Present, partial and absent, with no attempt to make the last column shorter tha
 | Session cap / runaway-client limit | yes (not a DoS defence) | yes | framework-level | yes |
 | Telemetry | **no** | yes | yes | yes |
 | Ecosystem, components, docs | **no** | large | large | large |
+
+---
+
+## The data layer
+
+Phoenix has Ecto, Rails has Active Record, Blazor has EF Core. `jetlin-db` is a different shape, and the
+differences are worth stating plainly rather than claimed as wins.
+
+**No query language.** An Ecto query or a LINQ expression is compiled to SQL against a database holding
+more than fits in memory. `jetlin-db` keeps the working set resident as live objects, so `filter`,
+`sortedBy` and `groupBy` from the Kotlin standard library *are* the query layer, and a relation is a
+pointer dereference. That is simpler and it is also the constraint: no indexes, linear scans, and memory
+as the ceiling — around 1.1 kB per stored row, measured. The mature ORMs are built for data that does not
+fit in memory; this one is built for the case where it does, which is most applications and not all.
+
+**Policies are functions, not scopes.** In Ecto or Active Record, "only the owner may see this" is a
+`where` clause you remember to add — a scope, a default scope, a Pundit policy consulted by hand. Here it
+is a method on the entity's companion, the only way to obtain a record goes through it, and an entity with
+no policy fails the build. The cost is that it only works for data the process holds: a policy cannot be
+translated to SQL, which is the same fact as the next two paragraphs.
+
+**Reactive revocation, which none of them do.** Because a policy reads live state and reading a filtered
+collection subscribes the reader, unsharing a row removes it from other people's *open pages*, and
+revoking a role moves someone off the page they are sitting on. In LiveView or Blazor that is a
+`broadcast` and a `handle_info`, written by hand per case; in a request-response framework it waits for the
+next request. Here it is the absence of code. This is the one thing on this page that is genuinely not
+available elsewhere, and it follows from the same property as the first table in this document.
+
+**No defense in depth, which all of them have.** Ecto, Active Record and EF Core sit on Postgres, where
+row-level security can enforce the same rules a second time, underneath the application. SQLite has no
+such layer, so `jetlin-db`'s policies are the only enforcement there is. A bug in a policy is a
+disclosure with nothing behind it, and arbitrary Kotlin policies do not port to RLS. For data where that
+matters, this is the wrong tool and the tables above do not make up for it.
 
 ---
 
@@ -105,6 +141,9 @@ against somebody who means it: one source can fill the cap and get everyone else
 many sessions at the permitted rate. Per-address limits need a decision about trusting
 `X-Forwarded-For` and for now belong in front of the application — which is where the mature
 frameworks put them too, but they say so up front and have the operational guidance to match.
+
+**The data layer has no second enforcement layer and no indexes.** See above. Also: one process owns the
+database file, so the data layer inherits the one-node limit rather than softening it.
 
 **No ecosystem.** LiveView has component libraries, LiveView Native, an eight-year-old community and
 Elixir's supervision trees underneath it. Vaadin ships a commercial component suite. Jetlin has a

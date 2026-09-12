@@ -23,3 +23,15 @@ subprojects {
         }
     }
 }
+
+/**
+ * An included build is not reached by the root build's own lifecycle tasks, so the tooling's tests would
+ * silently never run. `./gradlew build` and `./gradlew check` stay the two commands that cover everything.
+ */
+for (lifecycle in listOf("build", "check")) {
+    tasks.register(lifecycle) {
+        group = "build"
+        description = "Runs $lifecycle in the included builds as well."
+        dependsOn(gradle.includedBuild("jetlin-db-gradle").task(":$lifecycle"))
+    }
+}

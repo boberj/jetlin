@@ -1,19 +1,50 @@
 package jetlin.testing
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import jetlin.html.Guard
+import jetlin.html.Guarded
+import jetlin.html.RequestContext
+import jetlin.html.RouteGuards
 import jetlin.html.RouteHost
 import jetlin.html.RoutePattern
 import jetlin.html.Router
+import jetlin.html.Subject
+import jetlin.html.LocalRouteGuards
 
 /** Collects the routes a test makes available. */
 public class RoutesBuilder internal constructor() {
-    internal val routes: MutableList<Pair<RoutePattern, @Composable () -> Unit>> = mutableListOf()
+    internal val routes: MutableList<Pair<RoutePattern, TestRoute>> = mutableListOf()
 
     internal var container: (@Composable (route: @Composable () -> Unit) -> Unit)? = null
 
-    /** Registers [content] at [pattern], e.g. `view("/todo/{id}") { TodoDetailPage() }`. */
-    public fun view(pattern: String, content: @Composable () -> Unit) {
-        routes += RoutePattern(pattern) to content
+    /**
+     * Registers [content] at [pattern], e.g. `view("/todo/{id}") { TodoDetailPage() }`.
+     *
+     * [requires] is the route's guard, declared exactly as the application declares it, so that a test
+     * drives the real thing: the guard runs inside the composition here too, which is what makes
+     * revocation and hibernation testable without a browser.
+     */
+    public fun view(pattern: String, requires: Guard? = null, content: @Composable () -> Unit) {
+        routes += RoutePattern(pattern) to TestRoute(requires, content)
+    }
+
+    /**
+     * Registers a view for one record the route resolves itself, as `JetlinConfig.view` does.
+     *
+     * The title is asserted with [ViewTest.title], because a title computed from a row the viewer may not
+     * read is a disclosure in `<head>` and nothing in the body would reveal it.
+     */
+    public fun <T : Any> view(
+        pattern: String,
+        subject: (RequestContext) -> T?,
+        title: (T) -> String,
+        requires: Guard? = null,
+        content: @Composable (T) -> Unit,
+    ) {
+        routes += RoutePattern(pattern) to TestRoute(requires) {
+            Subject(resolve = subject, title = title, content = content)
+        }
     }
 
     /**
@@ -54,16 +85,22 @@ public class RoutesBuilder internal constructor() {
 public suspend fun ViewTest.setRoutes(block: RoutesBuilder.() -> Unit) {
     val builder = RoutesBuilder().apply(block)
     val router = Router(builder.routes)
+    val guards = RouteGuards(builder.routes.map { (pattern, route) -> pattern to route.guard })
     val patterns = builder.routes.joinToString { it.first.pattern }
 
     setRoutedContent { request ->
         // The same host the server composes, so a test drives what an application runs: the
         // container above, the matched view keyed below it, saved state restored on the way back.
-        RouteHost(
-            router = router,
-            request = request,
-            container = builder.container,
-            onMiss = { path -> error("No route registered for '$path'. Registered: $patterns") },
-        ) { it() }
+        CompositionLocalProvider(LocalRouteGuards provides guards) {
+            RouteHost(
+                router = router,
+                request = request,
+                container = builder.container,
+                onMiss = { path -> error("No route registered for '$path'. Registered: $patterns") },
+            ) { route -> Guarded(route.guard) { route.content() } }
+        }
     }
 }
+
+/** One registered route: what it requires, and what it composes. */
+internal class TestRoute(val guard: Guard?, val content: @Composable () -> Unit)

@@ -1,0 +1,116 @@
+{
+  "tables": [
+    {
+      "name": "notes",
+      "entity": "jetlin.samples.teams.Note",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false,
+          "primaryKey": true
+        },
+        {
+          "name": "owner",
+          "type": "INTEGER",
+          "nullable": false,
+          "references": "users",
+          "owner": true
+        },
+        {
+          "name": "text",
+          "type": "TEXT",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "teams",
+      "entity": "jetlin.samples.teams.Team",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false,
+          "primaryKey": true
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "todos",
+      "entity": "jetlin.samples.teams.Todo",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false,
+          "primaryKey": true
+        },
+        {
+          "name": "archived",
+          "type": "INTEGER",
+          "nullable": false
+        },
+        {
+          "name": "done",
+          "type": "INTEGER",
+          "nullable": false
+        },
+        {
+          "name": "owner",
+          "type": "INTEGER",
+          "nullable": false,
+          "references": "users",
+          "owner": true
+        },
+        {
+          "name": "team",
+          "type": "INTEGER",
+          "references": "teams"
+        },
+        {
+          "name": "title",
+          "type": "TEXT",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "users",
+      "entity": "jetlin.samples.teams.User",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "nullable": false,
+          "primaryKey": true
+        },
+        {
+          "name": "admin",
+          "type": "INTEGER",
+          "nullable": false
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false
+        },
+        {
+          "name": "team",
+          "type": "INTEGER",
+          "references": "teams"
+        }
+      ]
+    }
+  ]
+}
