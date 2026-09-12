@@ -5,11 +5,14 @@ Compose snapshot state and stored in SQLite. Reading a field subscribes the comp
 writing one commits to disk and recomposes every session that was reading it. Access control is declared
 per entity as a Kotlin function and enforced where data is obtained.
 
-Status: **built and tested, not yet used by a production application.** Both samples run on it:
-`samples/teams` is the readable proof of the access-control half, and `samples/demo` — whose store used to
-be a list in memory — is the proof that porting one costs almost nothing, since its 16 application tests
-and its browser suite pass unchanged. Section 8 lists what is missing, in the order it would stop you
-shipping.
+Status: **built and tested, not yet used by a production application.** `samples/teams` is the readable
+proof; section 8 lists what is missing, in the order it would stop you shipping.
+
+`samples/demo` deliberately keeps its own in-memory store. It was ported to this framework and then put
+back: the port worked — its 16 application tests and its browser suite passed unchanged — but a sample
+whose job is to demonstrate the view layer is clearer without a database in it, and keeping one sample on
+plain `mutableStateOf` also keeps it honest that `jetlin-db` is optional. See the decision log in
+`db-framework-plan.md` §13 for what the port cost, which is the useful part of the answer.
 
 ---
 
@@ -310,15 +313,14 @@ memory equal to what is on disk. Reads are not serialized and never block.
 compositions. Two benchmarks measure the two halves:
 
 ```
-./gradlew :samples:teams:benchmark              # the graph, over a table worth measuring
+./gradlew :samples:teams:benchmark          # the graph, over a table worth measuring
 rows:               20000 resident records
 graph:              1096 bytes per record (20 MB total)
 
-./gradlew :samples:demo:benchmark               # sessions, with a graph figure beside them
+./gradlew :samples:demo:benchmark           # sessions; PAGE=real for an application's own page
 page:               synthetic          | the application's todo list
-nodes per session:  113                | 202
-live:               130 kB per session | 332 kB per session
-hibernated:         269 bytes          | 839 bytes
+nodes per session:  113                | 42
+live:               129 kB per session | 65 kB per session
 ```
 
 **A resident record costs about 1.1 kB** — a `Todo` with four columns, one reference and strings of
@@ -326,14 +328,13 @@ ordinary length. That figure barely moves between 2,000 rows and 20,000, so a hu
 around 110 MB and a million is a gigabyte: residency stops being free somewhere in the hundreds of
 thousands of rows, not the thousands.
 
-**A session costs what its page costs.** 130 kB for a synthetic 113-node page, 332 kB for the demo's real
-list page at 202 nodes — roughly 1.6 kB per node, which is the virtual DOM and the composition around it
-rather than anything the database added. A page that lists a large collection is therefore the thing to
-watch, not the collection itself: the rows are charged once to the graph, and again per session for every
-row a session actually *renders*.
+**A session costs what its page costs**, at roughly 1.5 kB a node in both of those measurements — the
+virtual DOM and the composition around it, not anything the database adds. So a page that lists a large
+collection is the thing to watch rather than the collection itself: rows are charged once to the graph,
+and again per session for each row a session actually *renders*.
 
-Reading a policy-filtered collection does add to the read set of the composition — the policy is evaluated
-per row, so a page filtering a big table subscribes to cells in every row it scanned. Measured, that is
+Reading a policy-filtered collection does add to a composition's read set, because the policy is evaluated
+per row and a page filtering a big table subscribes to cells in every row it scanned. Measured, that is
 about 30 bytes per scanned row per session: real, and an order of magnitude below the cost of rendering a
 row.
 
@@ -424,7 +425,6 @@ loads and hibernation wakes are correct. Fixing it means a protocol change.
 :jetlin-db-ksp      the processor: tables, column objects, drafts, gated accessors, schema snapshot
 :jetlin-db-gradle   dbDiff, dbMigrate, dbVerify, and the migration engine they share
 :samples:teams      a two-login sample exercising all three access shapes
-:samples:demo       the original demo, ported: one implicit viewer, no page signature mentions it
 ```
 
 `Record`, `Policy`, `View`, `Id` and the cell delegate contain no database concepts — no SQL, no

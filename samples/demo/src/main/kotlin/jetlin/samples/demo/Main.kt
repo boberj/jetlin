@@ -193,9 +193,7 @@ internal fun TodoRow(todo: Todo) {
         Input({
             type("checkbox")
             checked(todo.done)
-            // Through the store, which holds the viewer: a stored field has no bare setter, because a
-            // property setter has nowhere to put the viewer a write has to be checked against.
-            onChecked { TodoStore.setDone(todo, it) }
+            onChecked { todo.done = it }
         })
         Link("/todo/${todo.id}", { classes(if (todo.done) "todo-text done" else "todo-text") }) {
             Text(todo.title)
@@ -207,7 +205,7 @@ internal fun TodoRow(todo: Todo) {
 
 @Composable
 internal fun TodoDetailPage() {
-    val id = pathParam("id").toLongOrNull()
+    val id = pathParam("id").toIntOrNull()
     val todo = id?.let { TodoStore.find(it) }
     val navigator = LocalNavigator.current
 
@@ -261,7 +259,8 @@ internal fun TodoDetailPage() {
                     disabled(!title.isValid)
                     onClick {
                         if (title.isValid) {
-                            TodoStore.edit(todo, title.value.trim(), notes.value)
+                            todo.title = title.value.trim()
+                            todo.notes = notes.value
                             navigator.push("/")
                         }
                     }
