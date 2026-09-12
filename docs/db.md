@@ -5,8 +5,11 @@ Compose snapshot state and stored in SQLite. Reading a field subscribes the comp
 writing one commits to disk and recomposes every session that was reading it. Access control is declared
 per entity as a Kotlin function and enforced where data is obtained.
 
-Status: **built and tested, not yet used by a production application.** `samples/teams` is the readable
-proof; section 8 lists what is missing, in the order it would stop you shipping.
+Status: **built and tested, not yet used by a production application.** Both samples run on it:
+`samples/teams` is the readable proof of the access-control half, and `samples/demo` — whose store used to
+be a list in memory — is the proof that porting one costs almost nothing, since its 16 application tests
+and its browser suite pass unchanged. Section 8 lists what is missing, in the order it would stop you
+shipping.
 
 ---
 
@@ -304,25 +307,35 @@ them also makes commit order and apply order the same order, which is what makes
 memory equal to what is on disk. Reads are not serialized and never block.
 
 **Memory is the ceiling.** The working set is resident and shares a budget with the live session
-compositions. `./gradlew :samples:teams:benchmark` measures both halves:
+compositions. Two benchmarks measure the two halves:
 
 ```
+./gradlew :samples:teams:benchmark              # the graph, over a table worth measuring
 rows:               20000 resident records
-graph:              1128 bytes per record (21 MB total)
-session baseline:   12 kB per session composing nothing
-live:               2826 kB per session (554 MB total)
+graph:              1096 bytes per record (20 MB total)
+
+./gradlew :samples:demo:benchmark               # sessions, with a graph figure beside them
+page:               synthetic          | the application's todo list
+nodes per session:  113                | 202
+live:               130 kB per session | 332 kB per session
+hibernated:         269 bytes          | 839 bytes
 ```
 
 **A resident record costs about 1.1 kB** — a `Todo` with four columns, one reference and strings of
-ordinary length. That figure is stable from 20 rows to 20,000, so a hundred thousand rows is around
-110 MB and a million is a gigabyte: the point at which residency stops being free is somewhere in the
-hundreds of thousands of rows, not the thousands.
+ordinary length. That figure barely moves between 2,000 rows and 20,000, so a hundred thousand rows is
+around 110 MB and a million is a gigabyte: residency stops being free somewhere in the hundreds of
+thousands of rows, not the thousands.
 
-The session figures in that output are a heap delta and are noisy; the page measured here costs far more
-per session than `samples/demo:benchmark` reports for a comparable page (128 kB), and probing showed it is
-*not* the gate, the `View` or the policy — a plain `List<Todo>` measures the same. Treat the session number
-as unexplained until somebody profiles it properly rather than subtracting heap readings. What is not in
-doubt is the shape of the bill: sessions and the graph come out of one heap.
+**A session costs what its page costs.** 130 kB for a synthetic 113-node page, 332 kB for the demo's real
+list page at 202 nodes — roughly 1.6 kB per node, which is the virtual DOM and the composition around it
+rather than anything the database added. A page that lists a large collection is therefore the thing to
+watch, not the collection itself: the rows are charged once to the graph, and again per session for every
+row a session actually *renders*.
+
+Reading a policy-filtered collection does add to the read set of the composition — the policy is evaluated
+per row, so a page filtering a big table subscribes to cells in every row it scanned. Measured, that is
+about 30 bytes per scanned row per session: real, and an order of magnitude below the cost of rendering a
+row.
 
 There is an exit if it is ever needed, and it needs no change to the model: a cell that starts absent
 renders a placeholder instead of blocking, so cold tables can move off the resident graph. Residency is an
@@ -411,6 +424,7 @@ loads and hibernation wakes are correct. Fixing it means a protocol change.
 :jetlin-db-ksp      the processor: tables, column objects, drafts, gated accessors, schema snapshot
 :jetlin-db-gradle   dbDiff, dbMigrate, dbVerify, and the migration engine they share
 :samples:teams      a two-login sample exercising all three access shapes
+:samples:demo       the original demo, ported: one implicit viewer, no page signature mentions it
 ```
 
 `Record`, `Policy`, `View`, `Id` and the cell delegate contain no database concepts — no SQL, no

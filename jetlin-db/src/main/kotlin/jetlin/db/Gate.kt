@@ -154,11 +154,20 @@ public fun <T : Record> Db.authenticate(type: KClass<T>, match: (T) -> Boolean):
  * Only inside [unsafe], which logs: the first user in an empty database has no viewer to be checked
  * against, and the alternative to admitting that is an application with a second, quieter way in. An
  * ordinary write goes through `db.todos.add(…)` and is checked.
+ *
+ * [id] stores the record under an id of the caller's choosing, for the case where the id is part of the
+ * fixture rather than an accident of insertion order — a seeded row something links to by number, a test
+ * that asserts on `/todo/1`. The sequence is advanced past it, so an id chosen here is never handed out
+ * again; an id that is already resident is refused.
  */
-public fun <T : Record> Db.insertUnchecked(row: T): T {
+public fun <T : Record> Db.insertUnchecked(row: T, id: Long? = null): T {
     check(unsafeInEffect) {
         "insertUnchecked stores $row without checking any policy, so it is only allowed inside " +
             "unsafe { } — which says why, in the log, every time it runs."
+    }
+    if (id != null) {
+        row.adoptStoredId(id)
+        Ids.advanceTo(row::class, id)
     }
     return transact { insert(row) }
 }

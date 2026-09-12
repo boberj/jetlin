@@ -190,11 +190,18 @@ public class Db private constructor(
 
         connection.autoCommit = false
         try {
-            // Inserts before updates before deletes: a row is created before it is pointed at, and a
-            // row still pointed at fails its foreign key rather than vanishing from under a reference.
+            // Foreign keys checked at commit rather than per statement, which is what makes an order
+            // possible at all: a transaction can create a row and the row that points at it, or point a
+            // row away from something it then deletes, and no single statement order satisfies both while
+            // every statement is checked on its own. Per-transaction, and SQLite clears it on commit.
+            connection.createStatement().use { it.execute("PRAGMA defer_foreign_keys=ON") }
+
+            // Deletes first, because a primary key is *not* deferred: re-seeding a fixture under an id it
+            // used before has to free the id before claiming it. Updates last, so they can name a row this
+            // transaction inserted.
+            writes.deletes.forEach { deleteRow(it) }
             writes.inserts.forEach { insertRow(it) }
             writes.updates.forEach { (row, columns) -> updateRow(row, columns) }
-            writes.deletes.forEach { deleteRow(it) }
             connection.commit()
         } catch (t: Throwable) {
             connection.rollback()

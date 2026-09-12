@@ -1,11 +1,14 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
     application
 }
 
 dependencies {
     implementation(project(":jetlin-server-ktor"))
+    implementation(project(":jetlin-db"))
+    ksp(project(":jetlin-db-ksp"))
     implementation(libs.ktor.server.netty)
     implementation(libs.slf4j.simple)
 

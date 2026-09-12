@@ -225,6 +225,46 @@ class PersistenceTest {
     }
 
     @Test
+    fun `a row can be deleted and its id reused in the same transaction`(): Unit = runTest {
+        withStore { file ->
+            Db.open(file, schema()).use { db ->
+                val alice = db.transact { db.insert(User("Alice")) }
+                val first = unsafe("test fixture") { db.insertUnchecked(Task(alice, "first"), id = 7) }
+
+                // What re-seeding a fixture looks like: the old row goes and a new one takes its id. The
+                // flush has to order the delete before the insert, because a primary key is not deferrable
+                // — unlike the foreign keys, which are checked at commit so that one transaction can both
+                // create a row and point another at it.
+                db.transact {
+                    db.delete(first)
+                    unsafe("test fixture") { db.insertUnchecked(Task(alice, "second"), id = 7) }
+                }
+
+                assertEquals("second", singleValue(file, "SELECT title FROM tasks"))
+                assertEquals(1, rowsIn(file, "tasks"))
+                assertEquals("second", db.resident.find(Task::class, Id(7))?.title)
+            }
+        }
+    }
+
+    @Test
+    fun `one transaction can create a row and the row that points at it`(): Unit = runTest {
+        withStore { file ->
+            Db.open(file, schema()).use { db ->
+                // Inserted in the order the application happens to write them, which is not necessarily
+                // the order the foreign keys would need if each statement were checked on its own.
+                val task = db.transact {
+                    val alice = db.insert(User("Alice"))
+                    db.insert(Task(alice, "Read the plan"))
+                }
+
+                assertEquals(1, rowsIn(file, "tasks"))
+                assertEquals("Alice", task.owner.name)
+            }
+        }
+    }
+
+    @Test
     fun `a write by another connection is refused rather than silently diverging`(): Unit = runTest {
         withStore { file ->
             Db.open(file, schema()).use { db ->

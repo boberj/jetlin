@@ -141,12 +141,17 @@ not caught, there is no defense in depth, and there are no indexes.
 [`docs/comparison.md`](docs/comparison.md) sets it against Phoenix LiveView, Livewire, Blazor Server
 and others, including where it is behind.
 
-Session state lives on the server, so per-session cost sets how many users a node can carry:
+Session state lives on the server, so per-session cost sets how many users a node can carry — and with
+`jetlin-db` the stored rows are resident too, out of the same heap:
 
-| | per session | 1000 sessions |
+| | each | 1000 of them |
 |---|---|---|
-| live | 136 kB | 133 MB |
-| hibernated | 364 bytes | 356 kB |
+| live session | 130 kB | 127 MB |
+| hibernated session | 269 bytes | 263 kB |
+| stored record | 1.1 kB | 1 MB |
+
+A session costs what its page costs — roughly 1.6 kB per node — so a page that lists a large collection is
+the thing to watch rather than the collection itself.
 
 A session whose socket has gone stays live briefly — most disconnections are a tunnel or a sleeping
 laptop — then hibernates: whatever was declared `rememberSaved` is stored and the composition is
@@ -169,9 +174,9 @@ A small app: a keyed todo list, a detail page with server-side validation reache
 `<a href>` that navigates without reloading, a clock driven from the server, a panel that opens
 without a round trip, a chart drawn by JavaScript from server-held numbers, a page of markup shapes
 that are awkward to hand back to a browser, and an `/errors` page where you can break a handler and
-then break the whole session and watch the two behave differently. The store is shared across sessions, so opening
-two windows shows edits in one appearing in the other — and "Reset demo data" puts it back, in every
-open window at once.
+then break the whole session and watch the two behave differently. The store is `jetlin-db`, shared across
+sessions and durable, so opening two windows shows edits in one appearing in the other — and "Reset demo
+data" puts it back, in every open window at once.
 
 ## Testing your own views
 

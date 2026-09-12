@@ -19,24 +19,38 @@ import jetlin.runtime.rememberSaved
 import kotlinx.coroutines.runBlocking
 
 /**
- * Measures retained heap per live session.
+ * Measures retained heap per live session, and per stored row.
  *
- * Holding UI state on the server means memory scales with the number of connected users, so this
- * number sets the practical ceiling on how many sessions a node can carry. It works by creating
- * many sessions, keeping them all reachable, and comparing heap usage before and after.
+ * Holding UI state on the server means memory scales with the number of connected users; keeping the
+ * working set resident means it also scales with the number of stored rows. Both come out of one
+ * heap, so both are part of the same ceiling. It works by creating many sessions, keeping them all
+ * reachable, and comparing heap usage before and after.
+ *
+ * `PAGE=real` composes the application's own list page rather than the synthetic one below, which is
+ * how the cost of a page someone actually looks at can be told from the cost of a session.
  *
  * Run with: ./gradlew :samples:demo:benchmark
  */
 fun main() = runBlocking {
     val sessionCount = System.getenv("SESSIONS")?.toInt() ?: 1000
+    val rowCount = System.getenv("ROWS")?.toInt() ?: 1000
+    val real = System.getenv("PAGE") == "real"
+    val page: @Composable () -> Unit = if (real) ({ TodoListPage() }) else ({ BenchmarkView() })
 
     // Warm up the runtime so class loading and JIT are not counted as session cost.
-    repeat(20) { LiveView(content = { _ -> BenchmarkView() }).also { it.start() }.close() }
+    repeat(20) { LiveView(content = { _ -> page() }).also { it.start() }.close() }
+
+    // The resident graph first. Rows are live objects for the life of the process, and the sessions
+    // reading them are charged separately below.
+    val beforeGraph = usedHeap()
+    repeat(rowCount) { index -> TodoStore.add("Row $index of a benchmark, with an ordinary title") }
+    val afterGraph = usedHeap()
+    val perRow = (afterGraph - beforeGraph) / rowCount
 
     val before = usedHeap()
     val views = ArrayList<LiveView>(sessionCount)
     repeat(sessionCount) {
-        val view = LiveView(content = { _ -> BenchmarkView() })
+        val view = LiveView(content = { _ -> page() })
         view.start()
         views += view
     }
@@ -56,6 +70,9 @@ fun main() = runBlocking {
     val hibernated = usedHeap()
     val perHibernated = (hibernated - before) / sessionCount
 
+    println("page:               ${if (real) "the application's todo list" else "synthetic"}")
+    println("rows:               $rowCount resident records")
+    println("graph:              $perRow bytes per record")
     println("sessions:           $sessionCount")
     println("nodes per session:  $nodes")
     println("heap before:        ${before / 1024 / 1024} MB")
