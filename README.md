@@ -283,11 +283,3 @@ The bundled `jetlin.js` is checked in, so the Gradle build needs no npm:
 ```bash
 npm --prefix jetlin-client install && npm --prefix jetlin-client run build
 ```
-
-## Note on dependency versions
-
-Compose Multiplatform is pinned to **1.5.12**, the newest release that resolves entirely from Maven
-Central; 1.6 and later pull androidx artifacts published only to Google's Maven repo, which the
-development environment could not reach. Nothing here depends on anything newer — `Applier`,
-`Composition`, `Recomposer` and the snapshot system are stable across all of these — so it is a
-one-line bump.

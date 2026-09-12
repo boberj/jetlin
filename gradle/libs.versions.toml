@@ -1,9 +1,5 @@
 [versions]
 kotlin = "2.4.10"
-# org.jetbrains.compose.runtime:runtime is a redirect: 1.12.0 of it is androidx.compose.runtime
-# :runtime 1.12.0, which is to say Jetpack Compose itself. The androidx artifacts it brings with it
-# -- androidx.annotation, androidx.collection -- are published only to Google's Maven, which is why
-# `google()` is in settings.gradle.kts and why this stayed on 1.5.12 for as long as it did.
 compose-runtime = "1.12.0"
 coroutines = "1.11.0"
 serialization = "1.11.0"
@@ -13,6 +9,7 @@ logback = "1.5.16"
 konsist = "0.17.3"
 
 [libraries]
+# org.jetbrains.compose.runtime:runtime is a redirect to androidx.compose.runtime:runtime
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-runtime" }
 
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -23,7 +20,6 @@ serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-jso
 ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
-ktor-server-html-builder = { module = "io.ktor:ktor-server-html-builder", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
