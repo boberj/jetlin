@@ -48,6 +48,12 @@ public value class Id<T : Record>(public val value: Long) {
  * so that a subclass cannot redefine it — a record whose `equals` compared fields would break the
  * identity map, and a `data class` entity would do exactly that. [id] is assigned at construction
  * rather than at insert, so a record is usable as a `key` before it has been stored.
+ *
+ * That one row is one object is also why a record must not go into `rememberSaved`. Session state is
+ * JSON, and a record read back out of JSON would be a second object for a row the identity map already
+ * holds: not equal to it, not recomposing its readers, and never access-checked. Instead, save [id] 
+ * and look the record up again. The lookup is gated, so a session resuming without the right to read a
+ * row gets null rather than a row it was allowed to see some minutes ago.
  */
 public abstract class Record {
 
