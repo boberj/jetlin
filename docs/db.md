@@ -87,14 +87,14 @@ All three are in `samples/teams`, where they can be read rather than taken on tr
 companion object : Policy<Note, User> by owned(Note::owner)
 
 // 2. Shared by a property of a related record, written by the owner.
-override fun canRead(row: Todo, viewer: User): Boolean =
-    row.owner == viewer || (row.team != null && row.team == viewer.team)
-override fun canWrite(row: Todo, viewer: User): Boolean = row.owner == viewer
+override fun canRead(row: Todo, principal: User): Boolean =
+    row.owner == principal || (row.team != null && row.team == principal.team)
+override fun canWrite(row: Todo, principal: User): Boolean = row.owner == principal
 
 // 3. Read by many, one column restricted.
-override fun canWrite(row: Todo, column: Column<Todo>, viewer: User): Boolean = when (column) {
-    Todos.archived -> viewer.admin
-    else -> canWrite(row, viewer)
+override fun canWrite(row: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
+    Todos.archived -> principal.admin
+    else -> canWrite(row, principal)
 }
 ```
 
@@ -107,42 +107,42 @@ Two consequences worth knowing before writing one:
 - **A policy sits on the recomposition hot path.** A filtered collection evaluates it per row, per read,
   and caches nothing. Keep policies cheap, pure and free of IO — a `:conventions` test enforces the last
   of those.
-- **The viewer is an ordinary parameter here.** Policies are called by the framework and never by
+- **The principal is an ordinary parameter here.** Policies are called by the framework and never by
   application code, so there is nothing to protect at this layer. Context parameters are for the
-  application-facing API, where they stop a mutation from compiling without a viewer in scope.
+  application-facing API, where they stop a mutation from compiling without a principal in scope.
 
 ---
 
-## 3. Getting a viewer, and protecting routes
+## 3. Getting a principal, and protecting routes
 
-The viewer enters a session through `attributes { }`, which runs on the HTTP call and again when a socket
+The principal enters a session through `attributes { }`, which runs on the HTTP call and again when a socket
 wakes a hibernated session — so the principal is recomputed from the connection that arrived rather than
 trusted from a snapshot that may be minutes old.
 
 ```kotlin
-val ViewerKey = AttributeKey<User?>("viewer")
-val Viewers = Viewers(ViewerKey, signIn = "/login")
+val PrincipalKey = AttributeKey<User?>("principal")
+val Principals = Principals(PrincipalKey, signIn = "/login")
 
 jetlin {
-    attributes { call -> mapOf(ViewerKey to db.signedInUser(call)) }
+    attributes { call -> mapOf(PrincipalKey to db.signedInUser(call)) }
 
     view("/login", title = "Sign in") { SignInPage() }
-    view("/", title = "Todos", requires = Viewers.signedIn) { WithViewer { TodoListPage(db) } }
-    view("/admin/users", title = "Users", requires = Viewers.where { it.admin }) {
-        WithViewer { AdminUsersPage(db) }
+    view("/", title = "Todos", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }
+    view("/admin/users", title = "Users", requires = Principals.where { it.admin }) {
+        WithPrincipal { AdminUsersPage(db) }
     }
 }
 ```
 
-**The viewer is nullable.** A login page and a marketing page have to be reachable; authentication is a
+**The principal is nullable.** A login page and a marketing page have to be reachable; authentication is a
 route requirement, not a precondition of having a session.
 
 `db.authenticate(User::class) { it.email == email }` is the framework's one privileged root: it resolves a
-record with no viewer, because otherwise the system cannot bootstrap. A `:conventions` test names it, and
+record with no principal, because otherwise the system cannot bootstrap. A `:conventions` test names it, and
 will fail on a second one added without the same argument.
 
-`WithViewer` bridges a gap that is a property of the language rather than of the design: context
-parameters are lexical and do not flow through a `@Composable () -> Unit`, so the viewer is put back into
+`WithPrincipal` bridges a gap that is a property of the language rather than of the design: context
+parameters are lexical and do not flow through a `@Composable () -> Unit`, so the principal is put back into
 scope at the root of each page.
 
 ### Guards are a value, not an exception
@@ -168,11 +168,11 @@ view(
     "/todo/{id}",
     subject = { request -> db.todoFor(request) },   // the gated lookup
     title = { todo -> "${todo.title} · Teams" },
-    requires = Viewers.signedIn,
-) { todo -> WithViewer { TodoDetailPage(db, todo) } }
+    requires = Principals.signedIn,
+) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
 ```
 
-`db.todoFor` goes through `Todos.find`, which is gated, so it returns null for a row this viewer may not
+`db.todoFor` goes through `Todos.find`, which is gated, so it returns null for a row this principal may not
 read — and null renders not-found *before* the body composes and before the title is set. This deletes a
 bug class rather than guarding against it: under this API the insecure version is not expressible, because
 there is no path parameter left to look up by hand.
@@ -187,7 +187,7 @@ separately for that reason.
 |---|---|
 | Deep link | The guard runs at the HTTP layer. A redirect is a 302 with no session built; a refusal is a 404. |
 | In-session navigation | No page load. The guard runs in the composition and redirects client-side. |
-| Hibernation wake | `attributes { }` re-runs, so the viewer is recomputed — and the **current** route's guard is re-evaluated, not only the one being entered. A role revoked while a laptop slept is noticed when it opens. |
+| Hibernation wake | `attributes { }` re-runs, so the principal is recomputed — and the **current** route's guard is re-evaluated, not only the one being entered. A role revoked while a laptop slept is noticed when it opens. |
 
 **Guards are not the security boundary.** The row policy is. A guard is UX plus a cheap early exit: it
 stops you rendering a page that would have been empty. If a guard is ever the only thing protecting data,
@@ -200,7 +200,7 @@ top, never instead.
 
 ```kotlin
 @Composable
-context(viewer: User)
+context(principal: User)
 fun TodoListPage(db: Db) {
     Ul {
         for (todo in db.todos.sortedBy { it.archived }) {
@@ -218,17 +218,17 @@ schema.
 Writes go through a draft:
 
 ```kotlin
-db.todos.add(Todo(viewer, draft.value.trim()))
+db.todos.add(Todo(principal, draft.value.trim()))
 todo.update { done = !done }
 todo.delete()
 ```
 
-`update` carries `context(viewer: User)`, so a mutation with no viewer in lexical scope does not compile —
-and because a context parameter really is a parameter, that is checkable against the bytecode, which is
-what `PolicyTest` does.
+`update` carries `context(principal: User)`, so a mutation with no principal in lexical scope does not
+compile — and because a context parameter really is a parameter, that is checkable against the bytecode,
+which is what `PolicyTest` does.
 
 **Why `update { }` rather than `todo.done = true`?** A property setter has nowhere to put a context
-parameter, so bare assignment could only check an ambient viewer at runtime. `update { }` costs eight
+parameter, so bare assignment could only check an ambient principal at runtime. `update { }` costs eight
 characters and keeps the guarantee at compile time. The draft is also what makes column-level policy
 possible: one block can have `title = "x"` accepted and `archived = true` refused.
 
@@ -239,7 +239,7 @@ skipped write — changed on screen, absent from disk — is the exact failure t
 
 Access is checked where a record is **obtained**: a collection, a lookup, a relation. Once application
 code holds a record, reading its fields is unchecked. The alternatives were weighed and rejected: a
-per-viewer facade costs an allocation and a check on the recomposition hot path and makes the type flowing
+per-principal facade costs an allocation and a check on the recomposition hot path and makes the type flowing
 through the application a view rather than an entity; requiring a principal in the type of every read
 propagates `User` into every composable that touches data.
 
@@ -250,8 +250,8 @@ What makes that survivable is not that it is safe — it is that its failure mod
 3. Writes re-check, because a reference can outlive the check that produced it.
 4. There is exactly one escape hatch. It is called `unsafe`, it is greppable, and it logs at WARN every
    time it runs.
-5. The leak detector (`-Djetlin.db.leakDetector=true`) records which viewers obtained a record and fails
-   any field read under a viewer that never did, with the acquisition site attached as the exception's
+5. The leak detector (`-Djetlin.db.leakDetector=true`) records which principals obtained a record and fails
+   any field read under a principal that never did, with the acquisition site attached as the exception's
    cause. On in every test in this repository; off in production, where it costs one branch.
 
 ---
@@ -269,7 +269,7 @@ with(alice) { todo.update { team = null } }
 ```
 
 Bob is looking at `/` in another session. His page iterated `db.todos`, whose filter read
-`row.team == viewer.team`. Alice's write invalidates exactly the compositions that read that, Bob's list
+`row.team == principal.team`. Alice's write invalidates exactly the compositions that read that, Bob's list
 recomposes, and the row leaves his page. Nothing subscribed, nothing broadcast, no invalidation code
 anywhere in the application.
 
@@ -284,8 +284,8 @@ That user's `Guarded` re-evaluates, resolves to `NotFound`, and they are off the
 logout broadcast. Same for entity-bound routes: unshare a project and whoever is holding one of its todos
 open lands on not-found.
 
-This is easy to lose by accident — by caching a policy result per entity instead of per (entity, viewer),
-or by snapshotting the viewer at login — which is why there are tests for it in
+This is easy to lose by accident — by caching a policy result per entity instead of per (entity, principal),
+or by snapshotting the principal at login — which is why there are tests for it in
 `jetlin-db/PolicyTest.kt`, `jetlin-db/EntityRouteTest.kt`, `jetlin-testing/GuardTest.kt` and
 `samples/teams/TeamsAppTest.kt` rather than only a paragraph here.
 
@@ -433,5 +433,5 @@ generalize to data that is not in a database at all, and keeping the boundary ho
 difference between that extraction being a file move and being a redesign.
 
 `:jetlin-db` depends on `:jetlin-runtime` for the snapshot machinery and **not** on `:jetlin-html`. Route
-guards are routing, not storage, so `Access`, `Guard`, `Viewers` and `Guarded` live in `:jetlin-html` and
+guards are routing, not storage, so `Access`, `Guard`, `Principals` and `Guarded` live in `:jetlin-html` and
 work for an application whose principal is not a record.

@@ -30,9 +30,9 @@ class Team(name: String) : Record() {
 
     companion object : Policy<Team, User> {
         /** A team is visible to its members. Nothing else about it is interesting. */
-        override fun canRead(row: Team, viewer: User): Boolean = viewer.team == row
+        override fun canRead(row: Team, principal: User): Boolean = principal.team == row
 
-        override fun canWrite(row: Team, viewer: User): Boolean = viewer.admin
+        override fun canWrite(row: Team, principal: User): Boolean = principal.admin
     }
 }
 
@@ -56,9 +56,9 @@ class User(
 
     companion object : Policy<User, User> {
         /** Names are visible to everyone signed in: a shared todo has to be able to say whose it is. */
-        override fun canRead(row: User, viewer: User): Boolean = true
+        override fun canRead(row: User, principal: User): Boolean = true
 
-        override fun canWrite(row: User, viewer: User): Boolean = row == viewer || viewer.admin
+        override fun canWrite(row: User, principal: User): Boolean = row == principal || principal.admin
     }
 }
 
@@ -89,16 +89,16 @@ class Todo(
 
     companion object : Policy<Todo, User> {
         /** Shape 2: mine, or my team's. */
-        override fun canRead(row: Todo, viewer: User): Boolean =
-            row.owner == viewer || (row.team != null && row.team == viewer.team)
+        override fun canRead(row: Todo, principal: User): Boolean =
+            row.owner == principal || (row.team != null && row.team == principal.team)
 
         /** Shared means shared for reading: a teammate sees it and cannot change it. */
-        override fun canWrite(row: Todo, viewer: User): Boolean = row.owner == viewer
+        override fun canWrite(row: Todo, principal: User): Boolean = row.owner == principal
 
         /** Shape 3: archiving is an administrative act, whoever owns the row. */
-        override fun canWrite(row: Todo, column: Column<Todo>, viewer: User): Boolean = when (column) {
-            Todos.archived -> viewer.admin
-            else -> canWrite(row, viewer)
+        override fun canWrite(row: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
+            Todos.archived -> principal.admin
+            else -> canWrite(row, principal)
         }
     }
 }

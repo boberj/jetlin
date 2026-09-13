@@ -139,7 +139,7 @@ internal class JetlinDbProcessor(
             tableName = declaredTable?.takeIf { it.isNotBlank() } ?: plural(snakeCase(name)),
             isInternal = declaration.getVisibility() == Visibility.INTERNAL,
             hasPolicy = policy != null,
-            viewerType = policy?.arguments?.getOrNull(1)?.type?.resolve()?.qualified(),
+            principalType = policy?.arguments?.getOrNull(1)?.type?.resolve()?.qualified(),
             policySubject = policy?.arguments?.getOrNull(0)?.type?.resolve()?.qualified(),
             columns = columns,
             constructorParameters = constructor.parameters.mapNotNull { parameter ->
@@ -232,7 +232,7 @@ internal class JetlinDbProcessor(
         }
     }
 
-    /** The `Policy<T, V>` supertype of a companion, however many interfaces deep it is declared. */
+    /** The `Policy<T, P>` supertype of a companion, however many interfaces deep it is declared. */
     private fun findPolicy(declaration: KSClassDeclaration): KSType? {
         for (reference in declaration.superTypes) {
             val type = reference.resolve()

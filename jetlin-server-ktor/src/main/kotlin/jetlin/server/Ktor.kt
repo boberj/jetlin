@@ -148,7 +148,7 @@ public class JetlinConfig {
      * [requires] is what the route demands of whoever asks for it — authentication, a role. It is
      * evaluated in the route table rather than in the view body, because a guard inside the body has
      * already run the body, and it is evaluated again inside the composition, which is what makes a
-     * revoked role move a viewer off the page they are already on.
+     * revoked role move a principal off the page they are already on.
      */
     public fun view(
         path: String,
@@ -165,14 +165,14 @@ public class JetlinConfig {
      * ```kotlin
      * view(
      *     "/todo/{id}",
-     *     requires = Viewers.signedIn,
-     *     subject = { request -> with(Viewers.of(request)!!) { Todos.find(db, Id(request.pathParam("id"))) } },
+     *     requires = Principals.signedIn,
+     *     subject = { request -> with(Principals.of(request)!!) { Todos.find(db, Id(request.pathParam("id"))) } },
      *     title = { todo -> todo.title },
      * ) { todo -> TodoDetailPage(todo) }
      * ```
      *
      * This is the shape worth having rather than a convenience: [subject] goes through the gated lookup,
-     * so it is null for a row this viewer may not read, null renders not-found before the body composes,
+     * so it is null for a row this principal may not read, null renders not-found before the body composes,
      * and the title comes from the subject — so `<head>` cannot disclose a row the body refused. Under
      * this API the insecure version is not expressible, because there is no path parameter left to look
      * up by hand.
@@ -328,10 +328,10 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                 }
                 call.respondText(
                     // The composition's own title wins: only it knows what the route resolved, and
-                    // only it knows whether this viewer was allowed to see it.
+                    // only it knows whether this principal was allowed to see it.
                     renderPage(config, session.view.title ?: registration.title, session),
                     ContentType.Text.Html,
-                    // A route that refused this viewer is a page that is not there for them.
+                    // A route that refused this principal is a page that is not there for them.
                     if (access == Access.NotFound) HttpStatusCode.NotFound else HttpStatusCode.OK,
                 )
             }

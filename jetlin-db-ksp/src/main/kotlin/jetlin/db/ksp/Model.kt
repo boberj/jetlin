@@ -39,9 +39,9 @@ internal data class EntityModel(
     val tableName: String,
     val isInternal: Boolean,
     val hasPolicy: Boolean,
-    /** The qualified viewer type from `Policy<T, V>`, when there is a policy to read it from. */
-    val viewerType: String?,
-    /** The first type argument of `Policy<T, V>`; a mismatch is a copy-pasted companion. */
+    /** The qualified principal type from `Policy<T, P>`, when there is a policy to read it from. */
+    val principalType: String?,
+    /** The first type argument of `Policy<T, P>`; a mismatch is a copy-pasted companion. */
     val policySubject: String?,
     val columns: List<ColumnModel>,
     val constructorParameters: List<ParameterModel>,
@@ -61,12 +61,12 @@ internal data class EntityModel(
     val collectionName: String get() = objectName.replaceFirstChar(Char::lowercaseChar)
 
     /**
-     * The policy's viewer type, which every generated accessor takes as a context parameter.
+     * The policy's principal type, which every generated accessor takes as a context parameter.
      *
-     * Never read without a policy: [validate] rejects an entity whose viewer type could not be resolved,
+     * Never read without a policy: [validate] rejects an entity whose principal type could not be resolved,
      * because the generated code is unwritable without it.
      */
-    val viewer: String get() = viewerType ?: "jetlin.db.Principal"
+    val principal: String get() = principalType ?: "jetlin.db.Principal"
 
     val visibility: String get() = if (isInternal) "internal" else "public"
 
@@ -112,9 +112,9 @@ internal fun validate(entity: EntityModel): List<String> = buildList {
                 "companion copied from another entity guards the wrong rows.",
         )
     }
-    if (entity.hasPolicy && entity.viewerType == null) {
+    if (entity.hasPolicy && entity.principalType == null) {
         add(
-            "@Entity ${entity.simpleName} has a policy, but its viewer type could not be resolved. " +
+            "@Entity ${entity.simpleName} has a policy, but its principal type could not be resolved. " +
                 "Declare `Policy<${entity.simpleName}, YourUser>` on the companion directly rather than " +
                 "through an interface that hides the type arguments.",
         )

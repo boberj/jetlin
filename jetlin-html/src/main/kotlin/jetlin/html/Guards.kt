@@ -17,7 +17,7 @@ public sealed interface Access {
     public data object Allow : Access
 
     /**
-     * The route is not here for this viewer.
+     * The route is not here for this principal.
      *
      * The default refusal, in preference to anything that says "forbidden": a 403 on `/admin/users`
      * confirms there is an admin panel. Disclosure should be the explicit choice, not the default one.
@@ -53,46 +53,46 @@ public infix fun Guard.and(other: Guard): Guard = Guard { request ->
 /**
  * Guards for an application's own principal type.
  *
- * Jetlin knows nothing about authentication, so the application says where its viewer lives and gets
+ * Jetlin knows nothing about authentication, so the application says where its principal lives and gets
  * typed guards back:
  *
  * ```kotlin
- * val ViewerKey = AttributeKey<User?>("viewer")
- * val Viewers = Viewers(ViewerKey, signIn = "/login")
+ * val PrincipalKey = AttributeKey<User?>("principal")
+ * val Principals = Principals(PrincipalKey, signIn = "/login")
  *
  * view("/login", title = "Sign in") { LoginPage() }
- * view("/todos", title = "My todos", requires = Viewers.signedIn) { TodoListPage() }
- * view("/admin/users", title = "Users", requires = Viewers.where { it.admin }) { AdminUsers() }
+ * view("/todos", title = "My todos", requires = Principals.signedIn) { TodoListPage() }
+ * view("/admin/users", title = "Users", requires = Principals.where { it.admin }) { AdminUsers() }
  * ```
  */
-public class Viewers<V : Any>(
-    private val key: AttributeKey<V?>,
+public class Principals<P : Any>(
+    private val key: AttributeKey<P?>,
     private val signIn: String = "/login",
 ) {
-    /** The viewer this request belongs to, if any. */
-    public fun of(request: RequestContext): V? = request[key]
+    /** The principal this request belongs to, if any. */
+    public fun of(request: RequestContext): P? = request[key]
 
     /**
-     * Requires a viewer, and sends anyone else to the sign-in page with where they were going.
+     * Requires a principal, and sends anyone else to the sign-in page with where they were going.
      *
      * A redirect rather than a not-found, because a page that exists and needs signing in is not a
-     * secret: the viewer is about to prove who they are anyway.
+     * secret: the principal is about to prove who they are anyway.
      */
     public val signedIn: Guard = Guard { request ->
         if (request[key] != null) Access.Allow else Access.Redirect(signInUrl(request))
     }
 
     /**
-     * Requires a viewer [predicate] accepts.
+     * Requires a principal [predicate] accepts.
      *
      * Signed out redirects to sign in; signed in and refused is [Access.NotFound], because whether the
-     * route exists at all is not this viewer's business.
+     * route exists at all is not this principal's business.
      */
-    public fun where(predicate: (V) -> Boolean): Guard = Guard { request ->
-        val viewer = request[key]
+    public fun where(predicate: (P) -> Boolean): Guard = Guard { request ->
+        val principal = request[key]
         when {
-            viewer == null -> Access.Redirect(signInUrl(request))
-            predicate(viewer) -> Access.Allow
+            principal == null -> Access.Redirect(signInUrl(request))
+            predicate(principal) -> Access.Allow
             else -> Access.NotFound
         }
     }
@@ -123,8 +123,8 @@ public val LocalRouteGuards: ProvidableCompositionLocal<RouteGuards> =
  * Composes [content] only if [guard] allows this request.
  *
  * Evaluated inside the composition, which is what makes eviction free: a guard reads live state — a
- * viewer's role is a cell — so revoking that role invalidates this composable, which re-evaluates to a
- * redirect and moves the viewer off the page they are sitting on. No polling, no logout broadcast.
+ * principal's role is a cell — so revoking that role invalidates this composable, which re-evaluates to a
+ * redirect and moves the principal off the page they are sitting on. No polling, no logout broadcast.
  *
  * It is also why the same guard covers all three ways into a route: a deep link (the HTTP layer answers
  * first, and this agrees), an in-session navigation (the request changes, this recomposes), and a
@@ -145,7 +145,7 @@ public fun Guarded(
             notFound()
         }
         is Access.Redirect -> {
-            // Nothing is rendered while leaving: the page being left is not this viewer's to see, and a
+            // Nothing is rendered while leaving: the page being left is not this principal's to see, and a
             // flash of it is a disclosure however brief.
             val navigator = LocalNavigator.current
             LaunchedEffect(access.to) { navigator.replace(access.to) }
@@ -159,7 +159,7 @@ public fun Guarded(
  * The point of letting a route resolve its own subject is that the insecure shape stops being
  * expressible. `view("/todo/{id}") { TodoStore.find(pathParam("id")) }` is a textbook insecure direct
  * object reference; here there is no path parameter left to look up by hand, and [resolve] goes through
- * the gated lookup, which returns null for a row this viewer may not read.
+ * the gated lookup, which returns null for a row this principal may not read.
  *
  * Null resolves to not-found *before* [content] composes, and — this is the part that is easy to miss —
  * before the title is set, so the document title cannot disclose a row the body refused to show.
@@ -185,7 +185,7 @@ public fun <T : Any> Subject(
 }
 
 /**
- * Composes [content] only if the route at [url] would admit this viewer.
+ * Composes [content] only if the route at [url] would admit this principal.
  *
  * For navigation: `IfPermitted("/admin/users") { NavLink("/admin/users") { Text("Users") } }` hides the
  * link by the same rule that blocks the route, so the two cannot disagree.
@@ -197,7 +197,7 @@ public fun IfPermitted(url: String, content: @Composable () -> Unit) {
     if (guard == null || guard.check(request) == Access.Allow) content()
 }
 
-/** The page shown for a route that is not here, or not here for this viewer. */
+/** The page shown for a route that is not here, or not here for this principal. */
 @Composable
 public fun NotFoundPage() {
     Div({ classes("jl-not-found") }) {
@@ -210,7 +210,7 @@ public fun NotFoundPage() {
  *
  * A title has to be able to come from the composition rather than from the route table, because a
  * route's title can depend on what the route resolved — and a title computed from a row before anything
- * checked whether the viewer may read it is a disclosure in `<head>`.
+ * checked whether the principal may read it is a disclosure in `<head>`.
  */
 @Composable
 public fun DocumentTitle(title: String) {

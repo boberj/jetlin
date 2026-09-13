@@ -5,7 +5,7 @@ import jetlin.html.AttributeKey
 import jetlin.html.Div
 import jetlin.html.H1
 import jetlin.html.Text
-import jetlin.html.Viewers
+import jetlin.html.Principals
 import jetlin.html.RequestContext
 import jetlin.testing.ViewTest
 import jetlin.testing.hasTag
@@ -30,11 +30,11 @@ import kotlin.test.assertEquals
 class EntityRouteTest {
 
     @Test
-    fun `a viewer reaches their own record, and the title comes from it`(): Unit = withRoutedDb { db, alice, _ ->
+    fun `a principal reaches their own record, and the title comes from it`(): Unit = withRoutedDb { db, alice, _ ->
         val task = db.transact { db.insert(Task(alice, "Read the plan")) }
 
         runViewTest(url = "/task/${task.id}") {
-            setAttribute(ViewerKey, alice)
+            setAttribute(PrincipalKey, alice)
             setTaskRoutes(db)
 
             onNode(hasTag("h1")).assertText("Read the plan")
@@ -48,7 +48,7 @@ class EntityRouteTest {
             val task = db.transact { db.insert(Task(alice, "Alice's secret plan")) }
 
             runViewTest(url = "/task/${task.id}") {
-                setAttribute(ViewerKey, bob)
+                setAttribute(PrincipalKey, bob)
                 setTaskRoutes(db)
 
                 onNode(hasTag("h1")).assertText("Not found")
@@ -64,7 +64,7 @@ class EntityRouteTest {
     fun `a row that exists and one that does not are indistinguishable`(): Unit =
         withRoutedDb { db, _, bob ->
             runViewTest(url = "/task/9999") {
-                setAttribute(ViewerKey, bob)
+                setAttribute(PrincipalKey, bob)
                 setTaskRoutes(db)
 
                 onNode(hasTag("h1")).assertText("Not found")
@@ -79,7 +79,7 @@ class EntityRouteTest {
             val task = db.transact { db.insert(Task(alice, "shared plan").also { it.project = project }) }
 
             runViewTest(url = "/task/${task.id}") {
-                setAttribute(ViewerKey, bob)
+                setAttribute(PrincipalKey, bob)
                 setTaskRoutes(db)
                 onNode(hasTag("h1")).assertText("shared plan")
 
@@ -94,9 +94,9 @@ class EntityRouteTest {
         }
 }
 
-private val ViewerKey = AttributeKey<User?>("viewer")
+private val PrincipalKey = AttributeKey<User?>("principal")
 
-private val Viewers = Viewers(ViewerKey, signIn = "/login")
+private val Principals = Principals(PrincipalKey, signIn = "/login")
 
 /** The route table under test, declared the way an application declares it. */
 private suspend fun ViewTest.setTaskRoutes(db: Db) {
@@ -106,21 +106,21 @@ private suspend fun ViewTest.setTaskRoutes(db: Db) {
             "/task/{id}",
             subject = { request -> taskOf(db, request) },
             title = { task -> task.title },
-            requires = Viewers.signedIn,
+            requires = Principals.signedIn,
         ) { task -> Page(task.title) }
     }
 }
 
 /**
- * The route's own lookup: gated, so it is null for a row this viewer may not read.
+ * The route's own lookup: gated, so it is null for a row this principal may not read.
  *
  * The whole point of the shape — the route cannot be written any other way, because the path parameter
  * never reaches the view.
  */
 private fun taskOf(db: Db, request: RequestContext): Task? {
-    val viewer = Viewers.of(request) ?: return null
+    val principal = Principals.of(request) ?: return null
     val id = request.pathParams["id"]?.toLongOrNull() ?: return null
-    return with(viewer) { Tasks.find(db, Id(id)) }
+    return with(principal) { Tasks.find(db, Id(id)) }
 }
 
 @Composable

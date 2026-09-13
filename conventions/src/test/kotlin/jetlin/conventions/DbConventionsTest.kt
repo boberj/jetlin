@@ -16,15 +16,15 @@ import kotlin.test.assertTrue as assertTrueKotlin
 class DbConventionsTest {
 
     /**
-     * Handing out a record is an authorization decision, so the viewer has to be in the signature.
+     * Handing out a record is an authorization decision, so the principal has to be in the signature.
      *
      * The design's load-bearing choice is that a reference *is* authority: once application code holds a
      * record, reading its fields is unchecked. That is only survivable while every way of obtaining one
      * is gated, which means no public function may return a record, or a collection of records, without
-     * a viewer to check against. One ungated accessor, added in good faith, collapses the model.
+     * a principal to check against. One ungated accessor, added in good faith, collapses the model.
      */
     @Test
-    fun `nothing public in jetlin-db hands out a record without a viewer`() {
+    fun `nothing public in jetlin-db hands out a record without a principal`() {
         val handOuts = Konsist.scopeFromProject(moduleName = "jetlin-db", sourceSetName = "main")
             .functions(includeNested = true, includeLocal = false)
             .filter { it.hasPublicOrDefaultModifier }
@@ -32,7 +32,7 @@ class DbConventionsTest {
                 val returned = function.returnType?.name?.removeSuffix("?") ?: return@filter false
                 // A type parameter this function declares and bounds by Record is a record; a View is a
                 // collection of them. A bare `T` belonging to the *class* is not matched, and that is
-                // right: the instance it came from was built by the gate and carries the viewer, which is
+                // right: the instance it came from was built by the gate and carries the principal, which is
                 // how `View.add` is checked without taking one.
                 val recordParameters = function.typeParameters
                     .filter { "Record" in it.name }
@@ -47,13 +47,13 @@ class DbConventionsTest {
                 "the Konsist scope is probably resolving to the wrong module",
         )
 
-        handOuts.assertTrue(additionalMessage = VIEWER_REQUIRED) { function ->
+        handOuts.assertTrue(additionalMessage = PRINCIPAL_REQUIRED) { function ->
             val topLevel = function.containingDeclaration is KoFileDeclaration
             val owner = (function.containingDeclaration as? KoNameProvider)?.name
             function.name in PRIVILEGED_TOP_LEVEL && topLevel ||
                 "$owner.${function.name}" in PRIVILEGED_MEMBERS ||
                 function.parameters.any { parameter ->
-                    parameter.type.name.removeSuffix("?").let { it == "V" || it == "Principal" }
+                    parameter.type.name.removeSuffix("?").let { it == "P" || it == "Principal" }
                 }
         }
     }
@@ -111,21 +111,21 @@ class DbConventionsTest {
 }
 
 /**
- * The privileged roots: the places that obtain a record with no viewer because none exists yet.
+ * The privileged roots: the places that obtain a record with no principal because none exists yet.
  *
- * Each is a place where there is no viewer to check against yet, and each says so at its definition.
+ * Each is a place where there is no principal to check against yet, and each says so at its definition.
  * Adding to this list is the visible review event it should be: an entry here is a hole in the gate, and it
  * needs the same kind of argument these have. A top-level function has no containing type, which is why
  * the top-level ones are listed by name alone.
  */
 private val PRIVILEGED_MEMBERS = setOf(
-    // Reading the file at boot: the graph being built is what a viewer would later be resolved against.
+    // Reading the file at boot: the graph being built is what a principal would later be resolved against.
     "Row.reference",
     "Row.referenceOrNull",
 )
 
 private val PRIVILEGED_TOP_LEVEL = setOf(
-    // Working out who the viewer is. A system that cannot resolve a principal without a principal cannot
+    // Working out who the principal is. A system that cannot resolve a principal without a principal cannot
     // start, which is why §4.4 blesses exactly one root for it.
     "authenticate",
     // Seeding, fixtures and backfills. Not a second quiet way in: it refuses unless `unsafe { }` is in
@@ -135,8 +135,8 @@ private val PRIVILEGED_TOP_LEVEL = setOf(
 
 private val BLOCKING = listOf("runBlocking", "Thread.sleep", ".get()", "readText")
 
-private val VIEWER_REQUIRED = """
-    A public function that returns a record, or a collection of records, must take the viewer it is
+private val PRINCIPAL_REQUIRED = """
+    A public function that returns a record, or a collection of records, must take the principal it is
     handing them to.
 
     Authorization happens where a record is obtained — a collection, a lookup, a relation — because

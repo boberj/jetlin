@@ -22,16 +22,16 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * The sample as an application: two viewers, one database, and what each of them can see.
+ * The sample as an application: two principals, one database, and what each of them can see.
  *
  * Every test here is a statement about access rather than about markup, which is the only kind of statement
- * worth making twice in a framework and an application. A single-viewer test cannot fail the interesting
+ * worth making twice in a framework and an application. A single-principal test cannot fail the interesting
  * way, so almost every one of these has two.
  */
 class TeamsAppTest {
 
     @Test
-    fun `a viewer sees their own todos and their team's`(): Unit = withSample { db ->
+    fun `a principal sees their own todos and their team's`(): Unit = withSample { db ->
         runViewTest {
             signedInAs(db, "bob@example.com")
 
@@ -71,7 +71,7 @@ class TeamsAppTest {
                 onNode(hasTestTag("todo") and hasText("Rehearse the demo", substring = true)).assertExists()
                 // A share arriving from another session redraws the list and nothing else: the chrome
                 // above it recomposes to the same markup and emits nothing.
-                arrival.assertUntouched(hasTestTag("viewer"), hasTestTag("draft"))
+                arrival.assertUntouched(hasTestTag("principal"), hasTestTag("draft"))
 
                 with(alice) { rehearse.update { team = null } }
                 awaitIdle()
@@ -124,7 +124,7 @@ class TeamsAppTest {
     }
 
     @Test
-    fun `losing admin moves the viewer off the admin page`(): Unit = withSample { db ->
+    fun `losing admin moves the principal off the admin page`(): Unit = withSample { db ->
         val root = db.user("root@example.com")
 
         runViewTest(url = "/admin/users") {
@@ -141,7 +141,7 @@ class TeamsAppTest {
     }
 
     @Test
-    fun `another viewer's todo is not found, and its title stays out of the head`(): Unit =
+    fun `another principal's todo is not found, and its title stays out of the head`(): Unit =
         withSample { db ->
             val alice = db.user("alice@example.com")
             val secret = with(alice) { Todos.all(db).single { it.title == "Rehearse the demo" } }
@@ -155,7 +155,7 @@ class TeamsAppTest {
         }
 
     @Test
-    fun `a viewer's own todo opens, titled after it`(): Unit = withSample { db ->
+    fun `a principal's own todo opens, titled after it`(): Unit = withSample { db ->
         val alice = db.user("alice@example.com")
         val own = with(alice) { Todos.all(db).single { it.title == "Rehearse the demo" } }
 
@@ -184,7 +184,7 @@ class TeamsAppTest {
     }
 
     @Test
-    fun `adding a todo stores it, for the viewer who added it`(): Unit = withSample { db ->
+    fun `adding a todo stores it, for the principal who added it`(): Unit = withSample { db ->
         runViewTest {
             signedInAs(db, "carol@example.com")
 
@@ -203,18 +203,18 @@ class TeamsAppTest {
 
 /** Signs in as [email] and composes the application's real route table. */
 private suspend fun ViewTest.signedInAs(db: Db, email: String) {
-    setAttribute(ViewerKey, db.user(email))
+    setAttribute(PrincipalKey, db.user(email))
     setRoutes {
         view("/login") { SignInPage() }
-        view("/", requires = Viewers.signedIn) { WithViewer { TodoListPage(db) } }
-        view("/notes", requires = Viewers.signedIn) { WithViewer { NotesPage(db) } }
+        view("/", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }
+        view("/notes", requires = Principals.signedIn) { WithPrincipal { NotesPage(db) } }
         view(
             "/todo/{id}",
             subject = { request -> db.todoFor(request) },
             title = { todo -> "${todo.title} · Teams" },
-            requires = Viewers.signedIn,
-        ) { todo -> WithViewer { TodoDetailPage(db, todo) } }
-        view("/admin/users", requires = Viewers.where { it.admin }) { WithViewer { AdminUsersPage(db) } }
+            requires = Principals.signedIn,
+        ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
+        view("/admin/users", requires = Principals.where { it.admin }) { WithPrincipal { AdminUsersPage(db) } }
         app { route -> Shell(route) }
     }
 }

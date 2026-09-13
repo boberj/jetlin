@@ -28,88 +28,88 @@ import org.slf4j.LoggerFactory
  */
 public object Gate {
 
-    /** Every row of [table] this viewer may read, as a live list. */
-    public fun <T : Record, V : Principal> view(
+    /** Every row of [table] this principal may read, as a live list. */
+    public fun <T : Record, P : Principal> view(
         db: Db,
         table: Table<T>,
-        policy: Policy<T, V>,
-        viewer: V,
+        policy: Policy<T, P>,
+        principal: P,
     ): View<T> {
-        val gate = Gated(db, table, policy, viewer)
+        val gate = Gated(db, table, policy, principal)
         return View(db.resident.rows(table.type), gate::canRead, gate)
     }
 
     /**
-     * The row with this id, or null — including when the row exists and this viewer may not read it.
+     * The row with this id, or null — including when the row exists and this principal may not read it.
      *
      * Null rather than an exception, and deliberately indistinguishable from "no such row": a
      * distinguishable refusal tells whoever is probing that the row exists.
      */
-    public fun <T : Record, V : Principal> find(
+    public fun <T : Record, P : Principal> find(
         db: Db,
         table: Table<T>,
-        policy: Policy<T, V>,
-        viewer: V,
+        policy: Policy<T, P>,
+        principal: P,
         id: Id<T>,
     ): T? {
         val row = db.resident.find(table.type, id) ?: return null
-        return row.takeIf { Gated(db, table, policy, viewer).canRead(it) }
+        return row.takeIf { Gated(db, table, policy, principal).canRead(it) }
     }
 
     /**
-     * The rows of [table] that [match], filtered by what this viewer may read.
+     * The rows of [table] that [match], filtered by what this principal may read.
      *
      * What an inverse relation is: `project.tasks` is every task whose `project` is this one, minus the
-     * ones this viewer cannot see. Filtered per read rather than cached, so sharing a project with
+     * ones this principal cannot see. Filtered per read rather than cached, so sharing a project with
      * someone adds its tasks to their open page with no invalidation code anywhere.
      */
-    public fun <T : Record, V : Principal> related(
+    public fun <T : Record, P : Principal> related(
         db: Db,
         table: Table<T>,
-        policy: Policy<T, V>,
-        viewer: V,
+        policy: Policy<T, P>,
+        principal: P,
         match: (T) -> Boolean,
     ): View<T> {
-        val gate = Gated(db, table, policy, viewer)
+        val gate = Gated(db, table, policy, principal)
         return View(db.resident.rows(table.type), { row -> match(row) && gate.canRead(row) }, gate = null)
     }
 
-    /** Stores [row], if this viewer may create it. */
-    public fun <T : Record, V : Principal> add(
+    /** Stores [row], if this principal may create it. */
+    public fun <T : Record, P : Principal> add(
         db: Db,
-        policy: Policy<T, V>,
-        viewer: V,
+        policy: Policy<T, P>,
+        principal: P,
         row: T,
     ): T {
-        if (!unsafeInEffect && !policy.canCreate(row, viewer)) {
-            throw AccessDenied("$viewer may not create $row")
+        if (!unsafeInEffect && !policy.canCreate(row, principal)) {
+            throw AccessDenied("$principal may not create $row")
         }
         return db.transact { db.insert(row) }
     }
 
-    /** Removes [row], if this viewer may delete it. */
-    public fun <T : Record, V : Principal> delete(row: T, policy: Policy<T, V>, viewer: V) {
-        if (!unsafeInEffect && !policy.canDelete(row, viewer)) {
-            throw AccessDenied("$viewer may not delete $row")
+    /** Removes [row], if this principal may delete it. */
+    public fun <T : Record, P : Principal> delete(row: T, policy: Policy<T, P>, principal: P) {
+        if (!unsafeInEffect && !policy.canDelete(row, principal)) {
+            throw AccessDenied("$principal may not delete $row")
         }
         val db = row.database ?: return // Never stored: there is nothing to remove.
         db.transact { db.delete(row) }
     }
 
     /**
-     * Runs a draft block as one transaction, having checked that this viewer may write the record at all.
+     * Runs a draft block as one transaction, having checked that this principal may write the record at all.
      *
      * The row-level check happens here and the column-level checks happen in the draft's setters, which
      * is what lets one block have `title = "x"` accepted and `archived = true` refused.
      */
-    public fun <T : Record, V : Principal> update(
+    public fun <T : Record, P : Principal> update(
         row: T,
-        policy: Policy<T, V>,
-        viewer: V,
+        policy: Policy<T, P>,
+        principal: P,
         block: () -> Unit,
     ) {
-        if (!unsafeInEffect && !policy.canWrite(row, viewer)) {
-            throw AccessDenied("$viewer may not change $row")
+        if (!unsafeInEffect && !policy.canWrite(row, principal)) {
+            throw AccessDenied("$principal may not change $row")
         }
         // A record that was never stored has nothing to commit, so it needs no transaction — which is
         // also the only way to build one up before storing it.
@@ -118,25 +118,25 @@ public object Gate {
     }
 
     /** Checked by a draft's setter before it writes one column. */
-    public fun <T : Record, V : Principal> requireWrite(
+    public fun <T : Record, P : Principal> requireWrite(
         row: T,
         column: Column<T>,
-        policy: Policy<T, V>,
-        viewer: V,
+        policy: Policy<T, P>,
+        principal: P,
     ) {
-        if (!unsafeInEffect && !policy.canWrite(row, column, viewer)) {
-            throw AccessDenied("$viewer may not change ${row::class.simpleName}.${column.name} on $row")
+        if (!unsafeInEffect && !policy.canWrite(row, column, principal)) {
+            throw AccessDenied("$principal may not change ${row::class.simpleName}.${column.name} on $row")
         }
     }
 }
 
 /**
- * Resolves a record with no viewer, for the one case that cannot have one: working out who the viewer is.
+ * Resolves a record with no principal, for the one case that cannot have one: working out who the principal is.
  *
  * ```kotlin
  * attributes { call ->
  *     val email = call.sessions.get<Auth>()?.email
- *     mapOf(ViewerKey to email?.let { db.authenticate(User::class) { user -> user.email == it } })
+ *     mapOf(PrincipalKey to email?.let { db.authenticate(User::class) { user -> user.email == it } })
  * }
  * ```
  *
@@ -151,7 +151,7 @@ public fun <T : Record> Db.authenticate(type: KClass<T>, match: (T) -> Boolean):
 /**
  * Stores a record with no policy check, for seeding, fixtures and backfills.
  *
- * Only inside [unsafe], which logs: the first user in an empty database has no viewer to be checked
+ * Only inside [unsafe], which logs: the first user in an empty database has no principal to be checked
  * against, and the alternative to admitting that is an application with a second, quieter way in. An
  * ordinary write goes through `db.todos.add(…)` and is checked.
  *
@@ -184,51 +184,51 @@ public fun databaseOf(row: Record): Db = row.database ?: error(
 )
 
 /**
- * A policy bound to the viewer it was resolved for.
+ * A policy bound to the principal it was resolved for.
  *
- * Exists to close over the viewer type so that a [View] can hold the gate without carrying `V` in its
- * own signature — `View<Todo>` rather than `View<Todo, User>`, which would spread the viewer type
+ * Exists to close over the principal type so that a [View] can hold the gate without carrying `P` in its
+ * own signature — `View<Todo>` rather than `View<Todo, User>`, which would spread the principal type
  * across every signature in an application.
  */
-internal class Gated<T : Record, V : Principal>(
+internal class Gated<T : Record, P : Principal>(
     private val db: Db,
     private val table: Table<T>,
-    private val policy: Policy<T, V>,
-    private val viewer: V,
+    private val policy: Policy<T, P>,
+    private val principal: P,
 ) {
     fun canRead(row: T): Boolean {
         if (unsafeInEffect) return true
-        val permitted = policy.canRead(row, viewer)
+        val permitted = policy.canRead(row, principal)
         // The read check is also the acquisition: every way of obtaining a record passes through here.
-        if (permitted && LeakDetector.enabled) row.recordAcquisition(viewer)
+        if (permitted && LeakDetector.enabled) row.recordAcquisition(principal)
         return permitted
     }
 
-    fun add(row: T): T = Gate.add(db, policy, viewer, row)
+    fun add(row: T): T = Gate.add(db, policy, principal, row)
 
-    override fun toString(): String = "Gated(${table.name}, $viewer)"
+    override fun toString(): String = "Gated(${table.name}, $principal)"
 }
 
 /**
- * The thread's current viewer, when something has installed one.
+ * The thread's current principal, when something has installed one.
  *
  * Thread-confined rather than passed around because the thing that needs it — the leak detector — runs
  * at field-read depth, underneath any signature that could carry it. Sound here for the same reason the
  * transaction's write set is: a session composes on a dispatcher that runs one task at a time, so the
  * ambient is installed and removed within a single dispatch.
  *
- * Nothing load-bearing depends on it. Authorization happens at acquisition, with the viewer passed
+ * Nothing load-bearing depends on it. Authorization happens at acquisition, with the principal passed
  * explicitly; this only makes a leaked reference detectable.
  */
-public object CurrentViewer {
+public object CurrentPrincipal {
     private val ambient = ThreadLocal<Principal?>()
 
     internal val current: Principal? get() = ambient.get()
 
-    /** Runs [block] with [viewer] as the thread's current viewer. */
-    public fun <T> with(viewer: Principal?, block: () -> T): T {
+    /** Runs [block] with [principal] as the thread's current principal. */
+    public fun <T> with(principal: Principal?, block: () -> T): T {
         val previous = ambient.get()
-        ambient.set(viewer)
+        ambient.set(principal)
         return try {
             block()
         } finally {
@@ -238,27 +238,27 @@ public object CurrentViewer {
 }
 
 /**
- * Catches a record read by a viewer that never obtained it.
+ * Catches a record read by a principal that never obtained it.
  *
- * Option A's failure mode is a leaked reference: a record acquired for one viewer and then read by
+ * Option A's failure mode is a leaked reference: a record acquired for one principal and then read by
  * another — stashed in a cache, captured in a closure, held in a field that outlived the request. This
  * does not make that impossible. It makes it *findable*: with the detector on, reading a field of a
- * record under a viewer that never acquired it fails, and the failure carries the stack trace of where
+ * record under a principal that never acquired it fails, and the failure carries the stack trace of where
  * the record was acquired.
  *
  * Off unless `-Djetlin.db.leakDetector=true`, and the check is a branch on a flag read once, so
  * production pays for nothing. Tests and development builds should turn it on; `:jetlin-db`'s own test
  * task does.
  *
- * Limitation worth knowing: the check can only fire when something has installed a [CurrentViewer]. A
- * read with no ambient viewer is not checked, because nothing knows whose read it is.
+ * Limitation worth knowing: the check can only fire when something has installed a [CurrentPrincipal]. A
+ * read with no ambient principal is not checked, because nothing knows whose read it is.
  */
 public object LeakDetector {
     public var enabled: Boolean =
         System.getProperty("jetlin.db.leakDetector")?.toBooleanStrictOrNull() ?: false
 }
 
-/** Thrown by [LeakDetector] when a record is read under a viewer that never acquired it. */
+/** Thrown by [LeakDetector] when a record is read under a principal that never acquired it. */
 public class LeakDetected internal constructor(message: String, acquiredAt: Throwable?) :
     RuntimeException(message, acquiredAt)
 

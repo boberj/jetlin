@@ -23,8 +23,8 @@ application {
 }
 
 tasks.test {
-    // The sample's tests are two-viewer tests, which is where a leaked reference would show up. On, for
-    // the same reason a framework test has it on.
+    // The sample's tests run two principals against one database, which is where a leaked reference would
+    // show up. On, for the same reason a framework test has it on.
     systemProperty("jetlin.db.leakDetector", "true")
 }
 

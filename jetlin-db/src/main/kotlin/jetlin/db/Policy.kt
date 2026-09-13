@@ -3,9 +3,9 @@ package jetlin.db
 /**
  * Whoever the framework is acting on behalf of — normally a `User` entity.
  *
- * A marker, so that a policy's viewer type cannot accidentally be a string or an id. The viewer is
+ * A marker, so that a policy's principal type cannot accidentally be a string or an id. The principal is
  * deliberately a live record rather than a snapshot taken at login: a policy that reads
- * `viewer.isAdmin` reads a cell, which is what makes revocation reactive.
+ * `principal.isAdmin` reads a cell, which is what makes revocation reactive.
  */
 public interface Principal
 
@@ -21,15 +21,15 @@ public interface Principal
  *
  * // Shared by team, written by the owner.
  * companion object : Policy<Todo, User> {
- *     override fun canRead(row: Todo, viewer: User) =
- *         row.owner == viewer || row.project?.team in viewer.teams
- *     override fun canWrite(row: Todo, viewer: User) = row.owner == viewer
+ *     override fun canRead(row: Todo, principal: User) =
+ *         row.owner == principal || row.project?.team in principal.teams
+ *     override fun canWrite(row: Todo, principal: User) = row.owner == principal
  * }
  *
  * // Read by the team, one column admin-only.
- * override fun canWrite(row: Todo, column: Column<Todo>, viewer: User) = when (column) {
- *     Todos.archived -> viewer.isAdmin
- *     else -> row.project?.team in viewer.teams
+ * override fun canWrite(row: Todo, column: Column<Todo>, principal: User) = when (column) {
+ *     Todos.archived -> principal.isAdmin
+ *     else -> row.project?.team in principal.teams
  * }
  * ```
  *
@@ -44,31 +44,31 @@ public interface Principal
  * was based on, which is exactly how reactive revocation gets broken. So a policy must be cheap, pure
  * and free of side effects. No IO, no suspending calls.
  *
- * **The viewer is an ordinary parameter, not a context parameter.** Policies are called by the
+ * **The principal is an ordinary parameter, not a context parameter.** Policies are called by the
  * framework and never by application code, so there is nothing to protect at this layer. Context
  * parameters are for the application-facing API, where they stop a mutation from compiling without a
- * viewer in scope.
+ * principal in scope.
  */
-public interface Policy<T : Record, V : Principal> {
+public interface Policy<T : Record, P : Principal> {
 
-    /** Whether [viewer] may obtain and read [row] at all. */
-    public fun canRead(row: T, viewer: V): Boolean
+    /** Whether [principal] may obtain and read [row] at all. */
+    public fun canRead(row: T, principal: P): Boolean
 
-    /** Whether [viewer] may change [row]. Defaults to "whoever can read it can write it". */
-    public fun canWrite(row: T, viewer: V): Boolean = canRead(row, viewer)
+    /** Whether [principal] may change [row]. Defaults to "whoever can read it can write it". */
+    public fun canWrite(row: T, principal: P): Boolean = canRead(row, principal)
 
     /**
-     * Whether [viewer] may change one particular column.
+     * Whether [principal] may change one particular column.
      *
      * The reason `update { }` takes a block rather than assigning fields directly: one block can have
      * `title = "x"` accepted and `archived = true` refused.
      */
-    public fun canWrite(row: T, column: Column<T>, viewer: V): Boolean = canWrite(row, viewer)
+    public fun canWrite(row: T, column: Column<T>, principal: P): Boolean = canWrite(row, principal)
 
-    /** Whether [viewer] may store [row] in the first place. */
-    public fun canCreate(row: T, viewer: V): Boolean = canWrite(row, viewer)
+    /** Whether [principal] may store [row] in the first place. */
+    public fun canCreate(row: T, principal: P): Boolean = canWrite(row, principal)
 
-    public fun canDelete(row: T, viewer: V): Boolean = canWrite(row, viewer)
+    public fun canDelete(row: T, principal: P): Boolean = canWrite(row, principal)
 }
 
 /**
@@ -82,15 +82,15 @@ public interface Policy<T : Record, V : Principal> {
  * `||` that was meant to be `&&` in a policy is a silent disclosure, so the shape that needs no
  * expression is worth having.
  */
-public fun <T : Record, V : Principal> owned(owner: (T) -> V): Policy<T, V> =
-    object : Policy<T, V> {
-        override fun canRead(row: T, viewer: V): Boolean = owner(row) == viewer
+public fun <T : Record, P : Principal> owned(owner: (T) -> P): Policy<T, P> =
+    object : Policy<T, P> {
+        override fun canRead(row: T, principal: P): Boolean = owner(row) == principal
     }
 
 /**
- * Thrown when a viewer tries to change or store something a policy refuses.
+ * Thrown when a principal tries to change or store something a policy refuses.
  *
- * Reads do not throw: a row a viewer may not read is absent — missing from collections, `null` from a
+ * Reads do not throw: a row a principal may not read is absent — missing from collections, `null` from a
  * lookup — because a thrown read would disclose that the row exists. Writes do throw, because a write
  * a policy refuses is a bug or an attack, and either way the caller asked for something impossible
  * rather than asking about something invisible.

@@ -54,7 +54,7 @@ public class RequestContext(
     /**
      * Copy with one attribute set, for anything that computes a session's context in pieces.
      *
-     * What a test uses to supply a viewer, and what an application uses when a value becomes known after
+     * What a test uses to supply a principal, and what an application uses when a value becomes known after
      * the context was built.
      */
     public fun <T> with(key: AttributeKey<T>, value: T?): RequestContext =

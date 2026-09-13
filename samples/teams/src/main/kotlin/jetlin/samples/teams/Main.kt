@@ -15,7 +15,7 @@ import jetlin.db.Id
 import jetlin.html.AttributeKey
 import jetlin.html.LocalRequest
 import jetlin.html.RequestContext
-import jetlin.html.Viewers
+import jetlin.html.Principals
 import jetlin.server.jetlin
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -29,7 +29,7 @@ import kotlin.io.path.createTempDirectory
  * could see it.
  *
  * Sign-in here is a cookie naming an email address, which is not authentication and is not pretending to
- * be. It exists so that the interesting half — what a viewer may see, and what happens when that changes
+ * be. It exists so that the interesting half — what a principal may see, and what happens when that changes
  * — is the only thing this sample is about.
  */
 fun main() {
@@ -55,14 +55,14 @@ fun main() {
             head = STYLES
 
             /**
-             * Where the viewer enters the session.
+             * Where the principal enters the session.
              *
              * Runs on the HTTP call, and again when a socket wakes a hibernated session — which is the
-             * point: the viewer is recomputed from the connection that arrived rather than trusted from a
+             * point: the principal is recomputed from the connection that arrived rather than trusted from a
              * snapshot that may be minutes old. A role revoked while a laptop was asleep is noticed when
              * it opens.
              */
-            attributes { call -> mapOf(ViewerKey to db.signedInUser(call)) }
+            attributes { call -> mapOf(PrincipalKey to db.signedInUser(call)) }
 
             onError = { throwable ->
                 // An AccessDenied reaching here means application code asked for something a policy
@@ -74,41 +74,41 @@ fun main() {
 
             view("/login", title = "Sign in · Teams") { SignInPage() }
 
-            // `WithViewer` is the bridge §4.4 describes: a context parameter is lexical and does not flow
-            // through a `@Composable () -> Unit`, so the viewer is put back into scope at the root of each
-            // page. Everything below it is an ordinary composable with a viewer in scope.
-            view("/", title = "Todos · Teams", requires = Viewers.signedIn) {
-                WithViewer { TodoListPage(db) }
+            // `WithPrincipal` is the bridge §4.4 describes: a context parameter is lexical and does not flow
+            // through a `@Composable () -> Unit`, so the principal is put back into scope at the root of each
+            // page. Everything below it is an ordinary composable with a principal in scope.
+            view("/", title = "Todos · Teams", requires = Principals.signedIn) {
+                WithPrincipal { TodoListPage(db) }
             }
 
-            view("/notes", title = "Notes · Teams", requires = Viewers.signedIn) {
-                WithViewer { NotesPage(db) }
+            view("/notes", title = "Notes · Teams", requires = Principals.signedIn) {
+                WithPrincipal { NotesPage(db) }
             }
 
             // Entity-bound: the route resolves its own subject through the gated lookup, so a todo this
-            // viewer may not read is not found — and the title comes from what was resolved, so `<head>`
+            // principal may not read is not found — and the title comes from what was resolved, so `<head>`
             // cannot disclose a row the body refused to show.
             view(
                 "/todo/{id}",
                 subject = { request -> db.todoFor(request) },
                 title = { todo -> "${todo.title} · Teams" },
-                requires = Viewers.signedIn,
-            ) { todo -> WithViewer { TodoDetailPage(db, todo) } }
+                requires = Principals.signedIn,
+            ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
 
             // A failed role check renders not-found rather than a forbidden page: a 403 here would
             // confirm there is an admin panel.
-            view("/admin/users", title = "Users · Teams", requires = Viewers.where { it.admin }) {
-                WithViewer { AdminUsersPage(db) }
+            view("/admin/users", title = "Users · Teams", requires = Principals.where { it.admin }) {
+                WithPrincipal { AdminUsersPage(db) }
             }
         }
     }.start(wait = true)
 }
 
-/** The viewer, as the application's own type. Jetlin knows nothing about it beyond this key. */
-val ViewerKey: AttributeKey<User?> = AttributeKey("viewer")
+/** The principal, as the application's own type. Jetlin knows nothing about it beyond this key. */
+val PrincipalKey: AttributeKey<User?> = AttributeKey("principal")
 
-/** Typed guards over that key: `Viewers.signedIn`, `Viewers.where { it.admin }`. */
-val Viewers: Viewers<User> = Viewers(ViewerKey, signIn = "/login")
+/** Typed guards over that key: `Principals.signedIn`, `Principals.where { it.admin }`. */
+val Principals: Principals<User> = Principals(PrincipalKey, signIn = "/login")
 
 /** The cookie this sample calls authentication. A real one would verify something. */
 const val SESSION_COOKIE: String = "teams_email"
@@ -119,7 +119,7 @@ class Account(val email: String, val label: String, val note: String? = null)
 /**
  * Who [openSeeded] creates.
  *
- * A fixture rather than a query: the sign-in page has no viewer, and a page that needed one to render
+ * A fixture rather than a query: the sign-in page has no principal, and a page that needed one to render
  * itself would need a hole in the gate to exist.
  */
 val SEEDED_ACCOUNTS: List<Account> = listOf(
@@ -133,18 +133,18 @@ val SEEDED_ACCOUNTS: List<Account> = listOf(
  * Resolves the signed-in user.
  *
  * `authenticate` is the framework's privileged root, and the one read that has to happen before access
- * control can mean anything: there is no viewer yet to check this against.
+ * control can mean anything: there is no principal yet to check this against.
  */
 internal fun Db.signedInUser(call: ApplicationCall): User? {
     val email = call.request.cookies[SESSION_COOKIE] ?: return null
     return authenticate(User::class) { user -> user.email == email }
 }
 
-/** The route's own lookup, gated: null for a todo this viewer may not read. */
+/** The route's own lookup, gated: null for a todo this principal may not read. */
 internal fun Db.todoFor(request: RequestContext): Todo? {
-    val viewer = Viewers.of(request) ?: return null
+    val principal = Principals.of(request) ?: return null
     val id = request.pathParams["id"]?.toLongOrNull() ?: return null
-    return with(viewer) { Todos.find(this@todoFor, Id(id)) }
+    return with(principal) { Todos.find(this@todoFor, Id(id)) }
 }
 
 /**
@@ -157,7 +157,7 @@ internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve
     val db = Db.open(file, JetlinSchema.tables)
     if (db.resident.rowCount > 0) return db
 
-    // One `unsafe` block, logged, because seeding has no viewer: the first user in an empty database
+    // One `unsafe` block, logged, because seeding has no principal: the first user in an empty database
     // cannot be created by anybody. Everything the application does afterwards goes through the gate.
     unsafe("seeding the sample database") {
         db.transact {
@@ -179,19 +179,19 @@ internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve
 }
 
 /**
- * Puts the session's viewer back into lexical scope.
+ * Puts the session's principal back into lexical scope.
  *
  * Context parameters are lexical and do not flow through a `@Composable () -> Unit`, so something has to
- * bridge the gap between "the session has a viewer" and "this page has one in scope". One function, at the
+ * bridge the gap between "the session has a principal" and "this page has one in scope". One function, at the
  * root of each page; everything below it is an ordinary composable.
  *
- * Renders nothing when there is no viewer, which the route guards make unreachable: a page that needs one
- * declares `requires = Viewers.signedIn`, and the guard has already redirected by the time this runs.
+ * Renders nothing when there is no principal, which the route guards make unreachable: a page that needs one
+ * declares `requires = Principals.signedIn`, and the guard has already redirected by the time this runs.
  */
 @Composable
-fun WithViewer(content: @Composable context(User) () -> Unit) {
-    val viewer = Viewers.of(LocalRequest.current) ?: return
-    with(viewer) { content() }
+fun WithPrincipal(content: @Composable context(User) () -> Unit) {
+    val principal = Principals.of(LocalRequest.current) ?: return
+    with(principal) { content() }
 }
 
 /** Enough CSS to make the sample legible. Not the interesting part. */

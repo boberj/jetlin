@@ -74,7 +74,7 @@ class PolicyTest {
     // ---- Obtaining records -----------------------------------------------------------------------
 
     @Test
-    fun `a collection contains only the rows the viewer may read`(): Unit = withDb { db ->
+    fun `a collection contains only the rows the principal may read`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
         db.store(Task(alice, "alice's"))
@@ -196,7 +196,7 @@ class PolicyTest {
     // ---- Reactive authorization ------------------------------------------------------------------
 
     @Test
-    fun `unsharing a project removes its rows from another viewer's open page`(): Unit = runTest {
+    fun `unsharing a project removes its rows from another principal's open page`(): Unit = runTest {
         withLiveDb { db ->
             val alice = db.store(User("Alice"))
             val bob = db.store(User("Bob"))
@@ -230,7 +230,7 @@ class PolicyTest {
 
         with(root) { task.update { archived = true } }
 
-        // An admin demoting themselves: the policy reads `viewer.admin`, a cell, so the next write is
+        // An admin demoting themselves: the policy reads `principal.admin`, a cell, so the next write is
         // refused without anything having been told.
         with(root) { root.update { admin = false } }
 
@@ -240,7 +240,7 @@ class PolicyTest {
     // ---- Guardrails ------------------------------------------------------------------------------
 
     @Test
-    fun `the leak detector catches a record read under a viewer that never obtained it`(): Unit =
+    fun `the leak detector catches a record read under a principal that never obtained it`(): Unit =
         withDb { db ->
             val alice = db.store(User("Alice"))
             val bob = db.store(User("Bob"))
@@ -250,7 +250,7 @@ class PolicyTest {
             with(alice) { assertEquals(task, db.tasks.single()) }
 
             // Read under Bob, who never obtained it: a reference that leaked out of Alice's session.
-            val failure = assertFailsWith<LeakDetected> { CurrentViewer.with(bob) { task.title } }
+            val failure = assertFailsWith<LeakDetected> { CurrentPrincipal.with(bob) { task.title } }
 
             assertContains(failure.message.orEmpty(), "never obtained it")
             assertNotNull(failure.cause, "the failure carries the stack where the record was acquired")
@@ -258,16 +258,16 @@ class PolicyTest {
         }
 
     @Test
-    fun `a record read under the viewer that obtained it is fine`(): Unit = withDb { db ->
+    fun `a record read under the principal that obtained it is fine`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val task = with(alice) { db.tasks.add(Task(alice, "Read the plan")) }
         with(alice) { db.tasks.single() }
 
-        assertEquals("Read the plan", CurrentViewer.with(alice) { task.title })
+        assertEquals("Read the plan", CurrentPrincipal.with(alice) { task.title })
     }
 
     @Test
-    fun `a shared row read by either of its viewers is fine`(): Unit = withDb { db ->
+    fun `a shared row read by either of its principals is fine`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
         val project = db.store(Project(alice, "Inbox", shared = true))
@@ -276,8 +276,8 @@ class PolicyTest {
         with(alice) { db.tasks.single() }
         with(bob) { db.tasks.single() }
 
-        assertEquals("shared", CurrentViewer.with(alice) { task.title })
-        assertEquals("shared", CurrentViewer.with(bob) { task.title })
+        assertEquals("shared", CurrentPrincipal.with(alice) { task.title })
+        assertEquals("shared", CurrentPrincipal.with(bob) { task.title })
     }
 
     @Test
@@ -302,7 +302,7 @@ class PolicyTest {
     }
 
     @Test
-    fun `every generated mutation requires a viewer to call`(): Unit {
+    fun `every generated mutation requires a principal to call`(): Unit {
         // A context parameter is a parameter: `update` cannot be called without one, and this is the
         // claim that compiles away — so it is asserted against the bytecode rather than the source.
         val update = Class.forName("jetlin.db.TaskTableKt").methods.single { it.name.startsWith("update") }
@@ -311,7 +311,7 @@ class PolicyTest {
         assertEquals(
             listOf(User::class.java, Task::class.java),
             update.parameterTypes.take(2).toList(),
-            "the viewer is the context parameter, and it is not optional",
+            "the principal is the context parameter, and it is not optional",
         )
     }
 }

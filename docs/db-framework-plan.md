@@ -95,7 +95,7 @@ Three options were weighed:
 
 - **A. A reference is authority.** Queries, lookups and relation traversal are gated. Once you hold
   an entity, field reads are unchecked.
-- **B. Per-principal facades.** Every read goes through a per-viewer wrapper and is checked.
+- **B. Per-principal facades.** Every read goes through a per-principal wrapper and is checked.
 - **C. Reads require a principal in the type**, via context-parameter extension properties.
 
 **Option A was chosen.** B costs an allocation and a check on the recomposition hot path and makes
@@ -130,12 +130,12 @@ click is already one atomic state mutation producing one patch.
 load — already reach every recomposer. Nothing new is needed for cross-session reactivity.
 
 **One thread per session.** Event handling, recomposition and patch draining cannot interleave. This
-is what makes a thread-confined ambient viewer safe, which it would not be on a normal async server.
+is what makes a thread-confined ambient principal safe, which it would not be on a normal async server.
 
 **`JetlinConfig.attributes { }`** computes session-scoped values from the originating HTTP call, and
 its KDoc states that it runs again when a socket wakes a hibernated session, specifically so the
 principal is recomputed rather than trusted from a stale snapshot. This is exactly the hook the
-viewer needs. Read that KDoc; it is the contract.
+principal needs. Read that KDoc; it is the contract.
 
 **`rememberSaved` is JSON-shaped.** Entities structurally cannot be stored in session state, only
 ids. This enforces one of the guardrails for free.
@@ -161,7 +161,7 @@ Add to `settings.gradle.kts`:
 ```
 
 `:jetlin-db` depends on `:jetlin-runtime` (for the snapshot machinery), not on `:jetlin-html`. The
-optional glue that reads the viewer out of a `CompositionLocal` goes in a small
+optional glue that reads the principal out of a `CompositionLocal` goes in a small
 `:jetlin-db-html` module or behind an interface, so that `:jetlin-db` stays usable headlessly and
 testable without a composition.
 
@@ -207,16 +207,16 @@ model and was accepted knowingly.
 ### 4.3 Policies
 
 ```kotlin
-public interface Policy<T : Record, V : Principal> {
-    public fun canRead(row: T, viewer: V): Boolean
-    public fun canWrite(row: T, viewer: V): Boolean = canRead(row, viewer)
-    public fun canWrite(row: T, column: Column<T, *>, viewer: V): Boolean = canWrite(row, viewer)
-    public fun canCreate(row: T, viewer: V): Boolean = canWrite(row, viewer)
-    public fun canDelete(row: T, viewer: V): Boolean = canWrite(row, viewer)
+public interface Policy<T : Record, P : Principal> {
+    public fun canRead(row: T, principal: V): Boolean
+    public fun canWrite(row: T, principal: V): Boolean = canRead(row, principal)
+    public fun canWrite(row: T, column: Column<T, *>, principal: V): Boolean = canWrite(row, principal)
+    public fun canCreate(row: T, principal: V): Boolean = canWrite(row, principal)
+    public fun canDelete(row: T, principal: V): Boolean = canWrite(row, principal)
 }
 ```
 
-The viewer is an ordinary parameter, not a context parameter. Policies are called by the framework
+The principal is an ordinary parameter, not a context parameter. Policies are called by the framework
 and never by application code, so there is nothing to protect at this layer. Context parameters are
 for the application-facing API only.
 
@@ -232,72 +232,72 @@ companion object : Policy<Todo, User> by owned(Todo::owner)
 
 // Shared by team, written by owner.
 companion object : Policy<Todo, User> {
-    override fun canRead(row: Todo, viewer: User) =
-        row.owner == viewer || row.project?.team in viewer.teams
-    override fun canWrite(row: Todo, viewer: User) =
-        row.owner == viewer
+    override fun canRead(row: Todo, principal: User) =
+        row.owner == principal || row.project?.team in principal.teams
+    override fun canWrite(row: Todo, principal: User) =
+        row.owner == principal
 }
 
 // Read by team, one column admin-only.
-override fun canWrite(row: Todo, column: Column<Todo, *>, viewer: User) = when (column) {
-    Todos.archived -> viewer.isAdmin
-    else -> row.project?.team in viewer.teams
+override fun canWrite(row: Todo, column: Column<Todo, *>, principal: User) = when (column) {
+    Todos.archived -> principal.isAdmin
+    else -> row.project?.team in principal.teams
 }
 ```
 
-`viewer.isAdmin` and `viewer.teams` are reads of a live `User` entity, not of a snapshot taken at
+`principal.isAdmin` and `principal.teams` are reads of a live `User` entity, not of a snapshot taken at
 login. Section 4.7 explains why that matters.
 
 **KSP must fail the build if an `@Entity` declares no policy.** An entity with no access rules is
 almost always an oversight, and this is the cheapest safety property available.
 
-### 4.4 Getting a viewer
+### 4.4 Getting a principal
 
 ```kotlin
-val ViewerKey = AttributeKey<User?>("viewer")
+val PrincipalKey = AttributeKey<User?>("principal")
 
 jetlin {
     attributes { call ->
-        val viewer = call.sessions.get<Auth>()?.userId?.let { db.authenticate(it) }
-        mapOf(ViewerKey to viewer)
+        val principal = call.sessions.get<Auth>()?.userId?.let { db.authenticate(it) }
+        mapOf(PrincipalKey to principal)
     }
 }
 ```
 
-**The viewer is nullable.** An earlier draft of this plan threw `Unauthenticated` here, which is
+**The principal is nullable.** An earlier draft of this plan threw `Unauthenticated` here, which is
 wrong: a login page and a marketing page have to be reachable. Authentication is a *route*
 requirement, declared per route in 4.11, not a precondition of having a session.
 
 `db.authenticate(id)` is the framework's single privileged root: it resolves a `User` without a
-viewer, because otherwise the system cannot bootstrap. It must be the *only* such entry point, and a
+principal, because otherwise the system cannot bootstrap. It must be the *only* such entry point, and a
 `:conventions` test should assert that nothing else in `:jetlin-db`'s public API returns a `Record`
-without a viewer in scope.
+without a principal in scope.
 
 Context parameters are lexical and do not flow through a `@Composable () -> Unit`, so views need a
 bridge:
 
 ```kotlin
 @Composable
-public fun WithViewer(content: @Composable context(User) () -> Unit) {
-    val viewer = LocalViewer.current
-    with(viewer) { content() }
+public fun WithPrincipal(content: @Composable context(User) () -> Unit) {
+    val principal = LocalPrincipal.current
+    with(principal) { content() }
 }
 
-view("/", title = "Todos") { WithViewer { TodoListPage() } }
+view("/", title = "Todos") { WithPrincipal { TodoListPage() } }
 ```
 
 Context parameters are stable from Kotlin 2.4. **Check `gradle/libs.versions.toml` before starting
 phase 3** and record the outcome in section 11. If the project is on an earlier version, either
-upgrade or fall back to an explicit `viewer: User` parameter on roots, which costs ergonomics but
+upgrade or fall back to an explicit `principal: User` parameter on roots, which costs ergonomics but
 nothing structural.
 
 ### 4.5 Reading
 
-Roots require a viewer; everything downstream does not.
+Roots require a principal; everything downstream does not.
 
 ```kotlin
 @Composable
-context(viewer: User)
+context(principal: User)
 internal fun TodoListPage() {
     val filter = LocalTodoFilter.current.value
     Ul({ classes("todos") }) {
@@ -320,27 +320,27 @@ site.
 Lookups and relation traversal are gated identically:
 
 ```kotlin
-context(viewer: User)
+context(principal: User)
 public fun <T : Record> View<T>.find(id: Id<T>): T?    // null, not someone else's row
 ```
 
-`project.todos` yields only rows this viewer may read.
+`project.todos` yields only rows this principal may read.
 
 ### 4.6 Writing
 
 ```kotlin
 Button({ onClick { todo.update { done = !done } } }) { Text("Toggle") }
 
-db.todos.add(Todo(owner = viewer, title = draft.value.trim()))
+db.todos.add(Todo(owner = principal, title = draft.value.trim()))
 todo.delete()
 ```
 
-`update` carries `context(viewer: User)`, so a mutation with no viewer in lexical scope does not
+`update` carries `context(principal: User)`, so a mutation with no principal in lexical scope does not
 compile. The `Draft` receiver is a generated per-entity type whose setters consult the column-level
 policy, so `archived = true` can be denied while `title = "x"` in the same block succeeds.
 
 A bare `todo.done = true` was considered and rejected: a property setter has nowhere to put a context
-parameter, so it would fall back to a runtime check against an ambient viewer. `update { }` costs
+parameter, so it would fall back to a runtime check against an ambient principal. `update { }` costs
 eight characters and keeps the compile-time guarantee. A future `owned()`-only sugar could reinstate
 bare assignment, but not in v1.
 
@@ -373,8 +373,8 @@ that iterated a team-filtered collection, and the shared rows disappear from tha
 with no invalidation code anywhere.
 
 This is emergent, not a feature to build, but it is worth an explicit test because it is easy to lose
-by accident — for example by caching a policy result per entity instead of per (entity, viewer), or
-by snapshotting the viewer at login.
+by accident — for example by caching a policy result per entity instead of per (entity, principal), or
+by snapshotting the principal at login.
 
 The corollary is that **policies sit on the recomposition hot path.** They must be cheap, pure and
 free of side effects. Document it; consider a Konsist rule that policy bodies do not call suspend
@@ -390,8 +390,8 @@ These are what make "a reference is authority" survivable. All are cheap; none i
 4. Writes re-check, because a reference can outlive the check that produced it. Writes are rare
    enough that the cost does not matter.
 5. Exactly one escape hatch, named `unsafe`, greppable, logged at WARN.
-6. **The leak detector.** In development and test builds, each entity records the viewer that
-   acquired it, and every read asserts the ambient viewer still matches. Compiled out in production
+6. **The leak detector.** In development and test builds, each entity records the principal that
+   acquired it, and every read asserts the ambient principal still matches. Compiled out in production
    behind a build flag. This converts leaked-reference bugs from an invisible property into a test
    failure with a stack trace at the acquisition site.
 
@@ -434,9 +434,9 @@ generated silently. Startup refuses to boot on a schema mismatch.
 
 Route protection is three separate questions that are easy to conflate:
 
-1. **Is there a viewer at all?** Authentication. Answered in 4.4, before any composition exists.
-2. **May this viewer reach this route?** Coarse and role-shaped: `/admin/*`.
-3. **Does the thing this route names exist for this viewer?** `/todo/42` where 42 is someone else's.
+1. **Is there a principal at all?** Authentication. Answered in 4.4, before any composition exists.
+2. **May this principal reach this route?** Coarse and role-shaped: `/admin/*`.
+3. **Does the thing this route names exist for this principal?** `/todo/42` where 42 is someone else's.
    `find` already returns null (4.5); what is missing is what the *route* does about it.
 
 The third is the one that leaks in practice, and the demo currently has the insecure shape:
@@ -448,8 +448,8 @@ view.
 
 ```kotlin
 view("/login",       title = "Sign in")                       { LoginPage() }
-view("/todos",       title = "My todos", requires = SignedIn) { WithViewer { TodoListPage() } }
-view("/admin/users", title = "Users", requires = { it.isAdmin }) { WithViewer { AdminUsers() } }
+view("/todos",       title = "My todos", requires = SignedIn) { WithPrincipal { TodoListPage() } }
+view("/admin/users", title = "Users", requires = { it.isAdmin }) { WithPrincipal { AdminUsers() } }
 ```
 
 The outcome is a value, never an exception. A view that throws ends the session and restarts the
@@ -479,7 +479,7 @@ view(
 }
 ```
 
-`find` is gated by 4.5, so it returns null for a row this viewer may not read, and null resolves to
+`find` is gated by 4.5, so it returns null for a row this principal may not read, and null resolves to
 `NotFound` before the view is composed. The body receives a non-null, already-read-checked `Todo`.
 
 This deletes the bug class rather than guarding against it: under this API the insecure version is
@@ -492,8 +492,8 @@ it inherits reactive revocation (4.7):
 ```kotlin
 @Composable
 internal fun Guarded(route: Route, content: @Composable () -> Unit) {
-    val viewer = LocalViewer.current
-    when (val access = route.access(viewer, pathParams)) {
+    val principal = LocalPrincipal.current
+    when (val access = route.access(principal, pathParams)) {
         Allow       -> content()
         NotFound    -> NotFoundPage()
         is Redirect -> LaunchedEffect(access.to) { navigate(access.to) }
@@ -501,7 +501,7 @@ internal fun Guarded(route: Route, content: @Composable () -> Unit) {
 }
 ```
 
-`viewer.isAdmin` is a cell. An admin revoking a role writes it, which invalidates `Guarded`, which
+`principal.isAdmin` is a cell. An admin revoking a role writes it, which invalidates `Guarded`, which
 re-evaluates to `Redirect`, which moves that user off the page they are sitting on. No polling, no
 logout broadcast. Same for entity-bound routes: unshare a project and anyone holding its todo open
 lands on not-found.
@@ -518,7 +518,7 @@ IfPermitted("/admin/users") { NavLink("/admin/users") { Text("Users") } }
 - **Deep link.** Guard runs before the server-side render; a redirect is a 302.
 - **In-session navigation.** No page load; the guard runs in the composition and redirects
   client-side.
-- **Hibernation wake.** `attributes { }` re-runs, so the viewer is recomputed from the arriving
+- **Hibernation wake.** `attributes { }` re-runs, so the principal is recomputed from the arriving
   connection — but the session resumes on whatever URL it was on, so **the current route's guard must
   be re-evaluated on wake, not only on entry.** Otherwise a user whose role was revoked while
   hibernated resumes on `/admin/users`. This is the case most likely to be missed.
@@ -619,25 +619,25 @@ fails to compile with a message naming the entity.
 
 - `Policy` interface and the `owned()` shorthand.
 - Gate `View`, `find`, and relation traversal on `canRead`.
-- `update { }` with a `context(viewer)` parameter and column-level `canWrite`.
+- `update { }` with a `context(principal)` parameter and column-level `canWrite`.
 - `add` / `delete` on `canCreate` / `canDelete`.
 - The `unsafe` escape hatch, logged.
 - The leak detector (4.8 item 6) behind a build flag.
 - Decide and implement the conflict policy (5.5).
 - Route guards (4.11): `Access`, `requires`, entity-bound `subject`, `Guarded`, `IfPermitted`,
   guard re-evaluation on hibernation wake.
-- `setViewer` in `:jetlin-testing`, so guards and policies can be driven headlessly.
+- `setPrincipal` in `:jetlin-testing`, so guards and policies can be driven headlessly.
 
 **Acceptance:**
 1. Policies are pure functions and test with no database at all:
    `assertFalse(Todo.canWrite(todo, Todos.archived, teammate))`.
-2. A `update { }` call with no viewer in scope does not compile — assert with a compile-testing
+2. A `update { }` call with no principal in scope does not compile — assert with a compile-testing
    fixture or, failing that, a Konsist rule.
 3. **Reactive revocation**: a session reading a team-shared row loses it when an admin writes
    `user.teams`, with no invalidation code. This is 4.7 and it will be quietly broken by any caching
    added later, so it needs a test now.
-4. The leak detector fires when a record acquired by one viewer is read under another.
-5. An entity-bound route for a row the viewer may not read renders not-found, and **the page title
+4. The leak detector fires when a record acquired by one principal is read under another.
+5. An entity-bound route for a row the principal may not read renders not-found, and **the page title
    does not disclose the row**. Test the title explicitly; it is rendered before the body.
 6. Guards resolve identically by deep link, by in-session navigation, and on hibernation wake. The
    wake case gets its own test: revoke a role while the session is hibernated, wake it, assert the
@@ -646,7 +646,7 @@ fails to compile with a message naming the entity.
    ```kotlin
    @Test
    fun `losing admin evicts an open admin page`(): Unit = runViewTest(url = "/admin/users") {
-       setViewer(root)
+       setPrincipal(root)
        setRoutes(appRoutes)
        onNode(hasTestTag("user-list")).assertExists()
 
@@ -677,8 +677,8 @@ and the foreign key are the ones that exercise the rebuild path; test them expli
   identical so they pass unchanged. If `Main.kt` needs edits beyond the store, something in the
   design is wrong — stop and record it in section 11.
 - `docs/db.md` in the style of `docs/architecture.md`: what it does, why, and what is missing.
-- Extend `:jetlin-testing` with an assertion that a viewer's page contains nothing derived from
-  another viewer's rows. The op-recording machinery already knows which nodes changed, so this is
+- Extend `:jetlin-testing` with an assertion that a principal's page contains nothing derived from
+  another principal's rows. The op-recording machinery already knows which nodes changed, so this is
   mostly wiring.
 
 ---
@@ -703,7 +703,7 @@ and the foreign key are the ones that exercise the rebuild path; test them expli
 
 Add to `:conventions` as they become checkable:
 
-1. No public function in `:jetlin-db` returns a `Record` without a viewer in scope, except
+1. No public function in `:jetlin-db` returns a `Record` without a principal in scope, except
    `authenticate`.
 2. Policy implementations call no suspend function and perform no IO.
 3. Every `@Entity` has a companion implementing `Policy` — enforce in KSP if Konsist cannot see it.
@@ -721,11 +721,11 @@ Section intentionally empty.
 - **Kotlin version.** Context parameters are stable from 2.4. Confirm against
   `gradle/libs.versions.toml` and record below.
 - **Conflict policy** (5.5): last-write-wins per column, or surfaced? Decide in phase 4.
-- **Where the viewer `CompositionLocal` lives.** A `:jetlin-db-html` module, or an interface in
+- **Where the principal `CompositionLocal` lives.** A `:jetlin-db-html` module, or an interface in
   `:jetlin-db` implemented by the application? Prefer the latter if it keeps `:jetlin-db` free of a
   `:jetlin-html` dependency.
-- **Whether `:samples:demo` gains authentication** when ported, or keeps a single implicit viewer.
-  A single viewer keeps the Playwright suite unchanged and is probably right; `:samples:teams` is
+- **Whether `:samples:demo` gains authentication** when ported, or keeps a single implicit principal.
+  A single principal keeps the Playwright suite unchanged and is probably right; `:samples:teams` is
   where multi-user behaviour is shown.
 
 ---
@@ -757,9 +757,9 @@ about databases:
 
 - `Record`, the identity map, `Id<T>`. A GitHub repo has an identity as much as a row does.
 - The `column()` delegate — snapshot state with a name, indifferent to where the value came from.
-- `Policy<T, V>`. Not one line is database-specific. `canRead(repo, viewer)` is the same question as
-  `canRead(todo, viewer)`.
-- Acquisition gating and `context(viewer)`, with the same compile-time guarantee.
+- `Policy<T, P>`. Not one line is database-specific. `canRead(repo, principal)` is the same question as
+  `canRead(todo, principal)`.
+- Acquisition gating and `context(principal)`, with the same compile-time guarantee.
 - `View<T>` and policy-filtered collections.
 - The leak detector, which matters more here, since external data is more often the sensitive kind.
 - Reactive revocation (4.7), which works identically and for the same reason.
@@ -794,7 +794,7 @@ There is no dirty tracking here. A property assignment cannot represent "charge 
 arguments, it can partially succeed, and it cannot be batched into a snapshot apply.
 
 ```kotlin
-context(viewer: User)
+context(principal: User)
 suspend fun Repo.addLabel(name: String): Label
 ```
 
@@ -875,7 +875,7 @@ whether the extraction is a file move or a redesign.
 ### 11.8 Acceptance criteria, when this phase runs
 
 1. Two users reading the same user-credentialed resource get separate cells; neither sees the other's
-   data. Written with two viewers, because one viewer cannot fail this test.
+   data. Written with two principals, because one principal cannot fail this test.
 2. A read of an unfetched cell renders a placeholder without blocking the session thread, and the
    arrival produces exactly one op.
 3. A failed command leaves no state changed and surfaces on the action, not as a session-killing
@@ -911,7 +911,7 @@ is done. `docs/db.md` describes what exists. It should cover:
 
 1. How it works — the identity map, cells, the snapshot-as-transaction, one diagram.
 2. Entities and policies, with the three access shapes from 4.3.
-3. Getting a viewer, and route protection (4.11).
+3. Getting a principal, and route protection (4.11).
 4. Reading, writing, and why `update { }` rather than assignment.
 5. Reactive authorization (4.7) — this is the framework's most distinctive property and it deserves
    its own section with a worked example.
@@ -974,7 +974,7 @@ this file.
 
 | Date | Decision | Reasoning |
 |---|---|---|
-| 2026-09-12 | **Kotlin is 2.4.10, so context parameters are available.** Closes the §10 open question; no fallback to an explicit `viewer` parameter is needed. | `gradle/libs.versions.toml`. For the record, the rest of the toolchain: Compose runtime 1.12.0, Gradle 9.7.1, JVM toolchain 24. |
+| 2026-09-12 | **Kotlin is 2.4.10, so context parameters are available.** Closes the §10 open question; no fallback to an explicit `principal` parameter is needed. | `gradle/libs.versions.toml`. For the record, the rest of the toolchain: Compose runtime 1.12.0, Gradle 9.7.1, JVM toolchain 24. |
 | 2026-09-12 | **The phase gate is `./gradlew check`, not `./gradlew build`.** | `:samples:demo:distTar` fails on a clean tree, before any of this work: `org.jetbrains.compose.runtime:runtime-desktop` and `androidx.compose.runtime:runtime-desktop` both produce a file called `runtime-desktop-1.12.0.jar`, and the application plugin's distribution puts both in one flat `lib/`. Arrived with the Compose 1.12.0 upgrade (17cefdb). Not fixed here because §4.1 says leave `:samples:demo` alone until phase 6, and a dedup in its build script is a sample-packaging concern rather than part of this framework. `check` runs every test in every module, which is what a phase gate is actually for. Fix it in phase 6, either with `duplicatesStrategy` or by depending on `androidx.compose.runtime:runtime` directly. |
 | 2026-09-12 | Phase 1: **record ids are allocated at construction, from a process-wide sequence per concrete class** — not at insert, and not per database. | A record has to be usable as a `key` before it is stored, so an id that only exists after an insert is no good. Per process rather than per database because §4.9 already says the process owns the file exclusively; loading advances the sequence past the highest id on disk, so ids cannot collide across a restart. A test that opens several databases shares the sequence, which only means ids skip. |
 | 2026-09-12 | Phase 1: **`IdentityMap`'s record-returning members are `internal`.** | §4.8 item 1 says no ungated `get(id)` is reachable from application code. Making that true from the first commit is free; retrofitting it after a public ungated `find` has shipped is not. The public, policy-gated surface lands in phase 4 on top of these members. |
@@ -994,10 +994,10 @@ this file.
 | 2026-09-12 | Phase 3: **the generated draft writes straight through; the column-level policy check lands in its setters in phase 4.** | The draft exists *because* of the column check, so the type is only half a type until phase 4 — but generating it here is what proves the shape works, and phase 4 extends one emitter function rather than inventing the type. |
 | 2026-09-12 | Phase 4: **the conflict policy is last-write-wins per cell, and transactions are serialized.** Closes the §5.5 / §10 question. | Two halves of one answer. Every cell uses a merge policy that takes the applying value, so a concurrent write resolves instead of throwing — which matters because commit precedes apply, so a *rejected apply* would leave disk ahead of memory with the commit already done. And `transact` holds a per-database lock for the whole block, which it has to anyway: one JDBC connection cannot carry two transactions, and `autoCommit` is connection-wide state. Serializing writes also makes commit order and apply order the same order, which is what makes last-write-wins equal to what is on disk rather than merely a preference. Reads are not serialized and never block. |
 | 2026-09-12 | Phase 4: **a refused column fails the whole `update { }`** rather than being skipped. | §4.6 says "`archived = true` can be denied while `title = \"x\"` in the same block succeeds", which reads as per-column partial application. What is true is that the *check* is per column. Silently skipping a refused write is the failure mode this design exists to avoid — a field that changed on screen and not on disk — so a refusal throws and unwinds the transaction, and nothing is committed or applied. |
-| 2026-09-12 | Phase 4: **the leak detector needs an ambient viewer, and only checks reads where one is installed.** | §4.8 item 6 says every read asserts the ambient viewer still matches. A record records the *set* of viewers that obtained it through the gate (a single viewer would false-positive on every legitimately shared row) and a cell read checks the thread's current viewer against that set, with the acquisition stack attached as the exception's cause. A read with no ambient viewer cannot be checked, because nothing knows whose read it is — so this catches leaks in tests and wherever a session installs the ambient, not universally. `System.getProperty("jetlin.db.leakDetector")` turns it on; `:jetlin-db`'s test task sets it. |
-| 2026-09-12 | Phase 4: **generated code is the gate's only caller.** `Gate`, `databaseOf` and the draft constructors are public so that generated accessors in an application's own module can reach them. | A Konsist rule holds the line that matters — nothing public returns a record without a viewer in its signature — and names its two exceptions (`Row.reference`, `Row.referenceOrNull`, the boot loader, where no viewer exists yet). §4.4's `authenticate` is not needed as a special case: loading is the privileged root, and a `User` comes out of the same gated lookup as anything else once `attributes { }` has one. |
-| 2026-09-12 | Phase 4: **`View` gained `add`, and inverse relations are generated as extension properties** (`project.tasks`), not as a `hasMany()` delegate as §4.2 sketches. | A delegate is a property getter, and a property getter cannot take the viewer — it could only read an ambient one, which is the runtime check §4.6 rejects for assignment, for the same reason. A generated extension property with a context parameter keeps the compile-time guarantee and reads identically at the call site. `View.add` is the one record-returning member with no viewer in its signature: the view was built by the gate and carries it, which the Konsist rule's wording accounts for deliberately. |
-| 2026-09-12 | Phase 4: **route guards live in `:jetlin-html`, not in a `:jetlin-db-html` module.** Closes that §10 question. | A guard is a pure function of the request and whatever `attributes { }` attached to it, so it needs no database concepts at all — `Viewers(ViewerKey)` is generic over the application's principal type. `:jetlin-db` therefore stays headless, and the guards work for an application whose principal is not a record. |
+| 2026-09-12 | Phase 4: **the leak detector needs an ambient principal, and only checks reads where one is installed.** | §4.8 item 6 says every read asserts the ambient principal still matches. A record records the *set* of principals that obtained it through the gate (a single principal would false-positive on every legitimately shared row) and a cell read checks the thread's current principal against that set, with the acquisition stack attached as the exception's cause. A read with no ambient principal cannot be checked, because nothing knows whose read it is — so this catches leaks in tests and wherever a session installs the ambient, not universally. `System.getProperty("jetlin.db.leakDetector")` turns it on; `:jetlin-db`'s test task sets it. |
+| 2026-09-12 | Phase 4: **generated code is the gate's only caller.** `Gate`, `databaseOf` and the draft constructors are public so that generated accessors in an application's own module can reach them. | A Konsist rule holds the line that matters — nothing public returns a record without a principal in its signature — and names its two exceptions (`Row.reference`, `Row.referenceOrNull`, the boot loader, where no principal exists yet). §4.4's `authenticate` is not needed as a special case: loading is the privileged root, and a `User` comes out of the same gated lookup as anything else once `attributes { }` has one. |
+| 2026-09-12 | Phase 4: **`View` gained `add`, and inverse relations are generated as extension properties** (`project.tasks`), not as a `hasMany()` delegate as §4.2 sketches. | A delegate is a property getter, and a property getter cannot take the principal — it could only read an ambient one, which is the runtime check §4.6 rejects for assignment, for the same reason. A generated extension property with a context parameter keeps the compile-time guarantee and reads identically at the call site. `View.add` is the one record-returning member with no principal in its signature: the view was built by the gate and carries it, which the Konsist rule's wording accounts for deliberately. |
+| 2026-09-12 | Phase 4: **route guards live in `:jetlin-html`, not in a `:jetlin-db-html` module.** Closes that §10 question. | A guard is a pure function of the request and whatever `attributes { }` attached to it, so it needs no database concepts at all — `Principals(PrincipalKey)` is generic over the application's principal type. `:jetlin-db` therefore stays headless, and the guards work for an application whose principal is not a record. |
 | 2026-09-12 | Phase 4: **a route's document title comes from the composition**, through a `TitleSink` the view installs. | §4.11 requires that a title cannot disclose a row the body refused to show, and the title is rendered before the body. The route table cannot know the title of an entity-bound route, and resolving the subject twice (once for `<head>`, once for the body) is two chances to disagree. So `Subject` sets the title after resolving, and the page render reads what the composition asked for. **Known gap:** an in-session navigation to an entity-bound route still carries the route table's static title, because the title travels in `ServerMessage.Navigate` and changing the protocol would mean rebuilding `jetlin.js`. The page-load and wake paths are correct; the in-session one shows the fallback. |
 | 2026-09-12 | Phase 4: **a failed guard is a 404 over HTTP, and a redirect is a 302 decided before a session exists.** | §4.11's "default to invisibility" applies to the status code as much as to the page. Answering the redirect at the HTTP layer also avoids composing a whole session for someone who is about to be sent elsewhere; the same guard then runs again inside the composition, which is what makes revocation and hibernation work. |
 | 2026-09-12 | Phase 5: **`./gradlew dbDiff --name=share_todos_by_team`**, not the positional argument §4.10 writes. | Gradle tasks take options, not positional arguments. The name is also optional: without one the migration is named after the first change it contains, which is better than refusing to generate. |
@@ -1008,14 +1008,14 @@ this file.
 | 2026-09-12 | Phase 5: **the acceptance criterion "the resulting database round-trips the entity" is met in two halves**, because the entities and the migration engine are in different modules. | The plugin's tests assert that a migrated database's schema equals what the new snapshot declares and that the rows survived; `:jetlin-db`'s tests assert that `Db.open` accepts a matching schema, loads the entity, and refuses every shape of mismatch. Together that is the round trip. Putting them in one test would mean either KSP inside the Gradle module or the tooling inside the runtime. |
 | 2026-09-12 | Phase 5: **the benchmark's graph-size reporting moves to phase 6.** | It needs a resident graph to measure, which needs `:samples:demo` ported — and §4.1 says not to touch the demo before phase 6. Measuring an empty graph would produce a number with nothing in it. |
 | 2026-09-12 | Phase 5: **the plugin hooks `dbVerify` into `check`** in whatever module applies it. | Same spirit as the existing check that `jetlin.js` is not stale, and it means `ci/github-actions.yml` needs no new step: the existing `./gradlew build` picks it up once a module applies the plugin. |
-| 2026-09-12 | Phase 6: **`:samples:demo` is not ported, and the reason is the plan's own stop condition.** *(Superseded the same day by the port, which was then reverted on 2026-09-13 — so the demo ends up where this row left it, though not for the reasons it gives. The analysis was right about what the design requires and wrong about what it costs.)* | §6 says that if `Main.kt` needs edits beyond the store, something in the design is wrong and the work should stop here. It does: every page that writes needs a viewer in lexical scope (`update { }` takes it as a context parameter), so each of the demo's five views would need a `context(viewer:)` signature and a `WithViewer` wrapper, plus a synthetic principal for an application that has no users. That is not a bug in the design — the compile-time guarantee is the feature — but it *is* more than the store, and the plan asked to be told. Two further reasons not to force it: the demo would need a `position` column to keep its move-up/move-down behaviour, since a `View` has no ordering of its own beyond insertion; and the regression net the port was supposed to run against cannot run in this environment (see the next row). `:samples:teams` is the readable proof instead, with 12 two-viewer application tests. |
+| 2026-09-12 | Phase 6: **`:samples:demo` is not ported, and the reason is the plan's own stop condition.** *(Superseded the same day by the port, which was then reverted on 2026-09-13 — so the demo ends up where this row left it, though not for the reasons it gives. The analysis was right about what the design requires and wrong about what it costs.)* | §6 says that if `Main.kt` needs edits beyond the store, something in the design is wrong and the work should stop here. It does: every page that writes needs a principal in lexical scope (`update { }` takes it as a context parameter), so each of the demo's five views would need a `context(principal:)` signature and a `WithPrincipal` wrapper, plus a synthetic principal for an application that has no users. That is not a bug in the design — the compile-time guarantee is the feature — but it *is* more than the store, and the plan asked to be told. Two further reasons not to force it: the demo would need a `position` column to keep its move-up/move-down behaviour, since a `View` has no ordering of its own beyond insertion; and the regression net the port was supposed to run against cannot run in this environment (see the next row). `:samples:teams` is the readable proof instead, with 12 application tests that run two principals against one database. |
 | 2026-09-12 | Phase 6: **the Playwright suite could not be run at first.** Chromium installs but cannot start without `libnspr4.so`, which needs root. *(Resolved: the dependency was installed and the suite now runs — 35/36, unchanged from before this work.)* | All 36 failures are the browser failing to launch, not the application. The server-side half was checked by hand instead — every demo route still renders with the right `<title>`, including through the new title path — and the 16 application tests, the 36-test suite's headless counterpart, pass. Anyone picking this up with a working browser should run `cd e2e && npx playwright test` against `:samples:demo:run` before trusting the `:jetlin-html` and `:jetlin-server-ktor` changes this work made. |
 | 2026-09-12 | Phase 6: **`./gradlew build` is green again**, so the phase gate recorded at the top of this log is back to what the plan assumed. | The duplicate `runtime-desktop-1.12.0.jar` came from depending on `org.jetbrains.compose.runtime:runtime`, a redirect that resolves to its own `runtime-desktop` artifact *and* androidx's. Depending on `androidx.compose.runtime:runtime` directly gives one artifact, one chain and no shadowing — better than a `duplicatesStrategy` that would have left two same-named jars in a flat `lib/`. Every test still passes. |
 | 2026-09-12 | Phase 6: **`:jetlin-db-gradle` is an included build, not a subproject.** | A project cannot apply a plugin built by a sibling subproject — the plugin has to be on the build's own classpath first — and the point of phase 6 was for `:samples:teams` to apply the real plugin rather than a copy of what it does. The cost is that the root build's lifecycle tasks do not reach it, so the root project registers `build` and `check` tasks that depend on the included build's, and those two commands still cover everything. |
 | 2026-09-12 | Phase 6: **a second privileged root, `insertUnchecked`, refuses to run outside `unsafe { }`.** | §4.4 wants exactly one privileged entry point and §4.8 wants exactly one escape hatch, and seeding needs both at once: the first user in an empty database cannot be created by anybody. Making the ungated insert require `unsafe` — which logs a warning naming its reason every time — keeps it to one hole rather than two, and the `:conventions` test names it alongside `authenticate`. |
 | 2026-09-12 | Phase 6: **the benchmark settles the graph number and leaves the session number open.** A resident record costs **1.1 kB**, stable from 20 rows to 20,000. *(The session half is settled in a later row: it was the benchmark's own baseline subtraction.)* | That is the figure §5.2 asked for, and it puts the residency cliff in the hundreds of thousands of rows rather than the thousands. The session figure is *not* settled: the teams sample's todo page measures 2.3 MB per session against `samples/demo`'s 128 kB for a comparable page. Probing ruled out the gate, the `View` and the policy — a plain `List<Todo>` of five rows measures the same 340 kB as the gated one, and an empty session measures 12 kB — so it is something about a keyed list in this measurement rather than anything `jetlin-db` added. It wants a heap profile rather than a heap delta; `docs/db.md` §6 says so rather than quoting a number nobody has explained. |
-| 2026-09-12 | Phase 6: **`:jetlin-testing` gained three things** — `setAttribute` (the viewer), `title()` and `assertNotDisclosed(…)`. | The first two are what makes a guard testable headlessly, and `setAttribute` doubles as the hibernation-wake case: a session that slept wakes with its attributes recomputed, so changing the viewer and waking is exactly what a revoked role looks like. `assertNotDisclosed` is §6's "nothing derived from another viewer's rows", checked against the rendered markup rather than the node tree, because an attribute or a title discloses as well as text does. |
-| 2026-09-12 | Phase 6: **`:samples:demo` is ported after all**, and the stop condition it tripped turned out to be one line of API rather than a design problem. *(Reverted the next day by the owner's decision — see the last rows. The cost figures here stand and are the reason it is still written down.)* | The earlier entry below stands as the reasoning; what changed is that a working browser made the regression net runnable, and the port then cost less than the analysis suggested. All 16 application tests and all 36 browser tests pass *unchanged*. Three things made that possible: the demo's viewer is a constant (`object Visitor : Principal` — a principal need not be a record), so the store supplies it and no page signature mentions it; a `position` column replaces the list order a `View` does not have, with `move` swapping positions in one transaction; and seeding can now choose ids, because both test suites hardcode `/todo/1`. The edits outside the store are exactly the three writes that used to be bare assignments — `todo.done = it` and the two in the save handler — which is the design working as intended rather than a concession. |
+| 2026-09-12 | Phase 6: **`:jetlin-testing` gained three things** — `setAttribute` (the principal), `title()` and `assertNotDisclosed(…)`. | The first two are what makes a guard testable headlessly, and `setAttribute` doubles as the hibernation-wake case: a session that slept wakes with its attributes recomputed, so changing the principal and waking is exactly what a revoked role looks like. `assertNotDisclosed` is §6's "nothing derived from another principal's rows", checked against the rendered markup rather than the node tree, because an attribute or a title discloses as well as text does. |
+| 2026-09-12 | Phase 6: **`:samples:demo` is ported after all**, and the stop condition it tripped turned out to be one line of API rather than a design problem. *(Reverted the next day by the owner's decision — see the last rows. The cost figures here stand and are the reason it is still written down.)* | The earlier entry below stands as the reasoning; what changed is that a working browser made the regression net runnable, and the port then cost less than the analysis suggested. All 16 application tests and all 36 browser tests pass *unchanged*. Three things made that possible: the demo's principal is a constant (`object Visitor : Principal` — a principal need not be a record), so the store supplies it and no page signature mentions it; a `position` column replaces the list order a `View` does not have, with `move` swapping positions in one transaction; and seeding can now choose ids, because both test suites hardcode `/todo/1`. The edits outside the store are exactly the three writes that used to be bare assignments — `todo.done = it` and the two in the save handler — which is the design working as intended rather than a concession. |
 | 2026-09-12 | Phase 6: **seeding can choose a record's id** (`insertUnchecked(row, id = 1)`), advancing the sequence past it. | The demo's reset has to produce ids 1, 2, 3 every time, because `/todo/1` is in both test suites and in the markup they assert on. An id is part of a fixture often enough — a seeded row something links to by number — that this is worth the one parameter, and it cannot collide: the sequence is advanced past a chosen id, and an id already resident is refused. |
 | 2026-09-12 | Phase 6: **the port found a real bug in the write flush.** Inserts ran before deletes, so re-seeding a row under an id that was just deleted failed on the primary key. | Fixed by ordering deletes, then inserts, then updates, and by setting `PRAGMA defer_foreign_keys=ON` for the transaction. That pragma is what makes any single order possible: with foreign keys checked per statement, a transaction that both creates a row and the row pointing at it, and a transaction that points a row away from something it then deletes, want opposite orders. Deferred to commit, neither does. A primary key is *not* deferrable, which is why deletes have to come first. Two tests pin both halves. |
 | 2026-09-12 | Phase 6: **the session-memory anomaly is resolved, and it was the teams benchmark's own method.** | Measured in one harness, the demo's synthetic 113-node page costs 130 kB per session and its real 202-node list page costs 332 kB — about 1.6 kB per node, and nothing to do with the database. The teams benchmark's 2.3 MB came from subtracting a baseline it had created and closed, which is not a measurement the demo's harness makes. The teams benchmark now measures only the graph, where it is good: **1.09 kB per record, stable from 2,000 rows to 20,000**, and `samples/demo:benchmark` reports a graph figure beside its session figures, which is what §5.2 asked for. A policy-filtered scan does add to a session's read set, about 30 bytes per scanned row — real, and an order of magnitude under the cost of rendering one. |
@@ -1025,3 +1025,4 @@ this file.
 | 2026-09-13 | **The benchmarks now measure one thing each**, and the numbers in `docs/db.md` §6 were re-measured after the revert. | `:samples:teams:benchmark` reports the graph — 1.09 kB per record, stable from 2,000 rows to 20,000. `:samples:demo:benchmark` reports sessions, with `PAGE=real` for an application's own page rather than the synthetic one: 113 nodes at 129 kB, 42 nodes at 65 kB, which is about 1.5 kB a node either way. §5.2's "report graph size alongside session size" is therefore met across two tools rather than one, because the demo no longer has a graph to report. The earlier 332 kB figure for the demo's real page was measured while it was db-backed and had 20 seeded rows on the page; it is not comparable and is no longer quoted. |
 | 2026-09-13 | §4.8 item 3 — **"entities cannot enter `rememberSaved`, but assert it"** — cannot be asserted in this module, and the attempt is withdrawn. | The guardrail is real: an entity has no serializer, so `rememberSaved(todo)` does not compile. But that is a fact about an *application's* entities, not about `:jetlin-db` — nothing here prevents someone writing `@Serializable` on one. A test in this module could only have asserted that its own fixture lacks an annotation, which is a test of the fixture. So the reasoning is documented on `Record` instead, including the part the plan does not say — that the objection is identity rather than size, because a record read back out of JSON would be a second object for a row the identity map already holds, not equal to it, not recomposing its readers and never access-checked — and the assertion belongs to whoever owns the entities. Worth saying in `docs/db.md` if an application ever wants the recipe. |
 | 2026-09-13 | §12.2's **"add `dbVerify` to the build job"** is met by wiring rather than by a step in `ci/github-actions.yml`, and that is deliberate. | The plugin hooks `dbVerify` into `check` in whatever module applies it, so `./gradlew build` — which is what the CI job already runs — runs it, and it fails with the drifted columns named. An explicit second invocation in the yml would be a copy of that fact in a file that is not executed locally, and the two would drift the first time the task is renamed or a module is added. `ci/README.md` says where it comes from, which is the part a reader needs. Revisit only if CI ever stops running `build`. |
+| 2026-09-13 | **One word for the concept: `principal`, never "viewer".** The rename runs through the code, the generated accessors' context parameter, the route guards, `:samples:teams`, `docs/db.md` and this document's own prose. | This plan used both words for one thing — `Principal` as the interface, "viewer" in every signature, parameter and sentence around it — which reads as though there were two concepts and leaves a reader wondering which one a given sentence is about. `principal` is the word that means something in access control; "viewer" also suggests reading, which is wrong for the thing `canWrite` and `canDelete` are asked about. So: `Policy<T, P>` with `canRead(row, principal)`, `context(principal: User)` in every generated accessor, `CurrentPrincipal`, `WithPrincipal`, `PrincipalKey`, `Principals(…)` for the typed guards, and the Konsist rule's parameter check looking for `P` or `Principal`. Nothing but names and prose changed, and the 351 tests are the evidence for that. |

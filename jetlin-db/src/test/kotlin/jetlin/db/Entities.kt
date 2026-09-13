@@ -15,10 +15,10 @@ internal class User(name: String, admin: Boolean = false) : Record(), Principal 
     var admin: Boolean by column(admin)
 
     companion object : Policy<User, User> {
-        override fun canRead(row: User, viewer: User): Boolean = true
+        override fun canRead(row: User, principal: User): Boolean = true
 
         /** Anyone may rename themselves; only an admin may rename anyone else. */
-        override fun canWrite(row: User, viewer: User): Boolean = row == viewer || viewer.admin
+        override fun canWrite(row: User, principal: User): Boolean = row == principal || principal.admin
     }
 }
 
@@ -32,8 +32,8 @@ internal class Project(
     var shared: Boolean by column(shared)
 
     companion object : Policy<Project, User> {
-        override fun canRead(row: Project, viewer: User): Boolean = row.owner == viewer || row.shared
-        override fun canWrite(row: Project, viewer: User): Boolean = row.owner == viewer
+        override fun canRead(row: Project, principal: User): Boolean = row.owner == principal || row.shared
+        override fun canWrite(row: Project, principal: User): Boolean = row.owner == principal
     }
 }
 
@@ -56,15 +56,15 @@ internal class Task(
          * `row.project?.shared` reads a live cell of another record, which is what makes sharing and
          * unsharing reactive rather than something to invalidate.
          */
-        override fun canRead(row: Task, viewer: User): Boolean =
-            row.owner == viewer || row.project?.shared == true
+        override fun canRead(row: Task, principal: User): Boolean =
+            row.owner == principal || row.project?.shared == true
 
-        override fun canWrite(row: Task, viewer: User): Boolean = row.owner == viewer
+        override fun canWrite(row: Task, principal: User): Boolean = row.owner == principal
 
         /** Read by many, and one column only an admin may touch. */
-        override fun canWrite(row: Task, column: Column<Task>, viewer: User): Boolean = when (column) {
-            Tasks.archived -> viewer.admin
-            else -> canWrite(row, viewer)
+        override fun canWrite(row: Task, column: Column<Task>, principal: User): Boolean = when (column) {
+            Tasks.archived -> principal.admin
+            else -> canWrite(row, principal)
         }
     }
 }

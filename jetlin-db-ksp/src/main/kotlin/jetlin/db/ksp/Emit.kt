@@ -26,7 +26,7 @@ internal fun emitTable(entity: EntityModel): String = buildString {
     appendLine(" */")
     appendLine("${entity.visibility} object ${entity.objectName} {")
     appendLine()
-    appendLine("    ${entity.visibility} val policy: jetlin.db.Policy<$type, ${entity.viewer}> = $type")
+    appendLine("    ${entity.visibility} val policy: jetlin.db.Policy<$type, ${entity.principal}> = $type")
     appendLine()
     appendLine("    ${entity.visibility} val table: jetlin.db.Table<$type> =")
     appendLine("        jetlin.db.table(\"${entity.tableName}\", $type::class) {")
@@ -52,50 +52,50 @@ internal fun emitTable(entity: EntityModel): String = buildString {
 /**
  * The only way application code obtains one of these records.
  *
- * Every one takes the viewer as a context parameter, so a page that forgot to have a viewer in scope
+ * Every one takes the principal as a context parameter, so a page that forgot to have a principal in scope
  * does not compile rather than quietly reading someone else's rows.
  */
 private fun emitAccessors(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
-    val viewer = entity.viewer
-    appendLine("    /** Every stored ${entity.simpleName} this viewer may read. */")
-    appendLine("    context(viewer: $viewer)")
+    val principal = entity.principal
+    appendLine("    /** Every stored ${entity.simpleName} this principal may read. */")
+    appendLine("    context(principal: $principal)")
     appendLine("    ${entity.visibility} fun all(db: jetlin.db.Db): jetlin.db.View<$type> =")
-    appendLine("        jetlin.db.Gate.view(db, table, policy, viewer)")
+    appendLine("        jetlin.db.Gate.view(db, table, policy, principal)")
     appendLine()
     appendLine("    /** The ${entity.simpleName} with this id, or null — including when it exists and is not readable. */")
-    appendLine("    context(viewer: $viewer)")
+    appendLine("    context(principal: $principal)")
     appendLine("    ${entity.visibility} fun find(db: jetlin.db.Db, id: jetlin.db.Id<$type>): $type? =")
-    appendLine("        jetlin.db.Gate.find(db, table, policy, viewer, id)")
+    appendLine("        jetlin.db.Gate.find(db, table, policy, principal, id)")
 }
 
 /**
- * `update { }` and `delete()`, as extensions carrying the viewer.
+ * `update { }` and `delete()`, as extensions carrying the principal.
  *
  * Assignment straight to a field was considered and rejected: a property setter has nowhere to put a
- * context parameter, so `todo.done = true` could only be checked against an ambient viewer at runtime.
+ * context parameter, so `todo.done = true` could only be checked against an ambient principal at runtime.
  * `update { }` costs eight characters and keeps the guarantee at compile time.
  */
 private fun emitMutators(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
-    val viewer = entity.viewer
+    val principal = entity.principal
     appendLine("/**")
     appendLine(" * Changes this ${entity.simpleName} as one transaction: committed to disk before any session sees it.")
     appendLine(" *")
     appendLine(" * Refused writes throw [jetlin.db.AccessDenied]; a refusal inside a transaction commits nothing.")
     appendLine(" */")
-    appendLine("context(viewer: $viewer)")
+    appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.update(block: ${entity.draftQualified}.() -> Unit) {")
     appendLine("    val row = this")
-    appendLine("    jetlin.db.Gate.update(row, ${entity.objectQualified}.policy, viewer) {")
-    appendLine("        ${entity.draftQualified}(row, viewer).block()")
+    appendLine("    jetlin.db.Gate.update(row, ${entity.objectQualified}.policy, principal) {")
+    appendLine("        ${entity.draftQualified}(row, principal).block()")
     appendLine("    }")
     appendLine("}")
     appendLine()
-    appendLine("/** Removes this ${entity.simpleName}, if this viewer may delete it. */")
-    appendLine("context(viewer: $viewer)")
+    appendLine("/** Removes this ${entity.simpleName}, if this principal may delete it. */")
+    appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.delete(): Unit =")
-    appendLine("    jetlin.db.Gate.delete(this, ${entity.objectQualified}.policy, viewer)")
+    appendLine("    jetlin.db.Gate.delete(this, ${entity.objectQualified}.policy, principal)")
 }
 
 private fun declare(column: ColumnModel): String {
@@ -170,7 +170,7 @@ private fun emitDraft(entity: EntityModel): String = buildString {
     appendLine(" */")
     appendLine("${entity.visibility} class ${entity.draftName} internal constructor(")
     appendLine("    private val row: ${entity.qualifiedName},")
-    appendLine("    private val viewer: ${entity.viewer},")
+    appendLine("    private val principal: ${entity.principal},")
     appendLine(") {")
     settable.forEachIndexed { index, column ->
         if (index > 0) appendLine()
@@ -181,7 +181,7 @@ private fun emitDraft(entity: EntityModel): String = buildString {
         appendLine("                row,")
         appendLine("                ${entity.objectName}.${column.name},")
         appendLine("                ${entity.objectName}.policy,")
-        appendLine("                viewer,")
+        appendLine("                principal,")
         appendLine("            )")
         appendLine("            row.${column.name} = value")
         appendLine("        }")
@@ -237,12 +237,12 @@ internal fun emitSchema(entities: List<EntityModel>, packageName: String, object
  * `db.todos` — the collection an application reads from.
  *
  * Generated rather than left to the application because it is the shape §4.5 is written in, and because
- * writing it by hand means writing the viewer into it by hand.
+ * writing it by hand means writing the principal into it by hand.
  */
 private fun emitCollection(entity: EntityModel, packageName: String): String = buildString {
     val qualifier = entity.objectQualified(packageName)
-    appendLine("/** Every stored ${entity.simpleName} this viewer may read. */")
-    appendLine("context(viewer: ${entity.viewer})")
+    appendLine("/** Every stored ${entity.simpleName} this principal may read. */")
+    appendLine("context(principal: ${entity.principal})")
     appendLine("${entity.visibility} val jetlin.db.Db.${entity.collectionName}: jetlin.db.View<${entity.qualifiedName}>")
     appendLine("    get() = $qualifier.all(this)")
 }
@@ -257,13 +257,13 @@ private fun emitCollection(entity: EntityModel, packageName: String): String = b
 private fun emitInverse(inverse: InverseModel, packageName: String): String = buildString {
     val source = inverse.source
     val qualifier = source.objectQualified(packageName)
-    appendLine("/** Every ${source.simpleName} whose `${inverse.column}` is this one, and that this viewer may read. */")
-    appendLine("context(viewer: ${source.viewer})")
+    appendLine("/** Every ${source.simpleName} whose `${inverse.column}` is this one, and that this principal may read. */")
+    appendLine("context(principal: ${source.principal})")
     appendLine("${inverse.visibility} val ${inverse.targetType}.${inverse.name}: jetlin.db.View<${source.qualifiedName}>")
     appendLine("    get() {")
     appendLine("        val target = this")
     appendLine("        val db = jetlin.db.databaseOf(target)")
-    appendLine("        return jetlin.db.Gate.related(db, $qualifier.table, $qualifier.policy, viewer) {")
+    appendLine("        return jetlin.db.Gate.related(db, $qualifier.table, $qualifier.policy, principal) {")
     appendLine("            it.${inverse.column} == target")
     appendLine("        }")
     appendLine("    }")

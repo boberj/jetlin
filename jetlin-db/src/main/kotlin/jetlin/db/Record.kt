@@ -84,10 +84,10 @@ public abstract class Record {
     internal var database: Db? = null
 
     /**
-     * Viewers that obtained this record through the gate, and where the first of them did it.
+     * Principals that obtained this record through the gate, and where the first of them did it.
      *
-     * Only populated while [LeakDetector] is on. An identity set rather than a single viewer because a
-     * shared row is legitimately acquired by many: what is not legitimate is a read under a viewer that
+     * Only populated while [LeakDetector] is on. An identity set rather than a single principal because a
+     * shared row is legitimately acquired by many: what is not legitimate is a read under a principal that
      * never acquired it at all.
      */
     private var acquiredBy: MutableSet<Principal>? = null
@@ -136,34 +136,32 @@ public abstract class Record {
     protected fun <T : Record> reference(initial: T): CellProvider<T> = CellProvider(initial)
 
     /**
-     * Records that [cell] is about to change, so that the change reaches SQLite before it reaches any
-     * composition.
+     * Notes that [principal] obtained this record through the gate.
      *
-     * Refusing the write when no transaction is open is deliberate: the alternative is a field that
-     * changes on screen and not on disk, which is invisible until a restart. A record that is not
-     * stored yet is exempt — nothing is out of step with disk, because it is not on disk.
+     * Called by the gate on every successful read check while [LeakDetector] is on, which is also the only
+     * time the set is built: a record that nobody is checking costs nothing to hold.
      */
-    internal fun recordAcquisition(viewer: Principal) {
-        val viewers = acquiredBy ?: Collections.newSetFromMap(IdentityHashMap<Principal, Boolean>())
+    internal fun recordAcquisition(principal: Principal) {
+        val principals = acquiredBy ?: Collections.newSetFromMap(IdentityHashMap<Principal, Boolean>())
             .also { acquiredBy = it }
-        if (viewers.add(viewer) && acquiredAt == null) {
-            acquiredAt = Throwable("$this was acquired here, for $viewer")
+        if (principals.add(principal) && acquiredAt == null) {
+            acquiredAt = Throwable("$this was acquired here, for $principal")
         }
     }
 
     /**
-     * Fails if the thread's current viewer never obtained this record.
+     * Fails if the thread's current principal never obtained this record.
      *
      * Called from every cell read while the detector is on; see [LeakDetector] for what it can and
      * cannot see.
      */
     internal fun checkRead() {
-        val reader = CurrentViewer.current ?: return
-        val viewers = acquiredBy ?: return
-        if (reader !in viewers) {
+        val reader = CurrentPrincipal.current ?: return
+        val principals = acquiredBy ?: return
+        if (reader !in principals) {
             throw LeakDetected(
                 "$this is being read by $reader, which never obtained it — it was obtained by " +
-                    viewers.joinToString() + ". A record reached a viewer without passing the gate: " +
+                    principals.joinToString() + ". A record reached a principal without passing the gate: " +
                     "something cached it, captured it in a closure, or held it past the request that " +
                     "acquired it. The cause of this exception is the stack where it was acquired.",
                 acquiredAt,
@@ -171,6 +169,14 @@ public abstract class Record {
         }
     }
 
+    /**
+     * Records that [cell] is about to change, so that the change reaches SQLite before it reaches any
+     * composition.
+     *
+     * Refusing the write when no transaction is open is deliberate: the alternative is a field that
+     * changes on screen and not on disk, which is invisible until a restart. A record that is not
+     * stored yet is exempt — nothing is out of step with disk, because it is not on disk.
+     */
     internal fun recordWrite(cell: Cell<*>) {
         if (!stored) return
         val writes = Transactions.current ?: error(

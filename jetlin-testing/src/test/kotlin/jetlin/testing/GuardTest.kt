@@ -9,12 +9,12 @@ import jetlin.html.Div
 import jetlin.html.H1
 import jetlin.html.IfPermitted
 import jetlin.html.Text
-import jetlin.html.Viewers
+import jetlin.html.Principals
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * What a route does about a viewer it does not want.
+ * What a route does about a principal it does not want.
  *
  * Three ways into a route and they have to agree: a deep link, an in-session navigation, and a
  * hibernated session waking up. The third is the one most likely to be missed — a session resumes on
@@ -37,7 +37,7 @@ class GuardTest {
         runViewTest(url = "/todos") {
             setRoutes {
                 view("/login") { Page("Sign in") }
-                view("/todos", requires = Viewers.signedIn) { Page("Todos") }
+                view("/todos", requires = Principals.signedIn) { Page("Todos") }
             }
 
             assertUrl("/login?next=/todos")
@@ -49,7 +49,7 @@ class GuardTest {
         setAttribute(PersonKey, Person("Alice"))
         setRoutes {
             view("/login") { Page("Sign in") }
-            view("/todos", requires = Viewers.signedIn) { Page("Todos") }
+            view("/todos", requires = Principals.signedIn) { Page("Todos") }
         }
 
         assertUrl("/todos")
@@ -62,7 +62,7 @@ class GuardTest {
             setAttribute(PersonKey, Person("Alice"))
             setRoutes {
                 view("/") { Page("Home") }
-                view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+                view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
             }
 
             // Still on the URL: not found is a page, not a redirect, and a 403 would confirm there is an
@@ -77,19 +77,19 @@ class GuardTest {
         setAttribute(PersonKey, Person("Root", admin = true))
         setRoutes {
             view("/") { Page("Home") }
-            view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+            view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
         }
 
         onNode(hasTag("h1")).assertText("Users")
     }
 
     @Test
-    fun `navigating into a route the viewer may not reach lands on not found`(): Unit =
+    fun `navigating into a route the principal may not reach lands on not found`(): Unit =
         runViewTest(url = "/") {
             setAttribute(PersonKey, Person("Alice"))
             setRoutes {
                 view("/") { Page("Home") }
-                view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+                view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
             }
 
             navigate("/admin/users")
@@ -98,14 +98,14 @@ class GuardTest {
         }
 
     @Test
-    fun `losing a role moves the viewer off the page they are sitting on`(): Unit =
+    fun `losing a role moves the principal off the page they are sitting on`(): Unit =
         runViewTest(url = "/admin/users") {
             val root = Person("Root", admin = true)
             setAttribute(PersonKey, root)
             setRoutes {
                 view("/") { Page("Home") }
                 view("/login") { Page("Sign in") }
-                view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+                view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
             }
             onNode(hasTestTag("page")).assertExists()
 
@@ -124,11 +124,11 @@ class GuardTest {
             setRoutes {
                 view("/") { Page("Home") }
                 view("/login") { Page("Sign in") }
-                view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+                view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
             }
             onNode(hasTag("h1")).assertText("Users")
 
-            // The role is revoked while the session is asleep: the viewer is recomputed from the
+            // The role is revoked while the session is asleep: the principal is recomputed from the
             // connection that wakes it, not restored from a snapshot that may be minutes old.
             setAttribute(PersonKey, Person("Root", admin = false))
             hibernateAndRestore()
@@ -138,12 +138,12 @@ class GuardTest {
         }
 
     @Test
-    fun `a session that wakes with no viewer at all is sent to sign in`(): Unit =
+    fun `a session that wakes with no principal at all is sent to sign in`(): Unit =
         runViewTest(url = "/todos") {
             setAttribute(PersonKey, Person("Alice"))
             setRoutes {
                 view("/login") { Page("Sign in") }
-                view("/todos", requires = Viewers.signedIn) { Page("Todos") }
+                view("/todos", requires = Principals.signedIn) { Page("Todos") }
             }
             onNode(hasTag("h1")).assertText("Todos")
 
@@ -162,7 +162,7 @@ class GuardTest {
                     IfPermitted("/admin/users") { Div({ testTag("admin-link") }) { Text("Users") } }
                 }
             }
-            view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+            view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
         }
 
         onAll(hasTestTag("admin-link")).assertCount(0)
@@ -177,7 +177,7 @@ class GuardTest {
                     IfPermitted("/admin/users") { Div({ testTag("admin-link") }) { Text("Users") } }
                 }
             }
-            view("/admin/users", requires = Viewers.where { it.admin }) { Page("Users") }
+            view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
         }
 
         onNode(hasTestTag("admin-link")).assertExists()
@@ -208,7 +208,7 @@ class GuardTest {
                 view("/") { Page("Home") }
                 view(
                     "/note/{id}",
-                    // Absent because this viewer may not read it, which is the same answer as "no such
+                    // Absent because this principal may not read it, which is the same answer as "no such
                     // note" on purpose: a distinguishable refusal tells whoever is probing that it exists.
                     subject = { request -> notes[request.pathParams["id"]] },
                     title = { note -> note.title },
@@ -229,7 +229,7 @@ private class Person(val name: String, admin: Boolean = false) {
 
 private val PersonKey = AttributeKey<Person?>("person")
 
-private val Viewers = Viewers(PersonKey, signIn = "/login")
+private val Principals = Principals(PersonKey, signIn = "/login")
 
 private class Note(val title: String)
 

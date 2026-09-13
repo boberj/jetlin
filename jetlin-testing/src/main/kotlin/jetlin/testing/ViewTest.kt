@@ -102,16 +102,16 @@ public class ViewTest internal constructor(
         get() = view ?: error("No content set; call setContent { ... } first")
 
     /**
-     * Attaches a session attribute — the viewer, normally.
+     * Attaches a session attribute — the principal, normally.
      *
      * ```kotlin
-     * setAttribute(ViewerKey, root)
+     * setAttribute(PrincipalKey, root)
      * setRoutes(appRoutes)
      * ```
      *
      * Takes effect for every view composed from here on, which includes the one
      * [hibernateAndRestore] builds. That is how the wake case is tested: a session that slept wakes with
-     * its attributes recomputed from the connection that woke it, so changing the viewer and waking is
+     * its attributes recomputed from the connection that woke it, so changing the principal and waking is
      * exactly what a role revoked while hibernated looks like.
      */
     public fun <T> setAttribute(key: AttributeKey<T>, value: T?) {

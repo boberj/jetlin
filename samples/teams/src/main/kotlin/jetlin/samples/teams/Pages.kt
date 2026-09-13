@@ -29,16 +29,16 @@ import jetlin.html.rememberSavedField
  */
 @Composable
 fun Shell(content: @Composable () -> Unit) {
-    val viewer = Viewers.of(LocalRequest.current)
+    val principal = Principals.of(LocalRequest.current)
     Div({ classes("page") }) {
         Nav({ classes("nav") }) {
             Link("/", { classes("brand") }) { Text("Teams") }
-            if (viewer != null) {
+            if (principal != null) {
                 Link("/") { Text("Todos") }
                 Link("/notes") { Text("Notes") }
                 IfPermitted("/admin/users") { Link("/admin/users") { Text("Users") } }
-                Span({ classes("who"); testTag("viewer") }) {
-                    Text("${viewer.name}${viewer.team?.let { " · ${it.name}" } ?: ""}")
+                Span({ classes("who"); testTag("principal") }) {
+                    Text("${principal.name}${principal.team?.let { " · ${it.name}" } ?: ""}")
                 }
                 Link("/login", { classes("link") }) { Text("Switch user") }
             }
@@ -50,7 +50,7 @@ fun Shell(content: @Composable () -> Unit) {
 /**
  * Signing in, such as it is: pick a seeded account and a cookie is set.
  *
- * Reads nothing from the database. A sign-in page is the one page whose job is to precede having a viewer,
+ * Reads nothing from the database. A sign-in page is the one page whose job is to precede having a principal,
  * and the accounts it offers are this sample's fixture rather than data — which keeps the page from needing
  * a hole in the gate to render itself.
  */
@@ -76,14 +76,14 @@ fun SignInPage() {
 }
 
 /**
- * Todos: the viewer's own, plus anything shared with their team.
+ * Todos: the principal's own, plus anything shared with their team.
  *
  * `db.todos` is a generated, policy-filtered collection. Iterating it subscribes this composition to the
  * list *and* to whatever the policy read — which is why sharing a todo with the team makes it appear here
  * with nothing else happening.
  */
 @Composable
-context(viewer: User)
+context(principal: User)
 fun TodoListPage(db: Db) {
     val draft = rememberSavedField("", key = "draft") {
         if (it.isBlank()) "Enter something to do" else null
@@ -104,7 +104,7 @@ fun TodoListPage(db: Db) {
                 disabled(!draft.isValid)
                 onClick {
                     if (draft.isValid) {
-                        db.todos.add(Todo(viewer, draft.value.trim()))
+                        db.todos.add(Todo(principal, draft.value.trim()))
                         draft.value = ""
                     }
                 }
@@ -121,9 +121,9 @@ fun TodoListPage(db: Db) {
 }
 
 @Composable
-context(viewer: User)
+context(principal: User)
 private fun TodoRow(db: Db, todo: Todo) {
-    val mine = todo.owner == viewer
+    val mine = todo.owner == principal
     Li({ classes("todo"); testTag("todo") }) {
         Input({
             attr("type", "checkbox")
@@ -140,18 +140,18 @@ private fun TodoRow(db: Db, todo: Todo) {
             Button({
                 classes("link")
                 testTag("share")
-                onClick { todo.update { team = if (team == null) viewer.team else null } }
+                onClick { todo.update { team = if (team == null) principal.team else null } }
             }) { Text(if (todo.team == null) "Share with team" else "Unshare") }
             Button({ classes("link"); testTag("delete"); onClick { todo.delete() } }) { Text("Delete") }
         }
     }
 }
 
-/** One todo, reached by a route that resolved it. A viewer who may not read it never gets here. */
+/** One todo, reached by a route that resolved it. A principal who may not read it never gets here. */
 @Composable
-context(viewer: User)
+context(principal: User)
 fun TodoDetailPage(db: Db, todo: Todo) {
-    val mine = todo.owner == viewer
+    val mine = todo.owner == principal
     Div({ classes("card") }) {
         H1({ testTag("title") }) { Text(todo.title) }
         P({ classes("muted") }) { Text("Owned by ${todo.owner.name}") }
@@ -171,7 +171,7 @@ fun TodoDetailPage(db: Db, todo: Todo) {
                 if (todo.archived) attr("checked", "")
                 // Column-level policy: the control is disabled for anyone who is not an admin, and the
                 // write would be refused even if the browser sent it anyway.
-                disabled(!viewer.admin)
+                disabled(!principal.admin)
                 onChange { todo.update { archived = !archived } }
             })
             Span { Text("Archived (admins only)") }
@@ -182,7 +182,7 @@ fun TodoDetailPage(db: Db, todo: Todo) {
 
 /** Shape 1: notes nobody else can see, however they ask. */
 @Composable
-context(viewer: User)
+context(principal: User)
 fun NotesPage(db: Db) {
     Div({ classes("card") }) {
         H1 { Text("Private notes") }
@@ -197,7 +197,7 @@ fun NotesPage(db: Db) {
 
 /** An admin-only page, guarded in the route table. */
 @Composable
-context(viewer: User)
+context(principal: User)
 fun AdminUsersPage(db: Db) {
     Div({ classes("card") }) {
         H1 { Text("Users") }

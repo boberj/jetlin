@@ -9,7 +9,7 @@ import jetlin.html.AttributeKey
 import jetlin.html.Div
 import jetlin.html.H1
 import jetlin.html.Text
-import jetlin.html.Viewers
+import jetlin.html.Principals
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -26,7 +26,7 @@ class GuardedRouteTest {
 
     @Test
     fun `a signed-out deep link is a redirect, and no session is rendered`(): Unit = testApplication {
-        application { guardedApp(viewer = null) }
+        application { guardedApp(principal = null) }
         val client = createClient { followRedirects = false }
 
         val response = client.get("/todos")
@@ -39,7 +39,7 @@ class GuardedRouteTest {
 
     @Test
     fun `a signed-in deep link renders the page`(): Unit = testApplication {
-        application { guardedApp(viewer = Person("Alice")) }
+        application { guardedApp(principal = Person("Alice")) }
 
         val response = client.get("/todos")
 
@@ -48,9 +48,9 @@ class GuardedRouteTest {
     }
 
     @Test
-    fun `a role the viewer does not have is a 404, with nothing in it about the route`(): Unit =
+    fun `a role the principal does not have is a 404, with nothing in it about the route`(): Unit =
         testApplication {
-            application { guardedApp(viewer = Person("Alice")) }
+            application { guardedApp(principal = Person("Alice")) }
 
             val response = client.get("/admin/users")
             val body = response.bodyAsText()
@@ -62,7 +62,7 @@ class GuardedRouteTest {
 
     @Test
     fun `an admin gets the admin page`(): Unit = testApplication {
-        application { guardedApp(viewer = Person("Root", admin = true)) }
+        application { guardedApp(principal = Person("Root", admin = true)) }
 
         val response = client.get("/admin/users")
 
@@ -72,7 +72,7 @@ class GuardedRouteTest {
 
     @Test
     fun `an entity-bound route titles the page from the subject it resolved`(): Unit = testApplication {
-        application { guardedApp(viewer = Person("Alice")) }
+        application { guardedApp(principal = Person("Alice")) }
 
         val response = client.get("/note/7")
 
@@ -82,7 +82,7 @@ class GuardedRouteTest {
     @Test
     fun `an entity-bound route with no subject says nothing about it, in the title either`(): Unit =
         testApplication {
-            application { guardedApp(viewer = Person("Alice")) }
+            application { guardedApp(principal = Person("Alice")) }
 
             val response = client.get("/note/9")
             val body = response.bodyAsText()
@@ -97,24 +97,24 @@ private class Person(val name: String, val admin: Boolean = false)
 
 private val PersonKey = AttributeKey<Person?>("person")
 
-private val Viewers = Viewers(PersonKey, signIn = "/login")
+private val Principals = Principals(PersonKey, signIn = "/login")
 
 private class Note(val title: String)
 
-/** Note 9 exists but is not this viewer's to read, which a gated lookup reports as absent. */
+/** Note 9 exists but is not this principal's to read, which a gated lookup reports as absent. */
 private val readableNotes = mapOf("7" to Note("Seven"))
 
-private fun io.ktor.server.application.Application.guardedApp(viewer: Person?) {
+private fun io.ktor.server.application.Application.guardedApp(principal: Person?) {
     jetlin {
-        attributes { mapOf(PersonKey to viewer) }
+        attributes { mapOf(PersonKey to principal) }
         view("/login", title = "Sign in") { Page("Sign in") }
-        view("/todos", title = "Todos", requires = Viewers.signedIn) { Page("Todos") }
-        view("/admin/users", title = "Users", requires = Viewers.where { it.admin }) { Page("Users") }
+        view("/todos", title = "Todos", requires = Principals.signedIn) { Page("Todos") }
+        view("/admin/users", title = "Users", requires = Principals.where { it.admin }) { Page("Users") }
         view(
             "/note/{id}",
             subject = { request -> readableNotes[request.pathParams["id"]] },
             title = { note -> note.title },
-            requires = Viewers.signedIn,
+            requires = Principals.signedIn,
         ) { note -> Page(note.title) }
     }
 }

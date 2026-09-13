@@ -255,13 +255,13 @@ class Todo(@Owner val owner: User, title: String, done: Boolean = false) : Recor
 
     companion object : Policy<Todo, User> {
         // Mine, or my team's. A plain Kotlin expression over live objects — no query language.
-        override fun canRead(row: Todo, viewer: User) =
-            row.owner == viewer || (row.team != null && row.team == viewer.team)
-        override fun canWrite(row: Todo, viewer: User) = row.owner == viewer
+        override fun canRead(row: Todo, principal: User) =
+            row.owner == principal || (row.team != null && row.team == principal.team)
+        override fun canWrite(row: Todo, principal: User) = row.owner == principal
     }
 }
 
-// `update` takes the viewer as a context parameter: a write with nobody in scope does not compile.
+// `update` takes the principal as a context parameter: a write with nobody in scope does not compile.
 todo.update { done = !done }
 ```
 

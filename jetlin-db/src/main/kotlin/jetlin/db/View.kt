@@ -22,7 +22,7 @@ public class View<T : Record> internal constructor(
 ) : List<T> {
 
     /**
-     * Stores [row], if this viewer may create it.
+     * Stores [row], if this principal may create it.
      *
      * Only on a view that is a whole collection. A derived one — `project.tasks`, or anything that came
      * out of `filter` — has no answer to "added to what", and silently adding to the wrong place is

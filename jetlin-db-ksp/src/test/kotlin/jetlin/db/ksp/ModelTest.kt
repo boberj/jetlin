@@ -147,7 +147,7 @@ internal fun entity(
     tableName = plural(snakeCase(name)),
     isInternal = isInternal,
     hasPolicy = hasPolicy,
-    viewerType = if (hasPolicy) "app.User" else null,
+    principalType = if (hasPolicy) "app.User" else null,
     policySubject = policySubject,
     columns = columns,
     constructorParameters = parameters + columns.filter { it.constructorParameter }
