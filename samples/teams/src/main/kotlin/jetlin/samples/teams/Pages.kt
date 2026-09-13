@@ -31,7 +31,7 @@ import jetlin.runtime.rememberAction
  * hiding a link and refusing a route are one fact, and two copies of it drift.
  */
 @Composable
-fun Shell(content: @Composable () -> Unit) {
+fun Shell(hub: Hub?, content: @Composable () -> Unit) {
     val principal = Principals.of(LocalRequest.current)
     Div({ classes("page") }) {
         Nav({ classes("nav") }) {
@@ -47,8 +47,31 @@ fun Shell(content: @Composable () -> Unit) {
                 Link("/login", { classes("link") }) { Text("Switch user") }
             }
         }
+        // External data in the chrome rather than on a page of its own, because that is where this kind
+        // of thing actually goes. One Fetch behind it for the whole process, so a hundred sessions
+        // showing this banner cost one request a minute between them — and when it changes at the other
+        // end, every one of those sessions is recomposed by the write that fills the cell.
+        if (principal != null && hub != null) Announcement(hub)
         content()
     }
+}
+
+/**
+ * The announcement, when there is one.
+ *
+ * Renders nothing at all while it is loading or if it failed: the chrome is not the place for a
+ * placeholder, and an announcement nobody has yet is not news. The three-way read is still there — it is
+ * just that two of the three answers are "say nothing", which is a perfectly good way to handle them.
+ *
+ * Worth watching on the very first page load after a restart: the banner is absent from the server-rendered
+ * HTML and appears a moment later, because the first read is what started the fetch and nothing blocks a
+ * first paint on a network call. Every load after that has it server-side, including the first one in
+ * somebody else's session — there is one of these for the whole process.
+ */
+@Composable
+private fun Announcement(hub: Hub) {
+    val text = (hub.announcement.value as? Fetched.Ready)?.value ?: return
+    Div({ classes("banner"); testTag("banner") }) { Text(text) }
 }
 
 /**

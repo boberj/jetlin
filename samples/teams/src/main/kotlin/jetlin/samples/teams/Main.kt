@@ -75,7 +75,7 @@ fun main() {
                 println("[teams] ${throwable::class.simpleName}: ${throwable.message}")
             }
 
-            app { route -> Shell(route) }
+            app { route -> Shell(hub, route) }
 
             view("/login", title = "Sign in · Teams") { SignInPage() }
 
@@ -215,6 +215,8 @@ internal val STYLES: String = """
       .nav a { color: inherit; text-decoration: none; }
       .brand { font-weight: 600; }
       .who { margin-left: auto; opacity: .7; }
+      .banner { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: .5rem;
+              padding: .4rem .75rem; margin: .25rem 0; font-size: .9em; opacity: .85; }
       .card { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: .5rem;
               padding: 1rem; margin: .75rem 0; }
       .row { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }

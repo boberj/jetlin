@@ -211,6 +211,7 @@ private suspend fun ViewTest.signedInAs(db: Db, email: String) {
             requires = Principals.signedIn,
         ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
         view("/admin/users", requires = Principals.where { it.admin }) { WithPrincipal { AdminUsersPage(db) } }
-        app { route -> Shell(route) }
+        // No external system in these tests: they are about what is stored and who may see it.
+        app { route -> Shell(hub = null, content = route) }
     }
 }

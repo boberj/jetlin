@@ -79,6 +79,8 @@ class HubTest {
                     settle()
 
                     onNode(hasTestTag("announcement")).assertText("Deploy freeze on Friday")
+                    // And again in the chrome, which is a second reader of the same value.
+                    onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday")
                 }
             }
         }
@@ -88,6 +90,22 @@ class HubTest {
             data.calls.count { it == "announcement" },
             "two sessions read one value that is the same for both: that should be one request",
         )
+    }
+
+    @Test
+    fun `the chrome shows external data on a page that knows nothing about it`() = withHub { hub ->
+        data.announcement = "Deploy freeze on Friday"
+
+        withSample { db ->
+            runViewTest {
+                signedInToHub(db, hub, "alice@example.com")
+                settle()
+
+                // The todo list, rendering stored records, with something nobody here owns above it.
+                onNode(hasTestTag("todos")).assertExists()
+                onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday")
+            }
+        }
     }
 
     @Test
@@ -132,12 +150,13 @@ class HubTest {
     }
 }
 
-/** Signs in as [email] and composes the hub route. */
+/** Signs in as [email] and composes the hub route, with the application's real chrome around it. */
 private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
     setAttribute(PrincipalKey, db.user(email))
     setRoutes {
+        view("/", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }
         view("/hub", requires = Principals.signedIn) { WithPrincipal { HubPage(hub) } }
-        app { route -> Shell(route) }
+        app { route -> Shell(hub, route) }
     }
 }
 
