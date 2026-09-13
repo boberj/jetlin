@@ -297,7 +297,9 @@ Button({ disabled(save.state is Run.Running); onClick { save() } }) { Text("Save
 
 Writes to someone else's system are commands rather than assignments, and suspending — which is also what
 stops one being awaited inside `db.transact { }`, since a rollback cannot un-send a request. A stale value
-is refreshed by the next read and keeps serving the old one until the new one lands.
+is refreshed by the next read and keeps serving the old one until the new one lands. `fresh(every = …)`
+keeps one polling while the page is open — reference-counted on the value, so a hundred people watching the
+same thing share one loop, and it stops when the last of them leaves.
 [`docs/architecture.md`](docs/architecture.md) §8 has the rest, and `samples/teams` has a working one.
 
 ## Test

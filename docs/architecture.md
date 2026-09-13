@@ -488,8 +488,23 @@ is the three things that are easy to get wrong and silent when they are:
 A value past its `ttl` is refreshed by the next read, which keeps serving the old one until the new one
 lands — a placeholder replacing data already on screen is a worse answer than something a minute old.
 A failure with nothing to show becomes `Fetched.Failed`; a failure while a good value is in hand keeps
-the good value. Nothing retries on its own: `invalidate()` is what a command calls when it succeeds, and
-what a retry button calls.
+the good value. `invalidate()` marks a value stale and lets the next reader pay for it; `refresh()`
+fetches now, for a caller who knows somebody is looking.
+
+Nothing wakes up when a value expires: a `ttl` bounds what a read will accept, and a read happens when
+the composable that reads it recomposes. A page that must stay fresh while it sits there says so, and
+then the refreshing lasts exactly as long as the page does:
+
+```kotlin
+when (val profile = hub.profile(principal).fresh(every = 10.seconds)) { … }
+```
+
+`fresh` is this framework's `collectAsStateWithLifecycle`, and the composition is the lifecycle. While the
+page is composed the value is watched; when the session navigates away, closes or hibernates, the
+composition goes and so does the watch. The watching is reference-counted on the value rather than on any
+one session, so ten people looking at the same dashboard share **one** loop and one request — and when the
+last of them closes the tab, the requests stop. Two watchers asking for different intervals get the
+shorter one.
 
 Writes to an external system are commands rather than assignments — they have arguments, they can fail,
 and they cannot be batched into a snapshot. A command is an ordinary `suspend fun`, which is also what

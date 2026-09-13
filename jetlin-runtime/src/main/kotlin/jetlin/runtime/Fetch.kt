@@ -1,5 +1,7 @@
 package jetlin.runtime
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
 import java.util.concurrent.atomic.AtomicReference
@@ -8,6 +10,7 @@ import kotlin.time.Duration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -79,19 +82,10 @@ public sealed interface Fetched<out V> {
  * past [ttl] and [invalidate]. **Nothing wakes up when a value expires.** A read happens when the
  * composable that reads it recomposes, so a page sitting still goes on showing an expired value until
  * something recomposes it — another cell changing, a click, a navigation, or a hibernated session waking
- * and rebuilding. [ttl] is a bound on what a read will accept, not a refresh interval; polling would mean
- * paying for a value nobody is looking at, which is the same reason [invalidate] does not refetch. If a
- * page really must refresh while it sits there, a `LaunchedEffect` beside the reader is where that
- * belongs, because the timer then lives exactly as long as somebody is watching:
- *
- * ```kotlin
- * LaunchedEffect(profile) {
- *     while (true) {
- *         delay(30.seconds)
- *         profile.refresh()
- *     }
- * }
- * ```
+ * and rebuilding. [ttl] is a bound on what a read will accept, not a refresh interval; polling by default
+ * would mean paying for a value nobody is looking at, which is the same reason [invalidate] does not
+ * refetch. A page that really must stay fresh while it sits there says so, with [fresh], and then the
+ * refreshing lasts exactly as long as the page does and is shared with every other session showing it.
  *
  * A failure records its time like a success does, so a page that keeps rendering cannot turn a broken
  * endpoint into a request per recomposition — which means a failed fetch under the default infinite
@@ -125,6 +119,16 @@ public class Fetch<V>(
     /** When the last attempt finished, success or failure. A plain field, for the same reason. */
     @Volatile
     private var attemptedAt: Long? = null
+
+    /**
+     * What each current watcher asked for, and the one loop serving all of them.
+     *
+     * A list rather than a count because watchers may ask for different intervals, and the shortest is
+     * the only answer that satisfies everyone. Guarded by the list itself; the critical sections are two
+     * lines and are never held across a suspension.
+     */
+    private val watchers = mutableListOf<Duration>()
+    private var polling: Job? = null
 
     /**
      * The current state of the value, scheduling the fetch if nothing has it yet or the copy is stale.
@@ -172,6 +176,56 @@ public class Fetch<V>(
         if (needsFetch()) schedule()
     }
 
+    /**
+     * Keeps the value refreshed every [every] until the returned [Watch] is stopped.
+     *
+     * One loop, on this object's own scope, however many watchers there are: the second page to ask joins
+     * the first one's schedule rather than starting a second, and the loop stops when the last of them
+     * stops watching. That is the whole point of the value being shared — two sessions showing the same
+     * thing are one request between them, not two each.
+     *
+     * `every` wins over [ttl] while anybody is watching: a watcher is saying how fresh it wants the value,
+     * which is a stronger statement than how stale a read is willing to accept. Two watchers asking for
+     * different intervals get the shorter one, because that is the only answer that satisfies both.
+     *
+     * Callers in a composition want [fresh] instead, which ties this to the page rather than leaving it
+     * to be stopped by hand.
+     */
+    public fun watch(every: Duration): Watch {
+        require(every > Duration.ZERO) { "a watch interval has to be positive, was $every" }
+        synchronized(watchers) {
+            val shortens = watchers.minOrNull()?.let { every < it } ?: true
+            watchers += every
+            // Restarted only when this watcher wants it sooner than anyone already watching. A new
+            // watcher on the same interval — the ordinary case, a second session opening the same page —
+            // joins the schedule in flight, because restarting on every arrival would mean a busy page
+            // never reaching the end of a wait.
+            if (polling == null || shortens) {
+                polling?.cancel()
+                polling = scope.launch { poll() }
+            }
+        }
+        return Watch {
+            synchronized(watchers) {
+                watchers.remove(every)
+                if (watchers.isEmpty()) {
+                    polling?.cancel()
+                    polling = null
+                }
+            }
+        }
+    }
+
+    private suspend fun poll() {
+        while (true) {
+            // Re-read every turn, so that a watcher leaving relaxes the interval without a restart. A
+            // watcher *arriving* with something shorter cannot wait for that — see `watch`.
+            val every = synchronized(watchers) { watchers.minOrNull() } ?: return
+            delay(every)
+            refresh()
+        }
+    }
+
     private fun needsFetch(): Boolean {
         if (inFlight.get() != null) return false
         val attempted = attemptedAt ?: return true
@@ -204,4 +258,44 @@ public class Fetch<V>(
         if (arrived != null) Snapshot.withMutableSnapshot { state.value = arrived }
         attemptedAt = now()
     }
+}
+
+/** A standing request to keep a [Fetch] fresh. Stop it when whoever wanted it stops looking. */
+public fun interface Watch {
+    public fun stop()
+}
+
+/**
+ * The value, kept refreshed every [every] for as long as this composable is on the page.
+ *
+ * The framework's answer to "poll while the user is looking at it", and the reason it can be one line:
+ * a composition *is* the lifecycle. While the page is composed the value is watched; when the session
+ * navigates away, closes or hibernates, the composition goes and so does the watch.
+ *
+ * ```kotlin
+ * @Composable
+ * fun StatusCard(hub: Hub, principal: User) {
+ *     when (val profile = hub.profile(principal).fresh(every = 10.seconds)) {
+ *         is Fetched.Loading -> Span { Text("…") }
+ *         is Fetched.Failed -> Span { Text("unavailable") }
+ *         is Fetched.Ready -> Span { Text(profile.value.status) }
+ *     }
+ * }
+ * ```
+ *
+ * Two sessions showing the same value share one loop and one request, because they share the [Fetch] —
+ * the watching is reference-counted on it, not on either composition. Ten people watching a dashboard
+ * cost what one person watching it costs, and when the tenth closes the tab the requests stop.
+ *
+ * A hibernated session stops watching, which is the right answer and not an accident: its composition is
+ * torn down, so nobody is looking. When it wakes and recomposes it watches again, and the first read
+ * revalidates anything that went stale while it slept.
+ */
+@Composable
+public fun <V> Fetch<V>.fresh(every: Duration): Fetched<V> {
+    DisposableEffect(this, every) {
+        val watch = watch(every)
+        onDispose { watch.stop() }
+    }
+    return value
 }

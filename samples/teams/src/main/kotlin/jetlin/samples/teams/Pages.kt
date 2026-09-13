@@ -22,6 +22,7 @@ import jetlin.html.bind
 import jetlin.html.rememberSavedField
 import jetlin.runtime.Fetched
 import jetlin.runtime.Run
+import jetlin.runtime.fresh
 import jetlin.runtime.rememberAction
 
 /**
@@ -67,10 +68,14 @@ fun Shell(hub: Hub?, content: @Composable () -> Unit) {
  * HTML and appears a moment later, because the first read is what started the fetch and nothing blocks a
  * first paint on a network call. Every load after that has it server-side, including the first one in
  * somebody else's session — there is one of these for the whole process.
+ *
+ * `fresh` is what keeps it current: while any page is showing this, the value is re-fetched on a loop, and
+ * the loop stops when the last of those pages goes away. Ten people watching cost what one costs, because
+ * the watching is counted on the value rather than on any one session.
  */
 @Composable
 private fun Announcement(hub: Hub) {
-    val text = (hub.announcement.value as? Fetched.Ready)?.value ?: return
+    val text = (hub.announcement.fresh(every = hub.refreshEvery) as? Fetched.Ready)?.value ?: return
     Div({ classes("banner"); testTag("banner") }) { Text(text) }
 }
 

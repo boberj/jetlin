@@ -10,13 +10,17 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 
 /**
@@ -242,6 +246,72 @@ class FetchTest {
         }
     }
 
+
+    @Test
+    fun `a watched value keeps refreshing while a page shows it, and stops when the page goes`(): Unit =
+        runTest {
+            val calls = AtomicInteger()
+            val fetch = Fetch(fetches) { "call ${calls.incrementAndGet()}" }
+
+            val root = TestNode("root")
+            val host = CompositionHost(TestApplier(root))
+            host.setContent { Text(fetch.fresh(every = 30.milliseconds).text()) }
+
+            // Three turns of the loop, which is three requests nobody asked for by hand.
+            awaitCalls(calls, atLeast = 3)
+            host.close()
+
+            // And then it stops: nobody is looking, so nobody is paying.
+            val whenClosed = calls.get()
+            realDelay(150.milliseconds)
+            assertEquals(whenClosed, calls.get(), "a page that is gone should not still be polling")
+        }
+
+    @Test
+    fun `two sessions watching one value share one loop`(): Unit = runTest {
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches) { "call ${calls.incrementAndGet()}" }
+
+        val first = CompositionHost(TestApplier(TestNode("root")))
+        val second = CompositionHost(TestApplier(TestNode("root")))
+        first.setContent { Text(fetch.fresh(every = 30.milliseconds).text()) }
+        second.setContent { Text(fetch.fresh(every = 30.milliseconds).text()) }
+
+        realDelay(200.milliseconds)
+        val both = calls.get()
+
+        // Six turns of a 30ms loop in 200ms, give or take. Two loops would be a dozen, and the gap is
+        // the point: sessions showing the same thing are one request between them, not one each.
+        assertTrue(both in 2..9, "expected one loop's worth of requests, got $both")
+
+        // One of them leaves. The value is still on somebody's page, so it is still being kept fresh.
+        first.close()
+        awaitCalls(calls, atLeast = both + 2)
+
+        // The last one leaves, and only then does it stop.
+        second.close()
+        val whenBothClosed = calls.get()
+        realDelay(150.milliseconds)
+        assertEquals(whenBothClosed, calls.get())
+    }
+
+    @Test
+    fun `the shorter of two watch intervals wins`(): Unit = runTest {
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches) { "call ${calls.incrementAndGet()}" }
+
+        val slow = fetch.watch(every = 10.seconds)
+        realDelay(60.milliseconds)
+        assertEquals(0, calls.get(), "a ten second watch should not have fired yet")
+
+        // A page that wants it fresher joins, and gets what it asked for rather than what was there.
+        val quick = fetch.watch(every = 25.milliseconds)
+        awaitCalls(calls, atLeast = 2)
+
+        quick.stop()
+        slow.stop()
+    }
+
     @Test
     fun `invalidate clears a failure and the next read tries again`(): Unit = runTest {
         val calls = AtomicInteger()
@@ -266,6 +336,21 @@ class FetchTest {
             assertEquals("root(at last)", root.render())
         }
     }
+}
+
+
+/** Waits, in real time, for a poll loop to have run at least [atLeast] times. */
+private suspend fun awaitCalls(calls: AtomicInteger, atLeast: Int) {
+    withContext(Dispatchers.Default) {
+        withTimeout(5.seconds) {
+            while (calls.get() < atLeast) delay(5)
+        }
+    }
+}
+
+/** A real wait, since a poll loop runs on a real clock and `runTest` does not. */
+private suspend fun realDelay(duration: kotlin.time.Duration) {
+    withContext(Dispatchers.Default) { delay(duration) }
 }
 
 /**

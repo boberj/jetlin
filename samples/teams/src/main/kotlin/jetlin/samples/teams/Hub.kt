@@ -20,6 +20,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import java.util.concurrent.ConcurrentHashMap
 import jetlin.runtime.Fetch
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
@@ -57,6 +58,14 @@ import kotlinx.serialization.json.put
 class Hub(
     private val baseUrl: String,
     private val client: HttpClient = HttpClient(CIO),
+    /**
+     * How often a page that is open keeps the announcement fresh.
+     *
+     * Short enough to see by hand: `curl -X POST -d 'text' -H 'Authorization: Bearer teams-application'
+     * localhost:8081/hub/announcement` and every open window changes within this, with no push from the
+     * application and one request between all of them.
+     */
+    val refreshEvery: Duration = 15.seconds,
     /**
      * Where fetches run: never a session's dispatcher.
      *
@@ -147,6 +156,13 @@ fun Application.hubService(data: HubData = HubData()) {
             if (call.token() != APPLICATION_TOKEN) return@get call.refuse("the application token is required")
             data.calls += "announcement"
             call.respondJson { put("text", data.announcement) }
+        }
+        // So that the polling can be seen doing something: change this from a terminal and watch every
+        // open window follow, without the application knowing anything happened.
+        post("/hub/announcement") {
+            if (call.token() != APPLICATION_TOKEN) return@post call.refuse("the application token is required")
+            data.announcement = call.receiveText().trim()
+            call.respondText("", status = HttpStatusCode.NoContent)
         }
         get("/hub/me") {
             val who = call.token() ?: return@get call.refuse("a user token is required")

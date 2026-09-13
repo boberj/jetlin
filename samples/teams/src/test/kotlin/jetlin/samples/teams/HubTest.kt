@@ -17,6 +17,8 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
@@ -45,17 +47,15 @@ class HubTest {
         withSample { db ->
             runViewTest(url = "/hub") {
                 signedInToHub(db, hub, "alice@example.com")
-                settle()
 
-                onNode(hasTestTag("status")).assertText("reviewing the sample · 1 updates")
+                eventually { onNode(hasTestTag("status")).assertText("reviewing the sample · 1 updates") }
                 assertNotDisclosed("on holiday")
             }
 
             runViewTest(url = "/hub") {
                 signedInToHub(db, hub, "bob@example.com")
-                settle()
 
-                onNode(hasTestTag("status")).assertText("on holiday · 1 updates")
+                eventually { onNode(hasTestTag("status")).assertText("on holiday · 1 updates") }
                 assertNotDisclosed("reviewing the sample")
             }
         }
@@ -76,9 +76,8 @@ class HubTest {
             repeat(2) { session ->
                 runViewTest(url = "/hub") {
                     signedInToHub(db, hub, if (session == 0) "alice@example.com" else "bob@example.com")
-                    settle()
 
-                    onNode(hasTestTag("announcement")).assertText("Deploy freeze on Friday")
+                    eventually { onNode(hasTestTag("announcement")).assertText("Deploy freeze on Friday") }
                     // And again in the chrome, which is a second reader of the same value.
                     onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday")
                 }
@@ -99,22 +98,39 @@ class HubTest {
         withSample { db ->
             runViewTest {
                 signedInToHub(db, hub, "alice@example.com")
-                settle()
 
                 // The todo list, rendering stored records, with something nobody here owns above it.
                 onNode(hasTestTag("todos")).assertExists()
-                onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday")
+                eventually { onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday") }
             }
         }
     }
+
+    @Test
+    fun `the banner follows the announcement while the page just sits there`() =
+        withHub(refreshEvery = 40.milliseconds) { hub ->
+            data.announcement = "Deploy freeze on Friday"
+
+            withSample { db ->
+                runViewTest {
+                    signedInToHub(db, hub, "alice@example.com")
+                    eventually { onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday") }
+
+                    // Changed at the far end, with nothing telling the application and nobody touching
+                    // the page. The watch is what notices, and the write is what redraws it.
+                    data.announcement = "All clear"
+
+                    eventually { onNode(hasTestTag("banner")).assertText("All clear") }
+                }
+            }
+        }
 
     @Test
     fun `saving a status shows the new one`() = withHub { hub ->
         withSample { db ->
             runViewTest(url = "/hub") {
                 signedInToHub(db, hub, "alice@example.com")
-                settle()
-                onNode(hasTestTag("status")).assertText("no status · 0 updates")
+                eventually { onNode(hasTestTag("status")).assertText("no status · 0 updates") }
 
                 onNode(hasTestTag("status-draft")).type("writing the hub sample")
                 onNode(hasTestTag("save-status")).click()
@@ -133,7 +149,7 @@ class HubTest {
         withSample { db ->
             runViewTest(url = "/hub") {
                 signedInToHub(db, hub, "alice@example.com")
-                settle()
+                eventually { onNode(hasTestTag("status")).assertText("no status · 0 updates") }
 
                 onNode(hasTestTag("status-draft")).type("x".repeat(STATUS_LIMIT + 1))
                 onNode(hasTestTag("save-status")).click()
@@ -161,18 +177,13 @@ private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
 }
 
 /**
- * The stub, a client pointed at it, and a way to wait for what it was asked.
+ * The stub, a client pointed at it, and a way to wait for what the page does about it.
  *
- * [settle] joins the fetch scope's children rather than sleeping: a fetch is an ordinary coroutine, so a
- * test can wait for exactly the thing it is about. Everything the page does afterwards is ordinary
- * recomposition, which `awaitIdle` already covers.
+ * Everything here waits through [eventually] rather than by joining coroutines. An earlier version joined
+ * the fetch scope's children, which was exact until a watched value put a polling loop in that scope: a
+ * loop that never finishes is not something a test can wait for.
  */
-private class HubFixture(private val scope: CoroutineScope, val data: HubData) {
-    suspend fun ViewTest.settle() {
-        scope.coroutineContext.job.children.toList().forEach { it.join() }
-        awaitIdle()
-    }
-
+private class HubFixture(val data: HubData) {
     /**
      * Retries [assertion] until it holds, for work the session started that `awaitIdle` cannot see.
      *
@@ -203,15 +214,15 @@ private class HubFixture(private val scope: CoroutineScope, val data: HubData) {
     }
 }
 
-private fun withHub(block: HubFixture.(Hub) -> Unit) {
+private fun withHub(refreshEvery: Duration = 15.seconds, block: HubFixture.(Hub) -> Unit) {
     val data = HubData()
     val server = embeddedServer(Netty, port = 0) { hubService(data) }
     server.start(wait = false)
     try {
         val port = runBlocking { server.engine.resolvedConnectors().first().port }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        Hub("http://127.0.0.1:$port", HttpClient(CIO), scope).use { hub ->
-            HubFixture(scope, data).block(hub)
+        Hub("http://127.0.0.1:$port", HttpClient(CIO), refreshEvery, scope).use { hub ->
+            HubFixture(data).block(hub)
         }
     } finally {
         server.stop(gracePeriodMillis = 0, timeoutMillis = 0)
