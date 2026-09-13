@@ -20,6 +20,9 @@ import jetlin.html.Text
 import jetlin.html.Ul
 import jetlin.html.bind
 import jetlin.html.rememberSavedField
+import jetlin.runtime.Fetched
+import jetlin.runtime.Run
+import jetlin.runtime.rememberAction
 
 /**
  * The chrome, composed once for the session above whichever view is current.
@@ -36,6 +39,7 @@ fun Shell(content: @Composable () -> Unit) {
             if (principal != null) {
                 Link("/") { Text("Todos") }
                 Link("/notes") { Text("Notes") }
+                Link("/hub") { Text("Hub") }
                 IfPermitted("/admin/users") { Link("/admin/users") { Text("Users") } }
                 Span({ classes("who"); testTag("principal") }) {
                     Text("${principal.name}${principal.team?.let { " · ${it.name}" } ?: ""}")
@@ -222,4 +226,67 @@ fun AdminUsersPage(db: Db) {
         H2 { Text("Teams") }
         Ul { for (team in db.teams) key(team.id) { Li { Text(team.name) } } }
     }
+}
+
+/**
+ * The other kind of data, on a page of its own.
+ *
+ * Nothing here is stored and nothing here is gated, and the page does not look very different for it: a
+ * read subscribes, an arrival recomposes, a write is refused by whoever owns the data rather than by a
+ * policy. What *is* different is that every read has three answers rather than one, which is the honest
+ * cost of the value living somewhere else — and why `Fetched` is a type rather than a nullable.
+ */
+@Composable
+context(principal: User)
+fun HubPage(hub: Hub) {
+    val status = rememberSavedField("", key = "status") {
+        if (it.isBlank()) "Say something" else null
+    }
+    // Remembered per page rather than per application: the in-flight state belongs to this button.
+    val save = rememberAction { hub.setStatus(principal, status.value.trim()) }
+
+    Div({ classes("card") }) {
+        H1 { Text("Hub") }
+        P({ classes("muted") }) {
+            Text("An external system, stubbed in this process. Not stored, not resident, not gated.")
+        }
+
+        H2 { Text("Announcement") }
+        // One Fetch for everybody, because the announcement is the same for everybody. A hundred
+        // sessions reading this cost one request a minute between them.
+        P({ testTag("announcement") }) { Text(hub.announcement.value.say { it }) }
+
+        H2 { Text("Your status") }
+        P({ testTag("status") }) {
+            Text(hub.profile(principal).value.say { "${it.status} · ${it.updates} updates" })
+        }
+        Div({ classes("row") }) {
+            Input({
+                classes("input")
+                testTag("status-draft")
+                attr("placeholder", "What are you up to?")
+                bind(status)
+            })
+            Button({
+                classes("btn")
+                testTag("save-status")
+                // The request is outstanding, so the button says so. This is the whole reason an action
+                // has a state rather than being a fire-and-forget launch.
+                disabled(!status.isValid || save.state is Run.Running)
+                onClick { save() }
+            }) { Text(if (save.state is Run.Running) "Saving…" else "Save") }
+        }
+        // A refusal the application could not have predicted, shown where the user is looking. The
+        // session is untouched: an action catches, so a failed command costs a line of text.
+        (save.state as? Run.Failed)?.let { failed ->
+            P({ classes("muted"); testTag("status-error") }) { Text(failed.cause.message.orEmpty()) }
+        }
+    }
+}
+
+/** The three answers a fetched value can give, as a page would put them. */
+private fun <V> Fetched<V>.say(ready: (V) -> String): String = when (this) {
+    is Fetched.Loading -> "…"
+    is Fetched.Failed -> "unavailable"
+    is Fetched.Ready -> ready(value)
 }

@@ -12,6 +12,9 @@ dependencies {
     ksp(project(":jetlin-db-ksp"))
 
     implementation(libs.ktor.server.netty)
+    // The sample talks to its own stub of an external system over real HTTP: one process, one port, but a
+    // genuine client and a genuine request, because a fake transport would prove nothing about the wiring.
+    implementation(libs.ktor.client.cio)
     implementation(libs.slf4j.simple)
 
     testImplementation(project(":jetlin-testing"))

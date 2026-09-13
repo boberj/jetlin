@@ -2,7 +2,6 @@ package jetlin.samples.teams
 
 import jetlin.db.Db
 import jetlin.db.Id
-import jetlin.db.authenticate
 import jetlin.db.unsafe
 import jetlin.testing.ViewTest
 import jetlin.testing.assertNotDisclosed
@@ -13,9 +12,6 @@ import jetlin.testing.type
 import jetlin.testing.recordUpdate
 import jetlin.testing.runViewTest
 import jetlin.testing.setRoutes
-import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.createTempDirectory
-import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -216,19 +212,5 @@ private suspend fun ViewTest.signedInAs(db: Db, email: String) {
         ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
         view("/admin/users", requires = Principals.where { it.admin }) { WithPrincipal { AdminUsersPage(db) } }
         app { route -> Shell(route) }
-    }
-}
-
-private fun Db.user(email: String): User =
-    checkNotNull(authenticate(User::class) { it.email == email }) { "no seeded user $email" }
-
-/** A freshly seeded database per test: shared state is the point of the framework and the enemy of a test. */
-@OptIn(ExperimentalPathApi::class)
-private fun withSample(block: (Db) -> Unit) {
-    val directory = createTempDirectory("jetlin-teams-test")
-    try {
-        openSeeded(directory.resolve("teams.db")).use(block)
-    } finally {
-        directory.deleteRecursively()
     }
 }

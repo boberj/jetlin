@@ -341,7 +341,8 @@ rendering one.
 There is an exit if it is ever needed, and it needs no change to the model: a cell that starts absent
 renders a placeholder instead of blocking, so cold tables can move off the resident graph. Residency is an
 optimization, not a foundation. It is not used for the database in v1 — a microsecond SQLite read should
-not produce a placeholder flicker.
+not produce a placeholder flicker. That cell exists, as `jetlin.runtime.Fetch`, and is what an application
+uses for data it does not own; `docs/architecture.md` §8 describes it.
 
 ---
 

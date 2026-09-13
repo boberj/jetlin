@@ -35,8 +35,13 @@ import kotlin.io.path.createTempDirectory
 fun main() {
     val db = openSeeded()
     val port = System.getenv("PORT")?.toInt() ?: 8081
+    // The "external system" is this same process, on this same port. A stub, deliberately, because the
+    // thing worth showing is what an application does with data it does not own — not that GitHub exists.
+    val hub = Hub("http://127.0.0.1:$port")
 
     embeddedServer(Netty, port = port) {
+        hubService()
+
         routing {
             // Signing in and out are plain HTTP: a cookie goes on, and the browser is sent back to the
             // page. Nothing about this is the framework's business, which is why it is four lines.
@@ -83,6 +88,12 @@ fun main() {
 
             view("/notes", title = "Notes · Teams", requires = Principals.signedIn) {
                 WithPrincipal { NotesPage(db) }
+            }
+
+            // The same session, reading something nobody here owns. No gate, no policy, no transaction:
+            // a value that arrives late is snapshot state like any other, so it recomposes what read it.
+            view("/hub", title = "Hub · Teams", requires = Principals.signedIn) {
+                WithPrincipal { HubPage(hub) }
             }
 
             // Entity-bound: the route resolves its own subject through the gated lookup, so a todo this

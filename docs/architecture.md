@@ -450,6 +450,73 @@ rule that disables it. `touched` keeps a fresh form from opening covered in erro
 field reports no `error` even while `isValid` is false. `bind` debounces by default, because a field
 that round-trips on every keystroke is the usual way this architecture is made to feel slow.
 
+### External data
+
+Not everything a page shows is in the database. A value from somewhere else — an HTTP API, a queue, a
+slow computation — is held in a `Fetch`, which is snapshot state with a coroutine behind it:
+
+```kotlin
+class Hub(private val client: HttpClient, private val scope: CoroutineScope) {
+    private val profiles = ConcurrentHashMap<String, Fetch<Profile>>()
+
+    fun profile(of: User): Fetch<Profile> = profiles.computeIfAbsent(of.email) { email ->
+        Fetch(scope, ttl = 30.seconds) { client.profile(email) }
+    }
+}
+
+@Composable
+fun Status(hub: Hub, of: User) {
+    when (val profile = hub.profile(of).value) {
+        is Fetched.Loading -> Span { Text("…") }
+        is Fetched.Failed -> Span { Text("unavailable") }
+        is Fetched.Ready -> Span { Text(profile.value.status) }
+    }
+}
+```
+
+Reading subscribes, the arrival recomposes every session that read it, and composition never blocks —
+the same mechanism a committed transaction uses, because it is the same mechanism. What a `Fetch` adds
+is the three things that are easy to get wrong and silent when they are:
+
+1. **The read writes no snapshot state.** The in-flight marker is a plain atomic. State written during a
+   pass that read it invalidates that reader on the next pass, forever: a session that never settles.
+2. **The fetch runs on a scope the caller owns, off the session's thread.** A session composes on one
+   confined thread; a request on it stalls everything that session is doing.
+3. **The arrival is one write.** One response fills one object, so it costs one recomposition and one
+   patch however many fields it has.
+
+A value past its `ttl` is refreshed by the next read, which keeps serving the old one until the new one
+lands — a placeholder replacing data already on screen is a worse answer than something a minute old.
+A failure with nothing to show becomes `Fetched.Failed`; a failure while a good value is in hand keeps
+the good value. Nothing retries on its own: `invalidate()` is what a command calls when it succeeds, and
+what a retry button calls.
+
+Writes to an external system are commands rather than assignments — they have arguments, they can fail,
+and they cannot be batched into a snapshot. A command is an ordinary `suspend fun`, which is also what
+keeps it out of a transaction: `Db.transact` takes a non-suspending block precisely because a rollback
+cannot un-send a request, so "write the record and call the API" does not compile. Where that really must
+be atomic, record the intent in the transaction and let a worker perform the call.
+
+An event handler is not suspending either, so a command is launched, and `rememberAction` models the
+attempt that results:
+
+```kotlin
+val save = rememberAction { hub.setStatus(principal, draft.value) }
+
+Button({ disabled(save.state is Run.Running); onClick { save() } }) { Text("Save") }
+(save.state as? Run.Failed)?.let { P({ classes("error") }) { Text(it.cause.message.orEmpty()) } }
+```
+
+`Run` is `Idle`, `Running`, `Failed` or `Done` — one field rather than three, so the page cannot be asked
+to render a state that cannot happen. The failure is caught inside the launched coroutine, because an
+exception escaping there would cancel the composition's scope and take the session with it: a refused
+command should cost a line of text.
+
+One thing worth noticing in `samples/teams/src/main/kotlin/jetlin/samples/teams/Hub.kt`: the cache is
+keyed by the principal, so a profile fetched with Alice's credential is not something Bob can name. The
+question a policy would answer is answered by construction. A cache shared across principals would need
+the gate and an authority on its key — see §11 of `db-framework-plan.md`, which costs that design out.
+
 ### Drawings
 
 ```kotlin

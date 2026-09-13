@@ -278,6 +278,28 @@ role and they are moved off `/admin/users` while they are sitting on it.
 
 [`docs/db.md`](docs/db.md) is the full design, including migrations, the memory cliff, and what is missing.
 
+## Data you do not own
+
+Not everything on a page is yours to store. A value from an HTTP API lives in a `Fetch`, which is snapshot
+state with a coroutine behind it: reading it subscribes the composable, the arrival recomposes every
+session that read it, and composition never blocks.
+
+```kotlin
+when (val profile = hub.profile(principal).value) {
+    is Fetched.Loading -> Span { Text("…") }
+    is Fetched.Failed -> Span { Text("unavailable") }
+    is Fetched.Ready -> Span { Text(profile.value.status) }
+}
+
+val save = rememberAction { hub.setStatus(principal, draft.value) }
+Button({ disabled(save.state is Run.Running); onClick { save() } }) { Text("Save") }
+```
+
+Writes to someone else's system are commands rather than assignments, and suspending — which is also what
+stops one being awaited inside `db.transact { }`, since a rollback cannot un-send a request. A stale value
+is refreshed by the next read and keeps serving the old one until the new one lands.
+[`docs/architecture.md`](docs/architecture.md) §8 has the rest, and `samples/teams` has a working one.
+
 ## Test
 
 ```bash
