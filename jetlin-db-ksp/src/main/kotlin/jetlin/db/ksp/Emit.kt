@@ -53,7 +53,7 @@ internal fun emitTable(entity: EntityModel): String = buildString {
  * The only way application code obtains one of these records.
  *
  * Every one takes the principal as a context parameter, so a page that forgot to have a principal in scope
- * does not compile rather than quietly reading someone else's rows.
+ * does not compile rather than quietly reading someone else's records.
  */
 private fun emitAccessors(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
@@ -86,9 +86,9 @@ private fun emitMutators(entity: EntityModel): String = buildString {
     appendLine(" */")
     appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.update(block: ${entity.draftQualified}.() -> Unit) {")
-    appendLine("    val row = this")
-    appendLine("    jetlin.db.Gate.update(row, ${entity.objectQualified}.policy, principal) {")
-    appendLine("        ${entity.draftQualified}(row, principal).block()")
+    appendLine("    val record = this")
+    appendLine("    jetlin.db.Gate.update(record, ${entity.objectQualified}.policy, principal) {")
+    appendLine("        ${entity.draftQualified}(record, principal).block()")
     appendLine("    }")
     appendLine("}")
     appendLine()
@@ -169,21 +169,21 @@ private fun emitDraft(entity: EntityModel): String = buildString {
     appendLine(" * The fields of a [${entity.qualifiedName}] that `update { }` may write.")
     appendLine(" */")
     appendLine("${entity.visibility} class ${entity.draftName} internal constructor(")
-    appendLine("    private val row: ${entity.qualifiedName},")
+    appendLine("    private val record: ${entity.qualifiedName},")
     appendLine("    private val principal: ${entity.principal},")
     appendLine(") {")
     settable.forEachIndexed { index, column ->
         if (index > 0) appendLine()
         appendLine("    ${entity.visibility} var ${column.name}: ${column.declaredType}")
-        appendLine("        get() = row.${column.name}")
+        appendLine("        get() = record.${column.name}")
         appendLine("        set(value) {")
         appendLine("            jetlin.db.Gate.requireWrite(")
-        appendLine("                row,")
+        appendLine("                record,")
         appendLine("                ${entity.objectName}.${column.name},")
         appendLine("                ${entity.objectName}.policy,")
         appendLine("                principal,")
         appendLine("            )")
-        appendLine("            row.${column.name} = value")
+        appendLine("            record.${column.name} = value")
         appendLine("        }")
     }
     if (settable.isEmpty()) {
@@ -251,7 +251,7 @@ private fun emitCollection(entity: EntityModel, packageName: String): String = b
  * The other side of a reference: `project.tasks`.
  *
  * Filtered by the *referencing* entity's policy, evaluated per read. That is what makes unsharing
- * reactive — a row that stops being readable leaves the collection, and the pages that iterated it
+ * reactive — a record that stops being readable leaves the collection, and the pages that iterated it
  * recompose, with no invalidation anywhere.
  */
 private fun emitInverse(inverse: InverseModel, packageName: String): String = buildString {

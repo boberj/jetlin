@@ -61,7 +61,7 @@ class DbConventionsTest {
     /**
      * A policy runs on the recomposition hot path, so it cannot wait for anything.
      *
-     * Reading a policy-filtered collection evaluates the policy per row, per read, in the middle of a
+     * Reading a policy-filtered collection evaluates the policy per record, per read, in the middle of a
      * composition — and deliberately does not cache, because a cached decision outlives the state it was
      * based on, which is how reactive revocation gets quietly broken. A policy that did IO would put a
      * network round trip inside recomposition, on a thread a session cannot afford to block.
@@ -146,7 +146,7 @@ private val PRINCIPAL_REQUIRED = """
 """.trimIndent()
 
 private val POLICIES_ARE_PURE = """
-    A policy is evaluated per row, per read, inside a composition, and its result is deliberately not
+    A policy is evaluated per record, per read, inside a composition, and its result is deliberately not
     cached — so it must be a cheap, pure expression over live state.
 
     Nothing that waits: no suspending calls, no IO, no blocking. Whatever a policy needs has to be

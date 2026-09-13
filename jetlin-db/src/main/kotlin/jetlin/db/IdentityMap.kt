@@ -13,7 +13,7 @@ import kotlin.reflect.KClass
  * asynchronous; keeping the working set in memory removes the choice. The cost is that memory is a
  * real ceiling, shared with the live session compositions.
  *
- * Each type's rows are held in a [SnapshotStateList], so adding or removing a row invalidates the
+ * Each type's records are held in a [SnapshotStateList], so adding or removing a record invalidates the
  * compositions that had iterated it — across every session in the process, because the map is
  * process-wide and the lists are ordinary snapshot state.
  *
@@ -28,43 +28,43 @@ public class IdentityMap {
 
     private val tables = ConcurrentHashMap<KClass<out Record>, SnapshotStateList<Record>>()
 
-    /** Rows of [type] in insertion order, as live snapshot state. */
+    /** Records of [type] in insertion order, as live snapshot state. */
     @Suppress("UNCHECKED_CAST")
-    internal fun <T : Record> rows(type: KClass<T>): SnapshotStateList<T> =
+    internal fun <T : Record> records(type: KClass<T>): SnapshotStateList<T> =
         tables.computeIfAbsent(type) { mutableStateListOf() } as SnapshotStateList<T>
 
-    /** Every resident row of [type], unfiltered. */
-    internal fun <T : Record> all(type: KClass<T>): View<T> = View(rows(type), { true })
+    /** Every resident record of [type], unfiltered. */
+    internal fun <T : Record> all(type: KClass<T>): View<T> = View(records(type), { true })
 
     /**
-     * Makes [row] resident.
+     * Makes [record] resident.
      *
      * Registration and persistence are separate steps on purpose: a record exists as an object before
      * anything has been stored, which is what lets a constructor be an ordinary constructor.
      */
-    internal fun <T : Record> add(row: T): T {
+    internal fun <T : Record> add(record: T): T {
         @Suppress("UNCHECKED_CAST")
-        val table = rows(row::class as KClass<T>)
-        require(table.none { it.id == row.id }) { "$row is already resident" }
-        table += row
-        return row
+        val table = records(record::class as KClass<T>)
+        require(table.none { it.id == record.id }) { "$record is already resident" }
+        table += record
+        return record
     }
 
     @Suppress("UNCHECKED_CAST")
-    internal fun remove(row: Record) {
-        rows(row::class as KClass<Record>).remove(row)
+    internal fun remove(record: Record) {
+        records(record::class as KClass<Record>).remove(record)
     }
 
     /**
-     * The resident row of [type] with this id, or null.
+     * The resident record of [type] with this id, or null.
      *
      * A scan rather than an index: at the target scale it costs less than maintaining a second
      * structure, and — more importantly — scanning the snapshot list subscribes the caller, so a
-     * composable that looked up a row that did not exist yet recomposes when it arrives.
+     * composable that looked up a record that did not exist yet recomposes when it arrives.
      */
     internal fun <T : Record> find(type: KClass<T>, id: Id<T>): T? =
-        rows(type).firstOrNull { it.id == id.value }
+        records(type).firstOrNull { it.id == id.value }
 
-    /** Total resident rows, for reporting graph size next to session size; see `samples:teams:benchmark`. */
-    public val rowCount: Int get() = tables.values.sumOf { it.size }
+    /** Total resident records, for graph size next to session size; see `samples:teams:benchmark`. */
+    public val recordCount: Int get() = tables.values.sumOf { it.size }
 }

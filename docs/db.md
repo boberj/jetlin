@@ -87,14 +87,14 @@ All three are in `samples/teams`, where they can be read rather than taken on tr
 companion object : Policy<Note, User> by owned(Note::owner)
 
 // 2. Shared by a property of a related record, written by the owner.
-override fun canRead(row: Todo, principal: User): Boolean =
-    row.owner == principal || (row.team != null && row.team == principal.team)
-override fun canWrite(row: Todo, principal: User): Boolean = row.owner == principal
+override fun canRead(record: Todo, principal: User): Boolean =
+    record.owner == principal || (record.team != null && record.team == principal.team)
+override fun canWrite(record: Todo, principal: User): Boolean = record.owner == principal
 
 // 3. Read by many, one column restricted.
-override fun canWrite(row: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
+override fun canWrite(record: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
     Todos.archived -> principal.admin
-    else -> canWrite(row, principal)
+    else -> canWrite(record, principal)
 }
 ```
 
@@ -104,7 +104,7 @@ main thing the memory image buys, and section 5 is what it buys on top.
 
 Two consequences worth knowing before writing one:
 
-- **A policy sits on the recomposition hot path.** A filtered collection evaluates it per row, per read,
+- **A policy sits on the recomposition hot path.** A filtered collection evaluates it per record, per read,
   and caches nothing. Keep policies cheap, pure and free of IO — a `:conventions` test enforces the last
   of those.
 - **The principal is an ordinary parameter here.** Policies are called by the framework and never by
@@ -172,12 +172,12 @@ view(
 ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
 ```
 
-`db.todoFor` goes through `Todos.find`, which is gated, so it returns null for a row this principal may not
+`db.todoFor` goes through `Todos.find`, which is gated, so it returns null for a record this principal may not
 read — and null renders not-found *before* the body composes and before the title is set. This deletes a
 bug class rather than guarding against it: under this API the insecure version is not expressible, because
 there is no path parameter left to look up by hand.
 
-The title matters more than it looks. `<head>` is rendered before the body, so a title computed from a row
+The title matters more than it looks. `<head>` is rendered before the body, so a title computed from a record
 discloses it even when the body refused to show it. Every route test in this repository asserts the title
 separately for that reason.
 
@@ -189,7 +189,7 @@ separately for that reason.
 | In-session navigation | No page load. The guard runs in the composition and redirects client-side. |
 | Hibernation wake | `attributes { }` re-runs, so the principal is recomputed — and the **current** route's guard is re-evaluated, not only the one being entered. A role revoked while a laptop slept is noticed when it opens. |
 
-**Guards are not the security boundary.** The row policy is. A guard is UX plus a cheap early exit: it
+**Guards are not the security boundary.** The record's policy is. A guard is UX plus a cheap early exit: it
 stops you rendering a page that would have been empty. If a guard is ever the only thing protecting data,
 one forgotten guard is a leak. Keep the order — `find` gated, traversal gated, `update` gated, guards on
 top, never instead.
@@ -269,8 +269,8 @@ with(alice) { todo.update { team = null } }
 ```
 
 Bob is looking at `/` in another session. His page iterated `db.todos`, whose filter read
-`row.team == principal.team`. Alice's write invalidates exactly the compositions that read that, Bob's list
-recomposes, and the row leaves his page. Nothing subscribed, nothing broadcast, no invalidation code
+`record.team == principal.team`. Alice's write invalidates exactly the compositions that read that, Bob's list
+recomposes, and the record leaves his page. Nothing subscribed, nothing broadcast, no invalidation code
 anywhere in the application.
 
 It works for guards too, because a guard is also a read of live state:
@@ -314,7 +314,7 @@ compositions. Two benchmarks measure the two halves:
 
 ```
 ./gradlew :samples:teams:benchmark          # the graph, over a table worth measuring
-rows:               20000 resident records
+records:            20000 resident
 graph:              1096 bytes per record (20 MB total)
 
 ./gradlew :samples:demo:benchmark           # sessions; PAGE=real for an application's own page
@@ -324,19 +324,19 @@ live:               129 kB per session | 65 kB per session
 ```
 
 **A resident record costs about 1.1 kB** — a `Todo` with four columns, one reference and strings of
-ordinary length. That figure barely moves between 2,000 rows and 20,000, so a hundred thousand rows is
+ordinary length. That figure barely moves between 2,000 records and 20,000, so a hundred thousand is
 around 110 MB and a million is a gigabyte: residency stops being free somewhere in the hundreds of
-thousands of rows, not the thousands.
+thousands of records, not the thousands.
 
 **A session costs what its page costs**, at roughly 1.5 kB a node in both of those measurements — the
 virtual DOM and the composition around it, not anything the database adds. So a page that lists a large
-collection is the thing to watch rather than the collection itself: rows are charged once to the graph,
-and again per session for each row a session actually *renders*.
+collection is the thing to watch rather than the collection itself: records are charged once to the graph,
+and again per session for each one a session actually *renders*.
 
 Reading a policy-filtered collection does add to a composition's read set, because the policy is evaluated
-per row and a page filtering a big table subscribes to cells in every row it scanned. Measured, that is
-about 30 bytes per scanned row per session: real, and an order of magnitude below the cost of rendering a
-row.
+per record and a page filtering a big table subscribes to cells in every record it scanned. Measured, that
+is about 30 bytes per scanned record per session: real, and an order of magnitude below the cost of
+rendering one.
 
 There is an exit if it is ever needed, and it needs no change to the model: a cell that starts absent
 renders a placeholder instead of blocking, so cold tables can move off the resident graph. Residency is an

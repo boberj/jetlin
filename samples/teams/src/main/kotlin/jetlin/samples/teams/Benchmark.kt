@@ -16,7 +16,7 @@ import kotlin.io.path.createTempDirectory
  * Run with: ./gradlew :samples:teams:benchmark
  */
 fun main() {
-    val rowCount = System.getenv("ROWS")?.toInt() ?: 20_000
+    val recordCount = System.getenv("RECORDS")?.toInt() ?: 20_000
 
     val directory = createTempDirectory("jetlin-teams-benchmark")
     val db = openSeeded(directory.resolve("benchmark.db"))
@@ -28,30 +28,30 @@ fun main() {
     }
 
     val before = usedHeap()
-    unsafe("benchmark rows") {
+    unsafe("benchmark records") {
         // One transaction for all of them, so the figure is the cost of the objects rather than of
-        // SQLite's per-commit residue. An application inserts one row per user action; what is wanted here
+        // SQLite's per-commit residue. An application inserts one record per user action; what is wanted here
         // is what residency costs, not what a commit costs.
         db.transact {
             val bulk = db.insertUnchecked(User("Bulk", "bulk@example.com"))
-            repeat(rowCount) { index ->
-                db.insertUnchecked(Todo(bulk, "Row $index of a benchmark, with a title of ordinary length"))
+            repeat(recordCount) { index ->
+                db.insertUnchecked(Todo(bulk, "Record $index of a benchmark, with a title of ordinary length"))
             }
         }
     }
     val after = usedHeap()
 
-    println("rows:               $rowCount resident records")
+    println("records:            $recordCount resident")
     println(
-        "graph:              ${(after - before) / rowCount} bytes per record " +
+        "graph:              ${(after - before) / recordCount} bytes per record " +
             "(${(after - before) / 1024 / 1024} MB total)",
     )
     println()
-    println("Should barely move as ROWS changes. If it does, something is being counted that is not the")
-    println("rows — SQLite's cache, or garbage the measurement itself made.")
+    println("Should barely move as RECORDS changes. If it does, something is being counted that is not")
+    println("the records — SQLite's cache, or garbage the measurement itself made.")
 
     // Keep the graph reachable until after the measurement, or this measures garbage collection instead.
-    check(db.resident.rowCount > rowCount)
+    check(db.resident.recordCount > recordCount)
     db.close()
 }
 

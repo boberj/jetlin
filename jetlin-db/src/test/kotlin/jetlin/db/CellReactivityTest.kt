@@ -78,15 +78,15 @@ class CellReactivityTest {
     }
 
     @Test
-    fun `adding a row to the identity map inserts one node`(): Unit = runTest {
+    fun `adding a record to the identity map inserts one node`(): Unit = runTest {
         val alice = User("Alice")
         val db = IdentityMap()
         db.add(Task(alice, "first"))
         harness {
             Div {
                 // Keyed by record identity, which is what a view is iterated with: without it the
-                // runtime reuses node slots positionally, so removing a row rewrites the rows after it
-                // instead of removing one node.
+                // runtime reuses node slots positionally, so removing a record rewrites the nodes after it
+                // instead of removing one.
                 db.all(Task::class).forEach { task -> key(task.id) { Span { Text(task.title) } } }
             }
         }.use { h ->
@@ -100,7 +100,7 @@ class CellReactivityTest {
     }
 
     @Test
-    fun `removing a row removes its node and leaves its siblings alone`(): Unit = runTest {
+    fun `removing a record removes its node and leaves its siblings alone`(): Unit = runTest {
         val alice = User("Alice")
         val db = IdentityMap()
         val first = db.add(Task(alice, "first"))
@@ -135,7 +135,7 @@ class CellReactivityTest {
         val db = IdentityMap()
         val keep = db.add(Task(alice, "keep"))
         val hide = db.add(Task(alice, "hide", done = true))
-        val open = View(db.rows(Task::class), { !it.done })
+        val open = View(db.records(Task::class), { !it.done })
 
         assertEquals(listOf(keep), open.toList())
         assertEquals(1, open.size)

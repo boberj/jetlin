@@ -3,9 +3,9 @@ package jetlin.db
 /**
  * A live, filtered list of records.
  *
- * A view is not a query result and holds no rows of its own: it reads the identity map every time it
+ * A view is not a query result and holds no records of its own: it reads the identity map every time it
  * is asked something. That is what makes `db.todos` usable straight from a composable — iterating it
- * subscribes the composition to the underlying list *and* to whatever the filter read, so a row
+ * subscribes the composition to the underlying list *and* to whatever the filter read, so a record
  * appearing, vanishing or ceasing to be visible recomposes exactly the readers that would care.
  *
  * Ordinary stdlib operations are the query language: `filter`, `sortedBy`, `groupBy`, `count`. There
@@ -16,31 +16,31 @@ package jetlin.db
  * reactive authorization gets broken: a cached decision outlives the state the policy read.
  */
 public class View<T : Record> internal constructor(
-    private val rows: List<T>,
+    private val records: List<T>,
     private val visible: (T) -> Boolean,
     private val gate: Gated<T, *>? = null,
 ) : List<T> {
 
     /**
-     * Stores [row], if this principal may create it.
+     * Stores [record], if this principal may create it.
      *
      * Only on a view that is a whole collection. A derived one — `project.tasks`, or anything that came
      * out of `filter` — has no answer to "added to what", and silently adding to the wrong place is
      * worse than not offering it.
      */
-    public fun add(row: T): T {
+    public fun add(record: T): T {
         val gate = gate ?: error(
             "This view is derived, so there is nothing to add to. Add through the collection the " +
                 "records belong to.",
         )
-        return gate.add(row)
+        return gate.add(record)
     }
 
-    private fun resolved(): List<T> = rows.filter(visible)
+    private fun resolved(): List<T> = records.filter(visible)
 
-    override val size: Int get() = rows.count(visible)
+    override val size: Int get() = records.count(visible)
 
-    override fun isEmpty(): Boolean = rows.none(visible)
+    override fun isEmpty(): Boolean = records.none(visible)
 
     override fun iterator(): Iterator<T> = resolved().iterator()
 
@@ -56,7 +56,7 @@ public class View<T : Record> internal constructor(
 
     override fun lastIndexOf(element: T): Int = resolved().lastIndexOf(element)
 
-    override fun contains(element: T): Boolean = rows.any { it === element && visible(it) }
+    override fun contains(element: T): Boolean = records.any { it === element && visible(it) }
 
     override fun containsAll(elements: Collection<T>): Boolean = elements.all { contains(it) }
 

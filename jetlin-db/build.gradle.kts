@@ -20,7 +20,7 @@ dependencies {
     // source set only.
     testImplementation(project(":jetlin-html"))
 
-    // Route guards are routing, not storage — but whether an entity-bound route discloses a row it
+    // Route guards are routing, not storage — but whether an entity-bound route discloses a record it
     // refused to show can only be checked with both halves present.
     testImplementation(project(":jetlin-testing"))
     // The processor runs over this module's own test entities, which is the only place in the repo

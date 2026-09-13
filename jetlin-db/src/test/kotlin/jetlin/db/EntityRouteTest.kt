@@ -25,7 +25,7 @@ import kotlin.test.assertEquals
  * is the gated one and there is no path parameter left to look up by hand.
  *
  * The title is asserted separately in every case, because `<head>` is rendered before the body: a title
- * computed from a row discloses it even when the body refused to show it.
+ * computed from a record discloses it even when the body refused to show it.
  */
 class EntityRouteTest {
 
@@ -55,13 +55,13 @@ class EntityRouteTest {
                 assertEquals(
                     "Not found",
                     title(),
-                    "the row's title reached <head> before anything checked whether Bob may read it",
+                    "the record's title reached <head> before anything checked whether Bob may read it",
                 )
             }
         }
 
     @Test
-    fun `a row that exists and one that does not are indistinguishable`(): Unit =
+    fun `a record that exists and one that does not are indistinguishable`(): Unit =
         withRoutedDb { db, _, bob ->
             runViewTest(url = "/task/9999") {
                 setAttribute(PrincipalKey, bob)
@@ -112,7 +112,7 @@ private suspend fun ViewTest.setTaskRoutes(db: Db) {
 }
 
 /**
- * The route's own lookup: gated, so it is null for a row this principal may not read.
+ * The route's own lookup: gated, so it is null for a record this principal may not read.
  *
  * The whole point of the shape — the route cannot be written any other way, because the path parameter
  * never reaches the view.

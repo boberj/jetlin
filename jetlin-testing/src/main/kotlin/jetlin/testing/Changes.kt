@@ -164,9 +164,9 @@ private fun NodeSpec.ids(): List<NodeId> = when (this) {
 /**
  * Asserts the page contains nothing derived from [values].
  *
- * For the question a multi-user application has to keep answering: is anything of another principal's on this
- * page? Pass the other principal's rows — their titles, names, anything they authored — and this fails if any
- * of it reached the markup.
+ * For the question a multi-user application has to keep answering: is anything of another principal's on
+ * this page? Pass the other principal's records — their titles, names, anything they authored — and this
+ * fails if any of it reached the markup.
  *
  * Checked against the rendered HTML rather than against the node tree, because the tree is not the only way
  * data leaks: an attribute, a property, a test tag or a title discloses just as well as text does, and the

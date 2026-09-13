@@ -22,8 +22,8 @@ internal class WriteSet {
 
     val isEmpty: Boolean get() = inserted.isEmpty() && updated.isEmpty() && deleted.isEmpty()
 
-    fun insert(row: Record) {
-        inserted += row
+    fun insert(record: Record) {
+        inserted += record
     }
 
     fun update(cell: Cell<*>) {
@@ -31,11 +31,11 @@ internal class WriteSet {
         updated.getOrPut(cell.record) { LinkedHashSet() } += cell.name
     }
 
-    fun delete(row: Record) {
-        updated.remove(row)
-        // A row that was only ever inserted in this transaction has never existed on disk, so there
+    fun delete(record: Record) {
+        updated.remove(record)
+        // A record that was only ever inserted in this transaction has never existed on disk, so there
         // is nothing to delete — dropping the insert is the whole of it.
-        if (!inserted.remove(row)) deleted += row
+        if (!inserted.remove(record)) deleted += record
     }
 }
 

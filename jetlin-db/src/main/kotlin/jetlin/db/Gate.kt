@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory
  *
  * 1. Nothing ungated reaches application code. `IdentityMap`'s record-returning members are internal,
  *    and this object is the only public way through.
- * 2. Relation collections are filtered per read, at the cost of evaluating the policy per row.
+ * 2. Relation collections are filtered per read, at the cost of evaluating the policy per record.
  * 3. Writes re-check, because a reference can outlive the check that produced it.
  * 4. There is exactly one escape hatch, it is called [unsafe], and it logs.
  * 5. [LeakDetector] turns a leaked reference from an invisible property into a test failure with the
@@ -28,7 +28,7 @@ import org.slf4j.LoggerFactory
  */
 public object Gate {
 
-    /** Every row of [table] this principal may read, as a live list. */
+    /** Every record of [table] this principal may read, as a live list. */
     public fun <T : Record, P : Principal> view(
         db: Db,
         table: Table<T>,
@@ -36,14 +36,14 @@ public object Gate {
         principal: P,
     ): View<T> {
         val gate = Gated(db, table, policy, principal)
-        return View(db.resident.rows(table.type), gate::canRead, gate)
+        return View(db.resident.records(table.type), gate::canRead, gate)
     }
 
     /**
-     * The row with this id, or null — including when the row exists and this principal may not read it.
+     * The record with this id, or null — including when it exists and this principal may not read it.
      *
-     * Null rather than an exception, and deliberately indistinguishable from "no such row": a
-     * distinguishable refusal tells whoever is probing that the row exists.
+     * Null rather than an exception, and deliberately indistinguishable from "no such record": a
+     * distinguishable refusal tells whoever is probing that the record exists.
      */
     public fun <T : Record, P : Principal> find(
         db: Db,
@@ -52,12 +52,12 @@ public object Gate {
         principal: P,
         id: Id<T>,
     ): T? {
-        val row = db.resident.find(table.type, id) ?: return null
-        return row.takeIf { Gated(db, table, policy, principal).canRead(it) }
+        val record = db.resident.find(table.type, id) ?: return null
+        return record.takeIf { Gated(db, table, policy, principal).canRead(it) }
     }
 
     /**
-     * The rows of [table] that [match], filtered by what this principal may read.
+     * The records of [table] that [match], filtered by what this principal may read.
      *
      * What an inverse relation is: `project.tasks` is every task whose `project` is this one, minus the
      * ones this principal cannot see. Filtered per read rather than cached, so sharing a project with
@@ -71,67 +71,74 @@ public object Gate {
         match: (T) -> Boolean,
     ): View<T> {
         val gate = Gated(db, table, policy, principal)
-        return View(db.resident.rows(table.type), { row -> match(row) && gate.canRead(row) }, gate = null)
+        return View(
+            db.resident.records(table.type),
+            { record -> match(record) && gate.canRead(record) },
+            gate = null,
+        )
     }
 
-    /** Stores [row], if this principal may create it. */
+    /** Stores [record], if this principal may create it. */
     public fun <T : Record, P : Principal> add(
         db: Db,
         policy: Policy<T, P>,
         principal: P,
-        row: T,
+        record: T,
     ): T {
-        if (!unsafeInEffect && !policy.canCreate(row, principal)) {
-            throw AccessDenied("$principal may not create $row")
+        if (!unsafeInEffect && !policy.canCreate(record, principal)) {
+            throw AccessDenied("$principal may not create $record")
         }
-        return db.transact { db.insert(row) }
+        return db.transact { db.insert(record) }
     }
 
-    /** Removes [row], if this principal may delete it. */
-    public fun <T : Record, P : Principal> delete(row: T, policy: Policy<T, P>, principal: P) {
-        if (!unsafeInEffect && !policy.canDelete(row, principal)) {
-            throw AccessDenied("$principal may not delete $row")
+    /** Removes [record], if this principal may delete it. */
+    public fun <T : Record, P : Principal> delete(record: T, policy: Policy<T, P>, principal: P) {
+        if (!unsafeInEffect && !policy.canDelete(record, principal)) {
+            throw AccessDenied("$principal may not delete $record")
         }
-        val db = row.database ?: return // Never stored: there is nothing to remove.
-        db.transact { db.delete(row) }
+        val db = record.database ?: return // Never stored: there is nothing to remove.
+        db.transact { db.delete(record) }
     }
 
     /**
      * Runs a draft block as one transaction, having checked that this principal may write the record at all.
      *
-     * The row-level check happens here and the column-level checks happen in the draft's setters, which
+     * The record-level check happens here and the column-level checks happen in the draft's setters, which
      * is what lets one block have `title = "x"` accepted and `archived = true` refused.
      */
     public fun <T : Record, P : Principal> update(
-        row: T,
+        record: T,
         policy: Policy<T, P>,
         principal: P,
         block: () -> Unit,
     ) {
-        if (!unsafeInEffect && !policy.canWrite(row, principal)) {
-            throw AccessDenied("$principal may not change $row")
+        if (!unsafeInEffect && !policy.canWrite(record, principal)) {
+            throw AccessDenied("$principal may not change $record")
         }
         // A record that was never stored has nothing to commit, so it needs no transaction — which is
         // also the only way to build one up before storing it.
-        val db = row.database
+        val db = record.database
         if (db == null) block() else db.transact(block)
     }
 
     /** Checked by a draft's setter before it writes one column. */
     public fun <T : Record, P : Principal> requireWrite(
-        row: T,
+        record: T,
         column: Column<T>,
         policy: Policy<T, P>,
         principal: P,
     ) {
-        if (!unsafeInEffect && !policy.canWrite(row, column, principal)) {
-            throw AccessDenied("$principal may not change ${row::class.simpleName}.${column.name} on $row")
+        if (!unsafeInEffect && !policy.canWrite(record, column, principal)) {
+            throw AccessDenied(
+                "$principal may not change ${record::class.simpleName}.${column.name} on $record",
+            )
         }
     }
 }
 
 /**
- * Resolves a record with no principal, for the one case that cannot have one: working out who the principal is.
+ * Resolves a record with no principal, for the one case that cannot have one: working out who the
+ * principal is.
  *
  * ```kotlin
  * attributes { call ->
@@ -146,7 +153,7 @@ public object Gate {
  * without the same argument.
  */
 public fun <T : Record> Db.authenticate(type: KClass<T>, match: (T) -> Boolean): T? =
-    resident.rows(type).firstOrNull(match)
+    resident.records(type).firstOrNull(match)
 
 /**
  * Stores a record with no policy check, for seeding, fixtures and backfills.
@@ -156,20 +163,20 @@ public fun <T : Record> Db.authenticate(type: KClass<T>, match: (T) -> Boolean):
  * ordinary write goes through `db.todos.add(…)` and is checked.
  *
  * [id] stores the record under an id of the caller's choosing, for the case where the id is part of the
- * fixture rather than an accident of insertion order — a seeded row something links to by number, a test
+ * fixture rather than an accident of insertion order — a seeded record something links to by number, a test
  * that asserts on `/todo/1`. The sequence is advanced past it, so an id chosen here is never handed out
  * again; an id that is already resident is refused.
  */
-public fun <T : Record> Db.insertUnchecked(row: T, id: Long? = null): T {
+public fun <T : Record> Db.insertUnchecked(record: T, id: Long? = null): T {
     check(unsafeInEffect) {
-        "insertUnchecked stores $row without checking any policy, so it is only allowed inside " +
+        "insertUnchecked stores $record without checking any policy, so it is only allowed inside " +
             "unsafe { } — which says why, in the log, every time it runs."
     }
     if (id != null) {
-        row.adoptStoredId(id)
-        Ids.advanceTo(row::class, id)
+        record.adoptStoredId(id)
+        Ids.advanceTo(record::class, id)
     }
-    return transact { insert(row) }
+    return transact { insert(record) }
 }
 
 /**
@@ -178,8 +185,8 @@ public fun <T : Record> Db.insertUnchecked(row: T, id: Long? = null): T {
  * Generated inverse relations use it, so that `project.tasks` does not make the caller pass a database it
  * obtained the project from. Application code has no reason to: a record it holds came from somewhere.
  */
-public fun databaseOf(row: Record): Db = row.database ?: error(
-    "$row is not stored, so it has no database: an inverse relation of an unstored record is empty by " +
+public fun databaseOf(record: Record): Db = record.database ?: error(
+    "$record is not stored, so it has no database: an inverse relation of an unstored record is empty by " +
         "definition. Store it first.",
 )
 
@@ -196,15 +203,15 @@ internal class Gated<T : Record, P : Principal>(
     private val policy: Policy<T, P>,
     private val principal: P,
 ) {
-    fun canRead(row: T): Boolean {
+    fun canRead(record: T): Boolean {
         if (unsafeInEffect) return true
-        val permitted = policy.canRead(row, principal)
+        val permitted = policy.canRead(record, principal)
         // The read check is also the acquisition: every way of obtaining a record passes through here.
-        if (permitted && LeakDetector.enabled) row.recordAcquisition(principal)
+        if (permitted && LeakDetector.enabled) record.recordAcquisition(principal)
         return permitted
     }
 
-    fun add(row: T): T = Gate.add(db, policy, principal, row)
+    fun add(record: T): T = Gate.add(db, policy, principal, record)
 
     override fun toString(): String = "Gated(${table.name}, $principal)"
 }

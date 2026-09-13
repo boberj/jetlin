@@ -172,8 +172,8 @@ public class JetlinConfig {
      * ```
      *
      * This is the shape worth having rather than a convenience: [subject] goes through the gated lookup,
-     * so it is null for a row this principal may not read, null renders not-found before the body composes,
-     * and the title comes from the subject — so `<head>` cannot disclose a row the body refused. Under
+     * so it is null for a record this principal may not read, null renders not-found before the body composes,
+     * and the title comes from the subject — so `<head>` cannot disclose a record the body refused. Under
      * this API the insecure version is not expressible, because there is no path parameter left to look
      * up by hand.
      */

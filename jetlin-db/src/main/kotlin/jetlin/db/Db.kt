@@ -34,7 +34,7 @@ import kotlin.reflect.KClass
  *
  * Four things, in the order they are likely to bite.
  *
- * **A route guard is not the security boundary.** The row policy is. A guard is UX plus a cheap early
+ * **A route guard is not the security boundary.** The record's policy is. A guard is UX plus a cheap early
  * exit — it stops you rendering a page that would have been empty. If a guard is ever the only thing
  * protecting data, one forgotten guard is a leak. Keep the order: the lookup is gated, traversal is
  * gated, `update` is gated, and guards go on top of that, never instead of it.
@@ -44,7 +44,7 @@ import kotlin.reflect.KClass
  * captured by a long-lived closure, stashed in a field — carries its access with it. [LeakDetector]
  * exists to make that findable in development and test builds; nothing makes it impossible.
  *
- * **Policies sit on the recomposition hot path.** A filtered collection evaluates its policy per row,
+ * **Policies sit on the recomposition hot path.** A filtered collection evaluates its policy per record,
  * per read, and deliberately caches nothing, because a cached decision outlives the state it was based
  * on. Keep policies pure, cheap and free of IO. That is also what makes revocation reactive.
  *
@@ -119,7 +119,7 @@ public class Db private constructor(
      *
      * Not `suspend`, and [block] cannot suspend, which is deliberate twice over. An event handler is an
      * ordinary function, so a transaction has to be callable from one. And a non-suspending block
-     * cannot await an external call, which makes "write the row and POST to an API atomically" — a
+     * cannot await an external call, which makes "write the record and POST to an API atomically" — a
      * thing SQLite cannot honour, because a rollback cannot un-send a request — fail to compile rather
      * than fail in production.
      *
@@ -151,30 +151,30 @@ public class Db private constructor(
     }
 
     /**
-     * Stores [row] and makes it resident.
+     * Stores [record] and makes it resident.
      *
      * Ungated on purpose: the policy-checked way in is phase 4's `View.add`, which calls this. Nothing
      * public may reach it.
      */
-    internal fun <T : Record> insert(row: T): T {
-        val writes = requireTransaction(row)
-        require(!row.stored) { "$row is already stored" }
-        tableFor(row) // Fail now, with the class named, rather than at the flush.
-        resident.add(row)
-        writes.insert(row)
-        return row
+    internal fun <T : Record> insert(record: T): T {
+        val writes = requireTransaction(record)
+        require(!record.stored) { "$record is already stored" }
+        tableFor(record) // Fail now, with the class named, rather than at the flush.
+        resident.add(record)
+        writes.insert(record)
+        return record
     }
 
-    /** Removes [row] from disk and from the resident graph. Ungated; see [insert]. */
-    internal fun delete(row: Record) {
-        val writes = requireTransaction(row)
-        resident.remove(row)
-        writes.delete(row)
+    /** Removes [record] from disk and from the resident graph. Ungated; see [insert]. */
+    internal fun delete(record: Record) {
+        val writes = requireTransaction(record)
+        resident.remove(record)
+        writes.delete(record)
     }
 
-    private fun requireTransaction(row: Record): WriteSet =
+    private fun requireTransaction(record: Record): WriteSet =
         Transactions.current ?: error(
-            "Storing or removing $row has to happen inside db.transact { }, so that it is committed " +
+            "Storing or removing $record has to happen inside db.transact { }, so that it is committed " +
                 "before any session can see it.",
         )
 
@@ -201,7 +201,7 @@ public class Db private constructor(
             // transaction inserted.
             writes.deletes.forEach { deleteRow(it) }
             writes.inserts.forEach { insertRow(it) }
-            writes.updates.forEach { (row, columns) -> updateRow(row, columns) }
+            writes.updates.forEach { (record, columns) -> updateRow(record, columns) }
             connection.commit()
         } catch (t: Throwable) {
             connection.rollback()
@@ -223,8 +223,10 @@ public class Db private constructor(
         dataVersion = readDataVersion()
     }
 
-    private fun <T : Record> insertRow(row: T) {
-        val table = tableFor(row)
+    // The three statements that turn a record into a row. Named for what they write: past this point it is
+    // SQLite's tuple rather than the object, which is the only place the word "row" means anything here.
+    private fun <T : Record> insertRow(record: T) {
+        val table = tableFor(record)
         val columns = table.columns
         val sql = buildString {
             append("INSERT INTO ").append(table.name).append(" (id")
@@ -234,31 +236,31 @@ public class Db private constructor(
             append(')')
         }
         connection.prepareStatement(sql).use { statement ->
-            statement.setLong(1, row.id)
-            columns.forEachIndexed { index, column -> bind(statement, index + 2, column.read(row)) }
+            statement.setLong(1, record.id)
+            columns.forEachIndexed { index, column -> bind(statement, index + 2, column.read(record)) }
             statement.executeUpdate()
         }
     }
 
-    private fun <T : Record> updateRow(row: T, changed: Set<String>) {
-        val table = tableFor(row)
+    private fun <T : Record> updateRow(record: T, changed: Set<String>) {
+        val table = tableFor(record)
         val columns = changed.map { name ->
             table.columnsByName[name]
-                ?: error("${row::class.simpleName}.$name is not a column of '${table.name}'")
+                ?: error("${record::class.simpleName}.$name is not a column of '${table.name}'")
         }
         val sql = "UPDATE ${table.name} SET ${columns.joinToString { "${it.name} = ?" }} WHERE id = ?"
         connection.prepareStatement(sql).use { statement ->
-            columns.forEachIndexed { index, column -> bind(statement, index + 1, column.read(row)) }
-            statement.setLong(columns.size + 1, row.id)
+            columns.forEachIndexed { index, column -> bind(statement, index + 1, column.read(record)) }
+            statement.setLong(columns.size + 1, record.id)
             val updated = statement.executeUpdate()
-            check(updated == 1) { "Updating $row changed $updated rows; it is not on disk" }
+            check(updated == 1) { "Updating $record changed $updated rows; it is not on disk" }
         }
     }
 
-    private fun deleteRow(row: Record) {
-        val table = tableFor(row)
+    private fun deleteRow(record: Record) {
+        val table = tableFor(record)
         connection.prepareStatement("DELETE FROM ${table.name} WHERE id = ?").use { statement ->
-            statement.setLong(1, row.id)
+            statement.setLong(1, record.id)
             statement.executeUpdate()
         }
     }
@@ -380,12 +382,12 @@ public class Db private constructor(
                 while (results.next()) {
                     val values = columns.associateWith { name -> results.getObject(name) }
                     val id = results.getLong("id")
-                    val row = table.instantiate(Row(values, resident))
-                    row.adoptStoredId(id)
-                    row.stored = true
-                    row.database = this
+                    val record = table.instantiate(Row(values, resident))
+                    record.adoptStoredId(id)
+                    record.stored = true
+                    record.database = this
                     Ids.advanceTo(table.type, id)
-                    resident.add(row)
+                    resident.add(record)
                 }
             }
         }
@@ -422,9 +424,9 @@ public class Db private constructor(
         }
 
     @Suppress("UNCHECKED_CAST")
-    private fun <T : Record> tableFor(row: T): Table<T> =
-        (tablesByType[row::class] as Table<T>?)
-            ?: error("No table is registered for ${row::class.simpleName}")
+    private fun <T : Record> tableFor(record: T): Table<T> =
+        (tablesByType[record::class] as Table<T>?)
+            ?: error("No table is registered for ${record::class.simpleName}")
 
     override fun close() {
         connection.close()

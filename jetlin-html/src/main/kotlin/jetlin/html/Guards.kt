@@ -34,7 +34,7 @@ public sealed interface Access {
  * so a guard is a pure function of the request and whatever `attributes { }` attached to it, and can be
  * evaluated at the HTTP layer, inside the composition, or in a test, with the same answer.
  *
- * **A guard is not the security boundary.** The row policy is. A guard is UX plus a cheap early exit: it
+ * **A guard is not the security boundary.** The record's policy is. A guard is UX plus a cheap early exit: it
  * stops a page rendering that would have been empty. If a guard is ever the only thing protecting data,
  * one forgotten guard is a leak.
  */
@@ -159,10 +159,10 @@ public fun Guarded(
  * The point of letting a route resolve its own subject is that the insecure shape stops being
  * expressible. `view("/todo/{id}") { TodoStore.find(pathParam("id")) }` is a textbook insecure direct
  * object reference; here there is no path parameter left to look up by hand, and [resolve] goes through
- * the gated lookup, which returns null for a row this principal may not read.
+ * the gated lookup, which returns null for a record this principal may not read.
  *
  * Null resolves to not-found *before* [content] composes, and — this is the part that is easy to miss —
- * before the title is set, so the document title cannot disclose a row the body refused to show.
+ * before the title is set, so the document title cannot disclose a record the body refused to show.
  *
  * Reactive, like every other read: unshare the project and whoever is holding one of its todos open
  * lands on not-found.
@@ -209,7 +209,7 @@ public fun NotFoundPage() {
  * Sets the document title for whatever is currently composed.
  *
  * A title has to be able to come from the composition rather than from the route table, because a
- * route's title can depend on what the route resolved — and a title computed from a row before anything
+ * route's title can depend on what the route resolved — and a title computed from a record before anything
  * checked whether the principal may read it is a disclosure in `<head>`.
  */
 @Composable

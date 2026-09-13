@@ -15,10 +15,10 @@ internal class User(name: String, admin: Boolean = false) : Record(), Principal 
     var admin: Boolean by column(admin)
 
     companion object : Policy<User, User> {
-        override fun canRead(row: User, principal: User): Boolean = true
+        override fun canRead(record: User, principal: User): Boolean = true
 
         /** Anyone may rename themselves; only an admin may rename anyone else. */
-        override fun canWrite(row: User, principal: User): Boolean = row == principal || principal.admin
+        override fun canWrite(record: User, principal: User): Boolean = record == principal || principal.admin
     }
 }
 
@@ -32,8 +32,9 @@ internal class Project(
     var shared: Boolean by column(shared)
 
     companion object : Policy<Project, User> {
-        override fun canRead(row: Project, principal: User): Boolean = row.owner == principal || row.shared
-        override fun canWrite(row: Project, principal: User): Boolean = row.owner == principal
+        override fun canRead(record: Project, principal: User): Boolean =
+            record.owner == principal || record.shared
+        override fun canWrite(record: Project, principal: User): Boolean = record.owner == principal
     }
 }
 
@@ -53,18 +54,18 @@ internal class Task(
          * Shared by a property of a related record: whoever owns it, plus anyone at all once its project
          * is shared.
          *
-         * `row.project?.shared` reads a live cell of another record, which is what makes sharing and
+         * `record.project?.shared` reads a live cell of another record, which is what makes sharing and
          * unsharing reactive rather than something to invalidate.
          */
-        override fun canRead(row: Task, principal: User): Boolean =
-            row.owner == principal || row.project?.shared == true
+        override fun canRead(record: Task, principal: User): Boolean =
+            record.owner == principal || record.project?.shared == true
 
-        override fun canWrite(row: Task, principal: User): Boolean = row.owner == principal
+        override fun canWrite(record: Task, principal: User): Boolean = record.owner == principal
 
         /** Read by many, and one column only an admin may touch. */
-        override fun canWrite(row: Task, column: Column<Task>, principal: User): Boolean = when (column) {
+        override fun canWrite(record: Task, column: Column<Task>, principal: User): Boolean = when (column) {
             Tasks.archived -> principal.admin
-            else -> canWrite(row, principal)
+            else -> canWrite(record, principal)
         }
     }
 }

@@ -109,7 +109,7 @@ internal fun validate(entity: EntityModel): List<String> = buildList {
     if (entity.policySubject != null && entity.policySubject != entity.qualifiedName) {
         add(
             "@Entity ${entity.simpleName} has a policy for ${entity.policySubject}, not for itself. A " +
-                "companion copied from another entity guards the wrong rows.",
+                "companion copied from another entity guards the wrong records.",
         )
     }
     if (entity.hasPolicy && entity.principalType == null) {

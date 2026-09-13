@@ -77,7 +77,7 @@ Present, partial and absent, with no attempt to make the last column shorter tha
 | Idle-session hibernation | yes | no | n/a (stateless) | no |
 | Headless test kit | `jetlin-testing` | `LiveViewTest` | Livewire test helpers | bUnit |
 | Data layer in the box | `jetlin-db` (SQLite, resident) | Ecto | Eloquent | EF Core |
-| Row-level access control in it | yes, as Kotlin functions | Ecto scopes, by hand | policies, by hand | by hand |
+| Per-record access control in it | yes, as Kotlin functions | Ecto scopes, by hand | policies, by hand | by hand |
 | Database-level second layer | **no** | Postgres RLS | Postgres RLS | Postgres RLS |
 | Asserting *how much* re-rendered | yes | no | no | no |
 | File uploads | **no** | yes | yes | yes |
@@ -98,7 +98,7 @@ differences are worth stating plainly rather than claimed as wins.
 more than fits in memory. `jetlin-db` keeps the working set resident as live objects, so `filter`,
 `sortedBy` and `groupBy` from the Kotlin standard library *are* the query layer, and a relation is a
 pointer dereference. That is simpler and it is also the constraint: no indexes, linear scans, and memory
-as the ceiling — around 1.1 kB per stored row, measured. The mature ORMs are built for data that does not
+as the ceiling — around 1.1 kB per stored record, measured. The mature ORMs are built for data that does not
 fit in memory; this one is built for the case where it does, which is most applications and not all.
 
 **Policies are functions, not scopes.** In Ecto or Active Record, "only the owner may see this" is a
@@ -108,7 +108,7 @@ no policy fails the build. The cost is that it only works for data the process h
 translated to SQL, which is the same fact as the next two paragraphs.
 
 **Reactive revocation, which none of them do.** Because a policy reads live state and reading a filtered
-collection subscribes the reader, unsharing a row removes it from other people's *open pages*, and
+collection subscribes the reader, unsharing a record removes it from other people's *open pages*, and
 revoking a role moves someone off the page they are sitting on. In LiveView or Blazor that is a
 `broadcast` and a `handle_info`, written by hand per case; in a request-response framework it waits for the
 next request. Here it is the absence of code. This is the one thing on this page that is genuinely not

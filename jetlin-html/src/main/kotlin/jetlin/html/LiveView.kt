@@ -47,7 +47,7 @@ public class LiveView(
      *
      * Read by whatever renders the page, *after* the first composition has settled. It comes from the
      * composition rather than from the route table because a route's title can depend on what the route
-     * resolved — and a title derived from a row that the principal may not read would disclose it in
+     * resolved — and a title derived from a record that the principal may not read would disclose it in
      * `<head>`, which is rendered before the body that refused to show it.
      */
     public val title: String? get() = titleState.value

@@ -37,7 +37,7 @@ class PolicyTest {
         assertTrue(Task.canRead(task, alice))
         assertFalse(Task.canRead(task, bob))
 
-        // The column-level rule: only an admin may archive, whoever owns the row.
+        // The column-level rule: only an admin may archive, whoever owns the record.
         assertFalse(Task.canWrite(task, Tasks.archived, alice))
         assertTrue(Task.canWrite(task, Tasks.archived, root))
         assertTrue(Task.canWrite(task, Tasks.title, alice))
@@ -74,7 +74,7 @@ class PolicyTest {
     // ---- Obtaining records -----------------------------------------------------------------------
 
     @Test
-    fun `a collection contains only the rows the principal may read`(): Unit = withDb { db ->
+    fun `a collection contains only the records the principal may read`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
         db.store(Task(alice, "alice's"))
@@ -85,7 +85,7 @@ class PolicyTest {
     }
 
     @Test
-    fun `a lookup of someone else's row is indistinguishable from no such row`(): Unit = withDb { db ->
+    fun `a lookup of someone else's record is indistinguishable from no such record`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
         val task = db.store(Task(alice, "alice's"))
@@ -173,7 +173,7 @@ class PolicyTest {
         val mine = with(alice) { db.tasks.add(Task(alice, "mine")) }
         assertEquals(listOf(mine), with(alice) { db.tasks.toList() })
 
-        // Creating a row for someone else is refused by the same rule that hides it.
+        // Creating a record for someone else is refused by the same rule that hides it.
         assertFailsWith<AccessDenied> { with(bob) { db.tasks.add(Task(alice, "theirs")) } }
         assertFailsWith<AccessDenied> { with(bob) { mine.delete() } }
 
@@ -196,7 +196,7 @@ class PolicyTest {
     // ---- Reactive authorization ------------------------------------------------------------------
 
     @Test
-    fun `unsharing a project removes its rows from another principal's open page`(): Unit = runTest {
+    fun `unsharing a project removes its records from another principal's open page`(): Unit = runTest {
         withLiveDb { db ->
             val alice = db.store(User("Alice"))
             val bob = db.store(User("Bob"))
@@ -267,7 +267,7 @@ class PolicyTest {
     }
 
     @Test
-    fun `a shared row read by either of its principals is fine`(): Unit = withDb { db ->
+    fun `a shared record read by either of its principals is fine`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
         val project = db.store(Project(alice, "Inbox", shared = true))
@@ -289,7 +289,7 @@ class PolicyTest {
         assertEquals(emptyList(), with(bob) { db.tasks.toList() })
 
         // For the handful of things an application does as itself: a backfill, an admin console.
-        val seen = unsafe("test fixture reads every row") { with(bob) { db.tasks.map { it.title } } }
+        val seen = unsafe("test fixture reads every record") { with(bob) { db.tasks.map { it.title } } }
         assertEquals(listOf("Read the plan"), seen)
 
         unsafe("test fixture archives without being an admin") {
@@ -348,4 +348,4 @@ private suspend fun withLiveDb(block: suspend (Db) -> Unit) {
     }
 }
 
-private fun <T : Record> Db.store(row: T): T = transact { insert(row) }
+private fun <T : Record> Db.store(record: T): T = transact { insert(record) }

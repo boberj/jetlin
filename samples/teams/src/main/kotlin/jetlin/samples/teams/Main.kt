@@ -87,7 +87,7 @@ fun main() {
 
             // Entity-bound: the route resolves its own subject through the gated lookup, so a todo this
             // principal may not read is not found — and the title comes from what was resolved, so `<head>`
-            // cannot disclose a row the body refused to show.
+            // cannot disclose a record the body refused to show.
             view(
                 "/todo/{id}",
                 subject = { request -> db.todoFor(request) },
@@ -155,7 +155,7 @@ internal fun Db.todoFor(request: RequestContext): Todo? {
  */
 internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve("teams.db")): Db {
     val db = Db.open(file, JetlinSchema.tables)
-    if (db.resident.rowCount > 0) return db
+    if (db.resident.recordCount > 0) return db
 
     // One `unsafe` block, logged, because seeding has no principal: the first user in an empty database
     // cannot be created by anybody. Everything the application does afterwards goes through the gate.

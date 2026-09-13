@@ -57,7 +57,7 @@ class PersistenceTest {
             Db.open(file, schema()).use { db ->
                 val second = db.transact { db.insert(User("Bob")) }
                 assertTrue(second.id > first, "ids must not be reused across a restart")
-                assertEquals(2, db.resident.rowCount)
+                assertEquals(2, db.resident.recordCount)
             }
         }
     }
@@ -136,7 +136,7 @@ class PersistenceTest {
     }
 
     @Test
-    fun `a session sees a row another session inserted`(): Unit = runTest {
+    fun `a session sees a record another session inserted`(): Unit = runTest {
         withStore { file ->
             Db.open(file, schema()).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
@@ -186,7 +186,7 @@ class PersistenceTest {
                 }
 
                 assertEquals(0, rowsIn(file, "users"))
-                assertEquals(0, db.resident.rowCount)
+                assertEquals(0, db.resident.recordCount)
             }
         }
     }
@@ -225,16 +225,16 @@ class PersistenceTest {
     }
 
     @Test
-    fun `a row can be deleted and its id reused in the same transaction`(): Unit = runTest {
+    fun `a record can be deleted and its id reused in the same transaction`(): Unit = runTest {
         withStore { file ->
             Db.open(file, schema()).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val first = unsafe("test fixture") { db.insertUnchecked(Task(alice, "first"), id = 7) }
 
-                // What re-seeding a fixture looks like: the old row goes and a new one takes its id. The
+                // What re-seeding a fixture looks like: the old record goes and a new one takes its id. The
                 // flush has to order the delete before the insert, because a primary key is not deferrable
                 // — unlike the foreign keys, which are checked at commit so that one transaction can both
-                // create a row and point another at it.
+                // create a record and point another at it.
                 db.transact {
                     db.delete(first)
                     unsafe("test fixture") { db.insertUnchecked(Task(alice, "second"), id = 7) }
@@ -248,7 +248,7 @@ class PersistenceTest {
     }
 
     @Test
-    fun `one transaction can create a row and the row that points at it`(): Unit = runTest {
+    fun `one transaction can create a record and the record that points at it`(): Unit = runTest {
         withStore { file ->
             Db.open(file, schema()).use { db ->
                 // Inserted in the order the application happens to write them, which is not necessarily

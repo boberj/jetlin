@@ -142,7 +142,7 @@ not caught, there is no defense in depth, and there are no indexes.
 and others, including where it is behind.
 
 Session state lives on the server, so per-session cost sets how many users a node can carry — and with
-`jetlin-db` the stored rows are resident too, out of the same heap:
+`jetlin-db` the stored records are resident too, out of the same heap:
 
 | | each | 1000 of them |
 |---|---|---|
@@ -255,9 +255,9 @@ class Todo(@Owner val owner: User, title: String, done: Boolean = false) : Recor
 
     companion object : Policy<Todo, User> {
         // Mine, or my team's. A plain Kotlin expression over live objects — no query language.
-        override fun canRead(row: Todo, principal: User) =
-            row.owner == principal || (row.team != null && row.team == principal.team)
-        override fun canWrite(row: Todo, principal: User) = row.owner == principal
+        override fun canRead(record: Todo, principal: User) =
+            record.owner == principal || (record.team != null && record.team == principal.team)
+        override fun canWrite(record: Todo, principal: User) = record.owner == principal
     }
 }
 
@@ -272,7 +272,7 @@ with(alice) { todo.update { team = null } }
 ```
 
 Bob is looking at his list in another session. It iterated a policy-filtered collection, so Alice's write
-invalidates exactly the compositions that read what the policy read, and the row leaves his page. No
+invalidates exactly the compositions that read what the policy read, and the record leaves his page. No
 subscription, no broadcast, no invalidation code. The same holds for route guards — revoke someone's admin
 role and they are moved off `/admin/users` while they are sitting on it.
 

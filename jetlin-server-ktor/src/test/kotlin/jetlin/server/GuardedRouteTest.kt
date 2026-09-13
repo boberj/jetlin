@@ -89,7 +89,7 @@ class GuardedRouteTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             assertTrue("<title>Not found</title>" in body, body)
-            assertFalse("Nine" in body, "the row reached the page despite not being readable")
+            assertFalse("Nine" in body, "the record reached the page despite not being readable")
         }
 }
 

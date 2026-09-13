@@ -32,7 +32,7 @@ public class RoutesBuilder internal constructor() {
     /**
      * Registers a view for one record the route resolves itself, as `JetlinConfig.view` does.
      *
-     * The title is asserted with [ViewTest.title], because a title computed from a row the principal may not
+     * The title is asserted with [ViewTest.title], because a title computed from a record the principal may not
      * read is a disclosure in `<head>` and nothing in the body would reveal it.
      */
     public fun <T : Any> view(

@@ -883,7 +883,7 @@ Ordered by what it stops you doing, not by size.
 
 ### Would stop a real application
 
-- **Persistence is covered, with known holes.** `jetlin-db` stores entities in SQLite with row-level
+- **Persistence is covered, with known holes.** `jetlin-db` stores entities in SQLite with per-record
   access control, generated migrations and reactive revocation; [`db.md`](db.md) §8 is its own list of
   what is missing. The four that matter here: a leaked record reference carries its access with it,
   transitive visibility changes do not fan out to already-open pages, SQLite offers no second

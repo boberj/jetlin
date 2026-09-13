@@ -51,9 +51,9 @@ public value class Id<T : Record>(public val value: Long) {
  *
  * That one row is one object is also why a record must not go into `rememberSaved`. Session state is
  * JSON, and a record read back out of JSON would be a second object for a row the identity map already
- * holds: not equal to it, not recomposing its readers, and never access-checked. Instead, save [id] 
- * and look the record up again. The lookup is gated, so a session resuming without the right to read a
- * row gets null rather than a row it was allowed to see some minutes ago.
+ * has one for: not equal to it, not recomposing its readers, and never access-checked. Instead, save
+ * [id] and look the record up again. The lookup is gated, so a session resuming without the right to
+ * read a record gets null rather than one it was allowed to see some minutes ago.
  */
 public abstract class Record {
 
@@ -87,7 +87,7 @@ public abstract class Record {
      * Principals that obtained this record through the gate, and where the first of them did it.
      *
      * Only populated while [LeakDetector] is on. An identity set rather than a single principal because a
-     * shared row is legitimately acquired by many: what is not legitimate is a read under a principal that
+     * shared record is legitimately acquired by many: what is not legitimate is a read under a principal that
      * never acquired it at all.
      */
     private var acquiredBy: MutableSet<Principal>? = null
@@ -258,7 +258,7 @@ public class CellProvider<V> internal constructor(private val initial: V) {
  * the snapshot applied last is the one whose commit landed last, and taking its value is what keeps
  * memory equal to the file.
  *
- * Surfacing the conflict instead would mean a handler failing on a row someone else happened to touch,
+ * Surfacing the conflict instead would mean a handler failing on a record someone else happened to touch,
  * with the database already changed. Per-column merge policies are the natural extension if an
  * application ever needs counters to add rather than overwrite.
  */
