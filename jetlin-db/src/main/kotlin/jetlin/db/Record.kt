@@ -68,18 +68,12 @@ public abstract class Record {
     public val id: Long get() = assignedId
 
     /**
-     * Whether this record exists on disk.
+     * The database holding this record, or null while it is nobody's.
      *
-     * The write hook consults it: a record that has not been stored yet needs no dirty tracking,
-     * because the insert that stores it carries whatever its fields end up holding.
-     */
-    internal var stored: Boolean = false
-
-    /**
-     * The database holding this record, once it is stored.
-     *
-     * What lets `todo.update { }` and `todo.delete()` find a transaction to run in without the caller
-     * passing a database they already stored the record in.
+     * Two things at once, and deliberately one field. It is what lets `todo.update { }` and
+     * `todo.delete()` find a transaction to run in without the caller passing a database they already
+     * stored the record in; and being null is what "not stored yet" means, which is the question the
+     * write hook asks. A separate `stored` flag was exactly this field's nullness, written twice.
      */
     internal var database: Db? = null
 
@@ -178,7 +172,7 @@ public abstract class Record {
      * stored yet is exempt — nothing is out of step with disk, because it is not on disk.
      */
     internal fun recordWrite(cell: Cell<*>) {
-        if (!stored) return
+        if (database == null) return
         val writes = Transactions.current ?: error(
             "$cell was written outside a transaction. A change to stored state has to go through " +
                 "db.transact { }, so that it is committed before any session can see it.",

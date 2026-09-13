@@ -158,7 +158,7 @@ public class Db private constructor(
      */
     internal fun <T : Record> insert(record: T): T {
         val writes = requireTransaction(record)
-        require(!record.stored) { "$record is already stored" }
+        require(record.database == null) { "$record is already stored" }
         tableFor(record) // Fail now, with the class named, rather than at the flush.
         resident.add(record)
         writes.insert(record)
@@ -210,16 +210,10 @@ public class Db private constructor(
             connection.autoCommit = true
         }
 
-        // Only now, and not at the call: both flags are plain fields rather than snapshot state, so a
+        // Only now, and not at the call: the field is a plain one rather than snapshot state, so a
         // transaction that rolled back must not leave a record claiming to be stored.
-        writes.inserts.forEach {
-            it.stored = true
-            it.database = this
-        }
-        writes.deletes.forEach {
-            it.stored = false
-            it.database = null
-        }
+        writes.inserts.forEach { it.database = this }
+        writes.deletes.forEach { it.database = null }
         dataVersion = readDataVersion()
     }
 
@@ -384,7 +378,6 @@ public class Db private constructor(
                     val id = results.getLong("id")
                     val record = table.instantiate(Row(values, resident))
                     record.adoptStoredId(id)
-                    record.stored = true
                     record.database = this
                     Ids.advanceTo(table.type, id)
                     resident.add(record)
