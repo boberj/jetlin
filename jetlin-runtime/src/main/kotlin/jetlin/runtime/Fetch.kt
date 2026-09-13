@@ -132,7 +132,9 @@ public class Fetch<V>(
      */
     public fun invalidate() {
         attemptedAt = null
-        if (state.value is Fetched.Failed) state.value = Fetched.Loading
+        // Applied, for the same reason the arrival is: this is called from a command's coroutine, which
+        // is not a composition, and a loose write would sit in the global snapshot until the pump ran.
+        if (state.value is Fetched.Failed) Snapshot.withMutableSnapshot { state.value = Fetched.Loading }
     }
 
     private fun needsFetch(): Boolean {
@@ -160,8 +162,10 @@ public class Fetch<V>(
             // that worked.
             if (state.value is Fetched.Ready) null else Fetched.Failed(t)
         }
-        // One snapshot, so a fetch that filled a whole page's worth of fields is still one recomposition.
-        // Outside any composition, which is what GlobalSnapshotManager's pump exists to deliver.
+        // Published as an apply rather than written loose into the global snapshot: applying notifies
+        // the recomposers, where a bare write waits for [GlobalSnapshotManager]'s pump to notice it.
+        // (What makes a twenty-field response cost one recomposition is not this line but the value
+        // being one object: every field a page reads is a read of this one cell.)
         if (arrived != null) Snapshot.withMutableSnapshot { state.value = arrived }
         attemptedAt = now()
     }
