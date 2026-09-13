@@ -75,8 +75,25 @@ public sealed interface Fetched<out V> {
  *
  * ## What happens when it goes wrong, and when it goes stale
  *
- * A fetch is attempted again only when something asks for it: a read past [ttl], or [invalidate]. A
- * failure records its time like a success does, so a page that keeps rendering cannot turn a broken
+ * A fetch is attempted again only when something asks for it, and the only two things that ask are a read
+ * past [ttl] and [invalidate]. **Nothing wakes up when a value expires.** A read happens when the
+ * composable that reads it recomposes, so a page sitting still goes on showing an expired value until
+ * something recomposes it — another cell changing, a click, a navigation, or a hibernated session waking
+ * and rebuilding. [ttl] is a bound on what a read will accept, not a refresh interval; polling would mean
+ * paying for a value nobody is looking at, which is the same reason [invalidate] does not refetch. If a
+ * page really must refresh while it sits there, a `LaunchedEffect` beside the reader is where that
+ * belongs, because the timer then lives exactly as long as somebody is watching:
+ *
+ * ```kotlin
+ * LaunchedEffect(profile) {
+ *     while (true) {
+ *         delay(30.seconds)
+ *         profile.refresh()
+ *     }
+ * }
+ * ```
+ *
+ * A failure records its time like a success does, so a page that keeps rendering cannot turn a broken
  * endpoint into a request per recomposition — which means a failed fetch under the default infinite
  * [ttl] stays failed until [invalidate] is called. A page that shows "unavailable" should offer a retry
  * that does exactly that.
@@ -125,16 +142,34 @@ public class Fetch<V>(
     /**
      * Marks the value as needing a fresh fetch, without fetching now.
      *
-     * What a command calls when it succeeds: the next reader pays for the refresh, and if nobody is
-     * reading it any more then nobody should be paying for it. A value that failed goes back to
-     * [Fetched.Loading] here, because there is nothing on screen to flicker away from — which is what
-     * makes this the right thing for a retry button to call.
+     * For when the value is known to be out of date but it is not this caller's business whether anyone
+     * still cares — the next reader pays, and if there is no next reader then nobody should have paid.
+     *
+     * Note the asymmetry, because it decides which of this and [refresh] you want: a value that *failed*
+     * goes back to [Fetched.Loading] here, and that is a write, so its readers recompose and one of them
+     * re-reads immediately. A value that is [Fetched.Ready] is left exactly as it is, so nothing
+     * recomposes and nothing re-reads — the mark is silent until something else brings the page round.
      */
     public fun invalidate() {
         attemptedAt = null
         // Applied, for the same reason the arrival is: this is called from a command's coroutine, which
         // is not a composition, and a loose write would sit in the global snapshot until the pump ran.
         if (state.value is Fetched.Failed) Snapshot.withMutableSnapshot { state.value = Fetched.Loading }
+    }
+
+    /**
+     * Fetches now, whether or not the copy is stale.
+     *
+     * For a caller who knows somebody is looking: a command that just changed the thing, a retry button,
+     * a poller in a `LaunchedEffect` that lives as long as the page does. It does not wait to be read,
+     * which is the whole difference from [invalidate] — and the reason not to reach for it by default,
+     * since a fetch nobody is waiting for is a request nobody needed.
+     *
+     * Joins an outstanding fetch rather than starting a second one.
+     */
+    public fun refresh() {
+        invalidate()
+        if (needsFetch()) schedule()
     }
 
     private fun needsFetch(): Boolean {

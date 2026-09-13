@@ -102,15 +102,17 @@ class Hub(
      * A command rather than an assignment, and suspending, which is what keeps it out of `db.transact { }`:
      * a transaction takes a non-suspending block precisely because a rollback cannot un-send a request.
      *
-     * Invalidating rather than refetching: if nobody is looking at the profile any more, nobody should be
-     * paying for it. The next reader does.
+     * `refresh` rather than `invalidate`, because somebody demonstrably is looking: they pressed the
+     * button. Marking it stale would work here too — the action's own state change recomposes the page,
+     * which re-reads — but that is a coincidence of this page's markup rather than a property, and a
+     * command should not depend on one.
      */
     suspend fun setStatus(of: User, text: String) {
         client.post("$baseUrl/hub/me/status") {
             bearer(of.email)
             setBody(text)
         }.orRefuse()
-        profile(of).invalidate()
+        profile(of).refresh()
     }
 
     override fun close() {

@@ -10,8 +10,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 /**
  * Suspending work started from a handler, seen from a composition.
@@ -35,7 +40,7 @@ class ActionTest {
             assertEquals("root(idle)", root.render())
 
             host.transact { save() }
-            host.awaitIdle()
+            host.awaitRun(save)
 
             assertEquals("root(failed: rejected: hello)", root.render())
             assertIs<Run.Failed>(save.state)
@@ -60,7 +65,7 @@ class ActionTest {
             val running = host.changeCount
 
             arrival.complete("saved")
-            host.awaitIdle()
+            host.awaitRun(save)
 
             assertEquals("root(done: saved)", root.render())
             // The button coming back and the outcome appearing are one write, so they are one patch.
@@ -91,7 +96,7 @@ class ActionTest {
             assertEquals(1, calls.get(), "a second click must not send a second request")
 
             arrival.complete("saved")
-            host.awaitIdle()
+            host.awaitRun(save)
             assertEquals("root(done: saved)", root.render())
         }
     }
@@ -111,7 +116,7 @@ class ActionTest {
             }
 
             host.transact { save() }
-            host.awaitIdle()
+            host.awaitRun(save)
             assertEquals("root(failed: rejected)", root.render())
 
             host.transact { save() }
@@ -121,7 +126,7 @@ class ActionTest {
             assertEquals("root(running)", root.render())
 
             second.complete("saved")
-            host.awaitIdle()
+            host.awaitRun(save)
             assertEquals("root(done: saved)", root.render())
         }
     }
@@ -136,7 +141,7 @@ class ActionTest {
                 Text(save.state.text())
             }
             host.transact { save() }
-            host.awaitIdle()
+            host.awaitRun(save)
 
             host.transact { save.reset() }
             host.awaitIdle()
@@ -160,11 +165,27 @@ class ActionTest {
 
             host.transact { draft = "second" }
             host.transact { save() }
-            host.awaitIdle()
+            host.awaitRun(save)
 
             assertEquals("root(done: saved second)", root.render())
         }
     }
+}
+
+/**
+ * Waits for an attempt to finish, then for the page to catch up.
+ *
+ * `awaitIdle` cannot do this on its own: work suspended on something outside the session is not queued
+ * work, and the session really is idle while it waits — which is the property that makes an action worth
+ * having in the first place. So a test that wants the outcome waits for the outcome, boundedly.
+ */
+private suspend fun CompositionHost.awaitRun(action: Action<*>) {
+    withContext(Dispatchers.Default) {
+        withTimeout(5.seconds) {
+            while (action.state is Run.Running) delay(2)
+        }
+    }
+    awaitIdle()
 }
 
 /** The four states as a page would show them. */

@@ -139,9 +139,15 @@ class FetchTest {
     fun `past its ttl the old value is served while the new one is fetched`(): Unit = runTest {
         val clock = TestClock()
         val second = CompletableDeferred<String>()
+        val revalidating = CompletableDeferred<Unit>()
         val calls = AtomicInteger()
         val fetch = Fetch(fetches, ttl = 30.seconds, now = clock::now) {
-            if (calls.incrementAndGet() == 1) "first" else second.await()
+            if (calls.incrementAndGet() == 1) {
+                "first"
+            } else {
+                revalidating.complete(Unit)
+                second.await()
+            }
         }
 
         val root = TestNode("root")
@@ -155,6 +161,10 @@ class FetchTest {
             clock.advance(31.seconds)
             host.transact { page.tick++ }
             host.awaitIdle()
+            // Waiting for the revalidation to be under way rather than assuming it: scheduling a fetch
+            // hands a coroutine to a dispatcher, and asserting on the count before that coroutine has
+            // run is a race the test would lose on a loaded machine.
+            revalidating.await()
 
             // The revalidation is outstanding and the page still shows something true. Flipping back to
             // the placeholder here is the flicker this design exists to avoid.
