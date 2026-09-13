@@ -1,0 +1,314 @@
+package jetlin.runtime
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ComposeNode
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
+import kotlinx.coroutines.test.runTest
+
+/**
+ * A value that arrives late, seen from a composition.
+ *
+ * Every assertion here is about what a session does rather than about the state machine: whether the
+ * placeholder reached the tree, whether the arrival cost one pass, whether a second reader cost a second
+ * request. The state machine is only interesting because of those.
+ *
+ * Two of these tests would hang rather than fail if the design were wrong, and that is deliberate: a read
+ * that wrote snapshot state would invalidate its own reader every pass, so [CompositionHost.awaitIdle]
+ * would never return. A test that hangs on a recomposition loop is a truer report than one that counts
+ * passes and happens to stop.
+ */
+class FetchTest {
+
+    /** Where fetches run: never the session's dispatcher, which is the point. */
+    private val fetches = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    @AfterTest
+    fun stopFetching() {
+        fetches.cancel()
+    }
+
+    @Test
+    fun `an unfetched value renders a placeholder, and its arrival is one pass`(): Unit = runTest {
+        val arrival = CompletableDeferred<String>()
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches) {
+            calls.incrementAndGet()
+            arrival.await()
+        }
+
+        val root = TestNode("root")
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { Text(fetch.value.text()) }
+            assertEquals("root(…)", root.render(), "the session composed without waiting for the fetch")
+
+            // Nothing further should happen on its own. If the read had written state, this would be
+            // where the loop showed up — as a hang, not as a wrong number.
+            host.awaitIdle()
+            val settled = host.changeCount
+
+            arrival.complete("hello")
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals("root(hello)", root.render())
+            assertEquals(1, host.changeCount - settled, "one arrival should be one recomposition pass")
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test
+    fun `two readers cause one fetch`(): Unit = runTest {
+        val calls = AtomicInteger()
+        val arrival = CompletableDeferred<String>()
+        val fetch = Fetch(fetches) {
+            calls.incrementAndGet()
+            arrival.await()
+        }
+
+        val root = TestNode("root")
+        CompositionHost(TestApplier(root)).use { host ->
+            // Two readers in one pass, which is what a page showing the same value twice looks like.
+            host.setContent {
+                Text(fetch.value.text())
+                Text(fetch.value.text())
+            }
+            arrival.complete("hello")
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals("root(hello,hello)", root.render())
+            assertEquals(1, calls.get(), "the second read should have joined the outstanding fetch")
+        }
+    }
+
+    @Test
+    fun `a failed fetch renders as failed and leaves the session alive`(): Unit = runTest {
+        val fetch = Fetch<String>(fetches) { error("no route to host") }
+
+        val root = TestNode("root")
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { Text(fetch.value.text()) }
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals("root(unavailable)", root.render())
+            assertTrue(host.isAlive, "a failed fetch is a message, not the end of the session")
+        }
+    }
+
+    @Test
+    fun `a value inside its ttl is not fetched again`(): Unit = runTest {
+        val calls = AtomicInteger()
+        val clock = TestClock()
+        val fetch = Fetch(fetches, ttl = 30.seconds, now = clock::now) {
+            "call ${calls.incrementAndGet()}"
+        }
+
+        val root = TestNode("root")
+        val page = Page(fetch)
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { page.Content() }
+            fetches.settle()
+            host.awaitIdle()
+            assertEquals("root(tick 0,call 1)", root.render())
+
+            clock.advance(29.seconds)
+            host.transact { page.tick++ } // A recomposition, which is what re-reads the value.
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test
+    fun `past its ttl the old value is served while the new one is fetched`(): Unit = runTest {
+        val clock = TestClock()
+        val second = CompletableDeferred<String>()
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches, ttl = 30.seconds, now = clock::now) {
+            if (calls.incrementAndGet() == 1) "first" else second.await()
+        }
+
+        val root = TestNode("root")
+        val page = Page(fetch)
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { page.Content() }
+            fetches.settle()
+            host.awaitIdle()
+            assertEquals("root(tick 0,first)", root.render())
+
+            clock.advance(31.seconds)
+            host.transact { page.tick++ }
+            host.awaitIdle()
+
+            // The revalidation is outstanding and the page still shows something true. Flipping back to
+            // the placeholder here is the flicker this design exists to avoid.
+            assertEquals("root(tick 1,first)", root.render())
+            assertEquals(2, calls.get())
+
+            second.complete("second")
+            fetches.settle()
+            host.awaitIdle()
+            assertEquals("root(tick 1,second)", root.render())
+        }
+    }
+
+    @Test
+    fun `a revalidation that finds the same value recomposes nothing`(): Unit = runTest {
+        val clock = TestClock()
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches, ttl = 30.seconds, now = clock::now) {
+            calls.incrementAndGet()
+            "unchanged"
+        }
+
+        val root = TestNode("root")
+        val page = Page(fetch)
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { page.Content() }
+            fetches.settle()
+            host.awaitIdle()
+
+            clock.advance(31.seconds)
+            // One pass, which re-reads the value and so schedules the revalidation. Counting from after
+            // it means the only thing left to count is what the arrival did.
+            host.transact { page.tick++ }
+            host.awaitIdle()
+            val revalidating = host.changeCount
+
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals(2, calls.get(), "the copy was stale, so it should have been re-fetched")
+            assertEquals(
+                0,
+                host.changeCount - revalidating,
+                "an unchanged value must not recompose anyone: that is what serving stale is worth",
+            )
+        }
+    }
+
+    @Test
+    fun `a failed revalidation keeps the value it had`(): Unit = runTest {
+        val clock = TestClock()
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches, ttl = 30.seconds, now = clock::now) {
+            if (calls.incrementAndGet() == 1) "first" else error("gone away")
+        }
+
+        val root = TestNode("root")
+        val page = Page(fetch)
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { page.Content() }
+            fetches.settle()
+            host.awaitIdle()
+
+            clock.advance(31.seconds)
+            host.transact { page.tick++ }
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals(2, calls.get())
+            assertEquals(
+                "root(tick 1,first)",
+                root.render(),
+                "a failed refresh is no reason to lose good data",
+            )
+        }
+    }
+
+    @Test
+    fun `invalidate clears a failure and the next read tries again`(): Unit = runTest {
+        val calls = AtomicInteger()
+        val fetch = Fetch(fetches) {
+            if (calls.incrementAndGet() == 1) error("no route to host") else "at last"
+        }
+
+        val root = TestNode("root")
+        CompositionHost(TestApplier(root)).use { host ->
+            host.setContent { Text(fetch.value.text()) }
+            fetches.settle()
+            host.awaitIdle()
+            assertEquals("root(unavailable)", root.render())
+
+            // What a retry button does. The failure is cleared first, because there is no value on screen
+            // to flicker away from.
+            host.transact { fetch.invalidate() }
+            fetches.settle()
+            host.awaitIdle()
+
+            assertEquals(2, calls.get())
+            assertEquals("root(at last)", root.render())
+        }
+    }
+}
+
+/**
+ * A page with something of its own to recompose for.
+ *
+ * A value is only re-read when something recomposes, so a test about staleness needs a reason to
+ * recompose that is not the value itself — otherwise it asserts on a pass that never happened.
+ */
+private class Page(private val fetch: Fetch<String>) {
+    var tick: Int by mutableStateOf(0)
+
+    @Composable
+    fun Content() {
+        Text("tick $tick")
+        Text(fetch.value.text())
+    }
+}
+
+/** The three states as a page would show them. */
+private fun Fetched<String>.text(): String = when (this) {
+    is Fetched.Loading -> "…"
+    is Fetched.Failed -> "unavailable"
+    is Fetched.Ready -> value
+}
+
+/**
+ * Waits for every fetch this scope has started.
+ *
+ * Joining the scope's children rather than polling: a fetch is an ordinary coroutine, so the test can
+ * wait for exactly the thing it is about instead of sleeping and hoping.
+ */
+private suspend fun CoroutineScope.settle() {
+    coroutineContext.job.children.toList().forEach { it.join() }
+}
+
+/** A clock the test moves by hand, so nothing here waits for a TTL in real time. */
+private class TestClock {
+    private var nanos = 0L
+
+    fun now(): Long = nanos
+
+    fun advance(by: kotlin.time.Duration) {
+        nanos += by.inWholeNanoseconds
+    }
+}
+
+@Composable
+private fun Text(value: String) {
+    ComposeNode<TestNode, TestApplier>(
+        factory = { TestNode(value) },
+        update = { set(value) { this.name = it } },
+    )
+}
+
+private fun TestNode.render(): String =
+    if (children.isEmpty()) name else "$name(${children.joinToString(",") { it.render() }})"
