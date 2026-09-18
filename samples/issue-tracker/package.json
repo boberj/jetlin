@@ -1,0 +1,12 @@
+{
+  "name": "jetlin-sample-issue-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Builds the issue tracker sample's stylesheet. Tailwind scans the Kotlin source for class names, so run this build whenever you add one.",
+  "scripts": {
+    "build": "tailwindcss -i src/main/css/app.css -o src/main/resources/issue-tracker/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0"
+  }
+}

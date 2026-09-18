@@ -159,6 +159,7 @@ val expanded = remember { mutableStateOf(false) }   // does not; recomputing cos
 
 ```bash
 ./gradlew :samples:demo:run          # http://localhost:8080
+./gradlew :samples:issue-tracker:run # http://localhost:8081
 ```
 
 A small app: a keyed todo list, a detail page with server-side validation reached by a real
@@ -268,6 +269,7 @@ period.
 | `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
 | `jetlin-testing` | Driving a view headlessly, for testing an application's own UI logic |
 | `samples/demo` | Runnable five-page demo and the memory benchmark |
+| `samples/issue-tracker` | An issue tracker in the style of Linear: list, board, projects, ⌘K palette, Tailwind styling |
 | `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
 
 ## CI

@@ -28,5 +28,6 @@ include(
     ":jetlin-server-ktor",
     ":jetlin-testing",
     ":samples:demo",
+    ":samples:issue-tracker",
     ":conventions",
 )

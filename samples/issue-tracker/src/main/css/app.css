@@ -1,0 +1,140 @@
+/*
+ * Source stylesheet for the issue tracker sample. Compiled by the Tailwind CLI into
+ * ../resources/issue-tracker/app.css, which is the file that ships and is committed — the same
+ * arrangement jetlin-client uses for jetlin.js, so running the sample needs no node.
+ *
+ * The `@source` line is the part that matters. Tailwind generates utilities for class names it
+ * finds in files it has been pointed at, and the class names here live in Kotlin, which it would
+ * never look in on its own. It scans for literal strings, so a class assembled at runtime —
+ * `classes("bg-" + tone)` — is never found, so the element silently gets no styling. Write whole class names.
+ *
+ * Rebuild after writing new classes: `npm run build` in samples/issue-tracker.
+ */
+@import "tailwindcss";
+
+@source "../kotlin/**/*.kt";
+
+/*
+ * A dark, low-contrast palette in the style of modern issue trackers, addressed through semantic
+ * names so the markup says what a surface is rather than which gray it happens to be.
+ */
+:root {
+  color-scheme: dark;
+  --font-size: 14px;
+  --background: #0f1011;
+  --sidebar: #090a0b;
+  --panel: #151618;
+  --panel-hover: #1c1d20;
+  --popover: #1b1c1f;
+  --foreground: #e6e6e8;
+  --muted-foreground: #8a8f98;
+  --subtle-foreground: #62666d;
+  --border: #23252a;
+  --border-strong: #2e3036;
+  /* A card is a filled-in border: the outline color carried across the whole surface. */
+  --card: var(--border);
+  --card-hover: var(--border-strong);
+  --accent: #5e6ad2;
+  --accent-hover: #6c78e0;
+  --accent-foreground: #ffffff;
+  --ring: #5e6ad2;
+  --destructive: #eb5757;
+  --status-backlog: #8a8f98;
+  --status-todo: #d0d3d8;
+  --status-progress: #f2c94c;
+  --status-review: #4cb782;
+  --status-done: #5e6ad2;
+  --status-canceled: #62666d;
+  --priority-urgent: #f2994a;
+  --radius: 0.375rem;
+}
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-panel: var(--panel);
+  --color-panel-hover: var(--panel-hover);
+  --color-popover: var(--popover);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-card: var(--card);
+  --color-card-hover: var(--card-hover);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+  --color-status-backlog: var(--status-backlog);
+  --color-status-todo: var(--status-todo);
+  --color-status-progress: var(--status-progress);
+  --color-status-review: var(--status-review);
+  --color-status-done: var(--status-done);
+  --color-status-canceled: var(--status-canceled);
+  --color-priority-urgent: var(--priority-urgent);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  html,
+  body,
+  #jetlin-root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    /* Inter ships as a variable font with an optical-size axis; let it track the font size. */
+    font-optical-sizing: auto;
+    @apply bg-sidebar text-foreground font-sans antialiased;
+  }
+
+  button {
+    cursor: pointer;
+  }
+}
+
+/*
+ * Set by app.js while a card is dragged. Attributes the composition never writes, so a patch
+ * arriving mid-drag cannot wipe them out the way it would a toggled class.
+ */
+[data-drop-status][data-drag-over] {
+  @apply bg-panel-hover/60 ring-1 ring-accent/60;
+}
+
+/* Over a column other than the card's own, that column's cards recede behind the one being carried. */
+[data-drop-status][data-drag-over="foreign"] [data-drop-cards] {
+  @apply opacity-30;
+}
+
+/*
+ * The card left behind. Over its own column it stays as an empty slot holding the place the card
+ * would drop back into; once the drag reaches another column there is no such place, so the slot
+ * closes up and the column shows what it will look like with the card gone.
+ */
+[data-issue-id][data-dragging] > * {
+  @apply invisible;
+}
+
+[data-issue-id][data-dragging="away"] {
+  @apply hidden;
+}
+
+/* The socket is gone: say so without taking the page away. */
+body.jl-disconnected #jetlin-root {
+  @apply opacity-60;
+}
