@@ -21,30 +21,30 @@ import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 
 /**
- * A two-login sample: what the framework's access control looks like in an application.
+ * A sample with two users, showing the framework's access control in an application.
  *
- * Open it in two windows, sign in as Alice in one and Bob in the other, and share a todo with the team.
- * It appears in the other window as it is shared and leaves as it is unshared — no polling, no
- * subscription, no invalidation code. The same write that stores it is the one that recomposes whoever
- * could see it.
+ * Open it in two windows, sign in as Alice in one and Bob in the other, then share one of Alice's todos
+ * with the team. It appears in Bob's window as soon as it is shared and disappears when it is unshared.
+ * There is no polling, subscription or invalidation code: the write that stores the change is also
+ * what recomposes the sessions that can see the record.
  *
- * Sign-in here is a cookie naming an email address, which is not authentication and is not pretending to
- * be. It exists so that the interesting half — what a principal may see, and what happens when that changes
- * — is the only thing this sample is about.
+ * Signing in just sets a cookie containing an email address. That is not real authentication, and it
+ * isn't meant to be. The sample is about what each principal can see and what happens when that
+ * changes, not about how users prove who they are.
  */
 fun main() {
     val db = openSeeded()
     val port = System.getenv("PORT")?.toInt() ?: 8081
-    // The "external system" is this same process, on this same port. A stub, deliberately, because the
-    // thing worth showing is what an application does with data it does not own — not that GitHub exists.
+    // The "external system" is a stub served by this same process on the same port. The sample is about
+    // how an application handles data it doesn't own, so a real third-party service would add nothing.
     val hub = Hub("http://127.0.0.1:$port")
 
     embeddedServer(Netty, port = port) {
         hubService()
 
         routing {
-            // Signing in and out are plain HTTP: a cookie goes on, and the browser is sent back to the
-            // page. Nothing about this is the framework's business, which is why it is four lines.
+            // Signing in and out are ordinary HTTP routes that set or clear a cookie and redirect. The
+            // framework isn't involved.
             get("/signin/{email}") {
                 call.response.cookies.append(SESSION_COOKIE, call.parameters["email"].orEmpty(), path = "/")
                 call.respondRedirect("/")
@@ -60,18 +60,18 @@ fun main() {
             head = STYLES
 
             /**
-             * Where the principal enters the session.
+             * Supplies the session's principal.
              *
-             * Runs on the HTTP call, and again when a socket wakes a hibernated session — which is the
-             * point: the principal is recomputed from the connection that arrived rather than trusted from a
-             * snapshot that may be minutes old. A role revoked while a laptop was asleep is noticed when
-             * it opens.
+             * This runs for the initial HTTP request, and again when a WebSocket wakes a hibernated
+             * session. The principal is therefore recomputed from the new connection instead of being
+             * restored from a snapshot that may be out of date. If a role was revoked while a laptop was
+             * asleep, the change takes effect when the laptop wakes.
              */
             attributes { call -> mapOf(PrincipalKey to db.signedInUser(call)) }
 
             onError = { throwable ->
-                // An AccessDenied reaching here means application code asked for something a policy
-                // refuses — a bug or an attack, and either way nothing was written.
+                // An AccessDenied here means application code attempted something a policy refuses,
+                // either because of a bug or an attack. In both cases nothing was written.
                 println("[teams] ${throwable::class.simpleName}: ${throwable.message}")
             }
 
@@ -79,9 +79,9 @@ fun main() {
 
             view("/login", title = "Sign in · Teams") { SignInPage() }
 
-            // `WithPrincipal` is the bridge §4.4 describes: a context parameter is lexical and does not flow
-            // through a `@Composable () -> Unit`, so the principal is put back into scope at the root of each
-            // page. Everything below it is an ordinary composable with a principal in scope.
+            // Context parameters are lexically scoped and aren't passed through a `@Composable () -> Unit`,
+            // so `WithPrincipal` puts the principal back in scope at the root of each page (see §4.4 of the
+            // design plan). Everything inside it has a principal in scope.
             view("/", title = "Todos · Teams", requires = Principals.signedIn) {
                 WithPrincipal { TodoListPage(db) }
             }
@@ -90,15 +90,15 @@ fun main() {
                 WithPrincipal { NotesPage(db) }
             }
 
-            // The same session, reading something nobody here owns. No gate, no policy, no transaction:
-            // a value that arrives late is snapshot state like any other, so it recomposes what read it.
+            // Shows data from the external system. There is no gate, policy or transaction involved: a
+            // fetched value is ordinary snapshot state, so its arrival recomposes whatever read it.
             view("/hub", title = "Hub · Teams", requires = Principals.signedIn) {
                 WithPrincipal { HubPage(hub) }
             }
 
-            // Entity-bound: the route resolves its own subject through the gated lookup, so a todo this
-            // principal may not read is not found — and the title comes from what was resolved, so `<head>`
-            // cannot disclose a record the body refused to show.
+            // An entity-bound route. It resolves the todo through the policy-checked lookup, so a todo this
+            // principal may not read shows as not found. The title is computed from the resolved todo, so
+            // `<head>` can't reveal a record the body refused to show.
             view(
                 "/todo/{id}",
                 subject = { request -> db.todoFor(request) },
@@ -106,8 +106,8 @@ fun main() {
                 requires = Principals.signedIn,
             ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
 
-            // A failed role check renders not-found rather than a forbidden page: a 403 here would
-            // confirm there is an admin panel.
+            // A failed role check shows the not-found page instead of a forbidden page, because a 403
+            // would confirm that an admin panel exists.
             view("/admin/users", title = "Users · Teams", requires = Principals.where { it.admin }) {
                 WithPrincipal { AdminUsersPage(db) }
             }
@@ -115,23 +115,23 @@ fun main() {
     }.start(wait = true)
 }
 
-/** The principal, as the application's own type. Jetlin knows nothing about it beyond this key. */
+/** The attribute key holding the principal, as this application's `User` type. Jetlin only sees the key. */
 val PrincipalKey: AttributeKey<User?> = AttributeKey("principal")
 
-/** Typed guards over that key: `Principals.signedIn`, `Principals.where { it.admin }`. */
+/** Typed guards for the principal, such as `Principals.signedIn` and `Principals.where { it.admin }`. */
 val Principals: Principals<User> = Principals(PrincipalKey, signIn = "/login")
 
-/** The cookie this sample calls authentication. A real one would verify something. */
+/** The cookie this sample uses as a stand-in for authentication. It verifies nothing. */
 const val SESSION_COOKIE: String = "teams_email"
 
-/** One of the seeded accounts, as the sign-in page offers it. */
+/** A seeded account, as listed on the sign-in page. */
 class Account(val email: String, val label: String, val note: String? = null)
 
 /**
- * Who [openSeeded] creates.
+ * The accounts that [openSeeded] creates.
  *
- * A fixture rather than a query: the sign-in page has no principal, and a page that needed one to render
- * itself would need a hole in the gate to exist.
+ * The sign-in page lists these from a constant instead of querying the database. It has no principal,
+ * so a query would need a way around the policy checks.
  */
 val SEEDED_ACCOUNTS: List<Account> = listOf(
     Account("alice@example.com", "Alice", "Acme"),
@@ -141,17 +141,17 @@ val SEEDED_ACCOUNTS: List<Account> = listOf(
 )
 
 /**
- * Resolves the signed-in user.
+ * Looks up the signed-in user from the session cookie.
  *
- * `authenticate` is the framework's privileged root, and the one read that has to happen before access
- * control can mean anything: there is no principal yet to check this against.
+ * This uses `authenticate`, the framework's one unchecked lookup. It is needed here because there is
+ * no principal yet to check the lookup against.
  */
 internal fun Db.signedInUser(call: ApplicationCall): User? {
     val email = call.request.cookies[SESSION_COOKIE] ?: return null
     return authenticate(User::class) { user -> user.email == email }
 }
 
-/** The route's own lookup, gated: null for a todo this principal may not read. */
+/** The `/todo/{id}` route's lookup. Returns null for a todo this principal may not read. */
 internal fun Db.todoFor(request: RequestContext): Todo? {
     val principal = Principals.of(request) ?: return null
     val id = request.pathParams["id"]?.toLongOrNull() ?: return null
@@ -159,17 +159,17 @@ internal fun Db.todoFor(request: RequestContext): Todo? {
 }
 
 /**
- * Seeds a fresh database with two teammates, someone on no team, and an admin.
+ * Creates a new database seeded with two teammates, a user with no team, and an admin.
  *
- * In a temporary directory, because this is a sample and starting from a known state is the point. A real
- * application would open a file it keeps, and would have run `./gradlew dbMigrate` against it.
+ * The database goes in a temporary directory so the sample always starts from the same state. A real
+ * application would open a persistent file that `./gradlew dbMigrate` has been run against.
  */
 internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve("teams.db")): Db {
     val db = Db.open(file, JetlinSchema.tables)
     if (db.resident.recordCount > 0) return db
 
-    // One `unsafe` block, logged, because seeding has no principal: the first user in an empty database
-    // cannot be created by anybody. Everything the application does afterwards goes through the gate.
+    // Seeding needs `unsafe` (which logs) because there is no principal yet: no one can be allowed to
+    // create the first user of an empty database. Everything after this goes through the policy checks.
     unsafe("seeding the sample database") {
         db.transact {
             val acme = db.insertUnchecked(Team("Acme"))
@@ -190,14 +190,14 @@ internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve
 }
 
 /**
- * Puts the session's principal back into lexical scope.
+ * Makes the session's principal available as a context parameter to [content].
  *
- * Context parameters are lexical and do not flow through a `@Composable () -> Unit`, so something has to
- * bridge the gap between "the session has a principal" and "this page has one in scope". One function, at the
- * root of each page; everything below it is an ordinary composable.
+ * Context parameters are lexically scoped and are not passed through a `@Composable () -> Unit`, so the
+ * principal stored in the session has to be brought back into scope explicitly. Call this once at the
+ * root of each page.
  *
- * Renders nothing when there is no principal, which the route guards make unreachable: a page that needs one
- * declares `requires = Principals.signedIn`, and the guard has already redirected by the time this runs.
+ * If there is no principal, nothing is rendered. In practice that doesn't happen: pages that need a
+ * principal declare `requires = Principals.signedIn`, so the guard has already redirected.
  */
 @Composable
 fun WithPrincipal(content: @Composable context(User) () -> Unit) {
@@ -205,7 +205,7 @@ fun WithPrincipal(content: @Composable context(User) () -> Unit) {
     with(principal) { content() }
 }
 
-/** Enough CSS to make the sample legible. Not the interesting part. */
+/** Minimal styling for the sample. */
 internal val STYLES: String = """
     <style>
       :root { color-scheme: light dark; }

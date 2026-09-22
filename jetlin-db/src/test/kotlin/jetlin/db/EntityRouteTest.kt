@@ -18,14 +18,14 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * A route that resolves its own record.
+ * Tests routes that look up their own record.
  *
- * The bug this deletes is the textbook insecure direct object reference: `/todo/42` where 42 is someone
- * else's. Under this API the insecure version is not expressible, because the lookup the route performs
- * is the gated one and there is no path parameter left to look up by hand.
+ * This design prevents insecure direct object references, such as requesting `/todo/42` when todo 42
+ * belongs to someone else. The route performs the policy-checked lookup itself, and the view never
+ * receives the raw path parameter, so it can't look up an arbitrary id.
  *
- * The title is asserted separately in every case, because `<head>` is rendered before the body: a title
- * computed from a record discloses it even when the body refused to show it.
+ * Every test checks the title separately. `<head>` is rendered before the body, so a title computed from
+ * a record would reveal it even if the body refused to show it.
  */
 class EntityRouteTest {
 
@@ -83,8 +83,8 @@ class EntityRouteTest {
                 setTaskRoutes(db)
                 onNode(hasTag("h1")).assertText("shared plan")
 
-                // Alice unshares. Nothing tells Bob's session anything: the route's subject resolution
-                // read `project.shared` through the policy, so writing it invalidates exactly that.
+                // Alice unshares the project. Nothing notifies Bob's session directly: resolving the
+                // route's subject read `project.shared` through the policy, so the write invalidates it.
                 with(alice) { project.update { shared = false } }
                 awaitIdle()
 
@@ -98,7 +98,7 @@ private val PrincipalKey = AttributeKey<User?>("principal")
 
 private val Principals = Principals(PrincipalKey, signIn = "/login")
 
-/** The route table under test, declared the way an application declares it. */
+/** The routes under test, declared the same way an application would declare them. */
 private suspend fun ViewTest.setTaskRoutes(db: Db) {
     setRoutes {
         view("/login") { Page("Sign in") }
@@ -112,10 +112,9 @@ private suspend fun ViewTest.setTaskRoutes(db: Db) {
 }
 
 /**
- * The route's own lookup: gated, so it is null for a record this principal may not read.
+ * The route's lookup. It is policy-checked, so it returns null for a record this principal may not read.
  *
- * The whole point of the shape — the route cannot be written any other way, because the path parameter
- * never reaches the view.
+ * The view only ever receives the result of this lookup, never the path parameter itself.
  */
 private fun taskOf(db: Db, request: RequestContext): Task? {
     val principal = Principals.of(request) ?: return null

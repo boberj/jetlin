@@ -2,7 +2,7 @@ build/
 .gradle/
 *.log
 
-# A sample's local database. The schema and its migrations are checked in; the data is not.
+# Local sample databases. Schemas and migrations are committed; database files are not.
 *.db
 *.db-shm
 *.db-wal

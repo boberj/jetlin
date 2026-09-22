@@ -5,27 +5,26 @@ plugins {
 }
 
 dependencies {
-    // The snapshot system is the whole substrate: cells are snapshot state and a transaction is a
-    // mutable snapshot. Deliberately no dependency on :jetlin-html — see the package KDoc.
+    // Everything is built on the snapshot system: cells are snapshot state and a transaction is a
+    // mutable snapshot. There is intentionally no dependency on :jetlin-html; route guards live there.
     api(project(":jetlin-runtime"))
 
-    // One file, in process, no server. The only storage dependency.
+    // SQLite runs in process against a single file. This is the only storage dependency.
     implementation(libs.sqlite.jdbc)
 
-    // `unsafe` logs every time it runs, and a warning nobody can route anywhere is not a warning.
+    // `unsafe` logs a warning on every call, through SLF4J so applications can route it.
     implementation(libs.slf4j.api)
 
-    // Tests compose a real view and assert on the ops a write produces, which is the only honest way
-    // to check that reading a field subscribes the reader. That needs the HTML applier in the test
-    // source set only.
+    // Tests compose a real view and assert on the ops a write produces. That is the most direct way to
+    // check that reading a field subscribes the reader. The HTML applier is only needed for tests.
     testImplementation(project(":jetlin-html"))
 
-    // Route guards are routing, not storage — but whether an entity-bound route discloses a record it
-    // refused to show can only be checked with both halves present.
+    // Route guards belong to routing, not storage, but testing that an entity-bound route doesn't reveal
+    // a record it refused to show needs both modules.
     testImplementation(project(":jetlin-testing"))
-    // The processor runs over this module's own test entities, which is the only place in the repo
-    // where an @Entity exists before the samples do — and generated code that compiles against the
-    // runtime it was generated for is the thing worth checking.
+    // Run the processor over this module's test entities. Apart from the samples, they are the only
+    // entities in the repository, and they let the tests check that generated code compiles against
+    // this runtime.
     kspTest(project(":jetlin-db-ksp"))
 
     testImplementation(libs.kotlin.test)
@@ -34,7 +33,7 @@ dependencies {
 }
 
 tasks.test {
-    // A leaked reference is this design's known failure mode, so the detector that finds one is on for
-    // every test in the repo. Production leaves it off: see LeakDetector.
+    // Leaked references are the design's known weak point, so the leak detector is enabled for all
+    // tests. It is off by default in production; see LeakDetector.
     systemProperty("jetlin.db.leakDetector", "true")
 }

@@ -162,15 +162,14 @@ private fun NodeSpec.ids(): List<NodeId> = when (this) {
 }
 
 /**
- * Asserts the page contains nothing derived from [values].
+ * Asserts that none of [values] appear anywhere in the rendered page.
  *
- * For the question a multi-user application has to keep answering: is anything of another principal's on
- * this page? Pass the other principal's records — their titles, names, anything they authored — and this
- * fails if any of it reached the markup.
+ * Use this in multi-user applications to check that a page shows nothing belonging to another
+ * principal. Pass values from the other principal's records, such as titles, names or anything they
+ * wrote, and the assertion fails if any of them appear in the markup.
  *
- * Checked against the rendered HTML rather than against the node tree, because the tree is not the only way
- * data leaks: an attribute, a property, a test tag or a title discloses just as well as text does, and the
- * markup is what actually reaches a browser.
+ * The check runs against the rendered HTML instead of the node tree. Data can leak through an attribute,
+ * a property or the title as well as through text, and the HTML is what actually reaches the browser.
  *
  * ```kotlin
  * setAttribute(PrincipalKey, bob)

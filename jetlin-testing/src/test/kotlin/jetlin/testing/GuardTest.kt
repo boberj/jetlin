@@ -14,14 +14,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * What a route does about a principal it does not want.
+ * Tests how a guarded route handles a principal it refuses.
  *
- * Three ways into a route and they have to agree: a deep link, an in-session navigation, and a
- * hibernated session waking up. The third is the one most likely to be missed — a session resumes on
- * whatever URL it was on, so the guard has to be re-evaluated on wake and not only on entry.
+ * A route can be reached in three ways, and they must all give the same result: a deep link,
+ * navigation within a session, and a hibernated session waking up. The third is the easiest to get
+ * wrong. A woken session resumes on the URL it was on, so the guard has to run again on wake, not only
+ * when the route is entered.
  *
- * These use a plain state-holding object as the principal rather than a database, because nothing here
- * is about storage: what makes eviction work is that a guard reads live state.
+ * The principal here is a plain object holding snapshot state, not a database record. Storage isn't
+ * being tested; eviction works because the guard reads live state.
  */
 class GuardTest {
 
@@ -65,8 +66,8 @@ class GuardTest {
                 view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
             }
 
-            // Still on the URL: not found is a page, not a redirect, and a 403 would confirm there is an
-            // admin panel here.
+            // The URL doesn't change: not found is rendered in place, not as a redirect. A 403 would reveal
+            // that an admin panel exists.
             assertUrl("/admin/users")
             onNode(hasTag("h1")).assertText("Not found")
             assertEquals("Not found", title(), "the title must not say what the page would have been")
@@ -109,8 +110,8 @@ class GuardTest {
             }
             onNode(hasTestTag("page")).assertExists()
 
-            // An admin being demoted by someone else, with nothing told about this session. The guard
-            // read `admin`, which is snapshot state, so this invalidates the guard and nothing else.
+            // Someone else removes this user's admin role, and nothing notifies this session. The guard
+            // read `admin`, which is snapshot state, so the write invalidates the guard and nothing else.
             root.admin = false
             awaitIdle()
 
@@ -128,8 +129,8 @@ class GuardTest {
             }
             onNode(hasTag("h1")).assertText("Users")
 
-            // The role is revoked while the session is asleep: the principal is recomputed from the
-            // connection that wakes it, not restored from a snapshot that may be minutes old.
+            // The role is revoked while the session is hibernated. On wake, the principal is recomputed
+            // from the new connection instead of being restored from an outdated snapshot.
             setAttribute(PersonKey, Person("Root", admin = false))
             hibernateAndRestore()
 
@@ -208,8 +209,8 @@ class GuardTest {
                 view("/") { Page("Home") }
                 view(
                     "/note/{id}",
-                    // Absent because this principal may not read it, which is the same answer as "no such
-                    // note" on purpose: a distinguishable refusal tells whoever is probing that it exists.
+                    // Missing because this principal may not read it. That deliberately looks the same as
+                    // "no such note", so someone probing ids can't tell whether the note exists.
                     subject = { request -> notes[request.pathParams["id"]] },
                     title = { note -> note.title },
                 ) { note -> Page(note.title) }
@@ -220,7 +221,7 @@ class GuardTest {
         }
 }
 
-/** A principal that holds state, which is all a guard needs it to be. */
+/** A principal holding snapshot state. A guard needs nothing more. */
 private class Person(val name: String, admin: Boolean = false) {
     var admin: Boolean by mutableStateOf(admin)
 

@@ -28,14 +28,14 @@ private const val OWNER = "jetlin.db.Owner"
 private const val POLICY = "jetlin.db.Policy"
 
 /**
- * Turns `@Entity` classes into their table, their column object and their draft type.
+ * Generates the table, column object and draft type for each `@Entity` class.
  *
- * The processor's job is to remove the two things a schema declared by hand always eventually gets
- * wrong: a column that does not match the property it stores, and a load function that does not match
- * the constructor. Both become impossible here, because both are generated from the same declaration.
+ * Hand-written schemas tend to develop two kinds of mismatch over time: a column that doesn't match
+ * the property it stores, and a load function that doesn't match the constructor. Generating both
+ * from the entity declaration rules these out.
  *
- * It also refuses to generate anything for an entity with no policy. An entity with no access rules is
- * almost always an oversight, and this is the cheapest place in the whole design to catch one.
+ * The processor also fails the build for any entity without a policy. An entity with no access rules
+ * is almost always a mistake, and compile time is the cheapest point to catch it.
  */
 internal class JetlinDbProcessor(
     private val codeGenerator: CodeGenerator,
@@ -106,9 +106,9 @@ internal class JetlinDbProcessor(
             logger.error("@Entity $name has no primary constructor, so a stored row cannot be rebuilt.", declaration)
             return null
         }
-        // Every parameter, not only the ones that are properties: `var title by column(title)` is the
-        // idiom, so the constructor is how a stored title gets back in even though `title` is not a
-        // property of its own.
+        // Collect all parameter names, not just the ones declared as properties. With the usual
+        // `var title by column(title)` pattern, `title` is a plain parameter, and the loader passes the
+        // stored value through it.
         val constructorParameters = constructor.parameters.mapNotNull { it.name?.asString() }.toSet()
         val constructorProperties = constructor.parameters
             .filter { it.isVal || it.isVar }
@@ -162,8 +162,9 @@ internal class JetlinDbProcessor(
         if (property.isPrivate()) return null
 
         if (!delegated && !isConstructorProperty) {
-            // A computed property is derived and obviously not stored. A plain field is more likely to be
-            // a column someone forgot to declare as one, and silently not storing it is the bad outcome.
+            // Computed properties are derived, so skipping them is expected. A property with a backing
+            // field is more likely a column declared the wrong way, so warn instead of silently not
+            // storing it.
             if (property.hasBackingField) {
                 logger.warn(
                     "${entity.simpleName.asString()}.$name is not stored: only delegated properties " +
@@ -218,7 +219,7 @@ internal class JetlinDbProcessor(
         )
     }
 
-    /** The record a reference points at, or null if this type is not a record. */
+    /** The qualified name of the referenced record type, or null if [type] is not a record. */
     private fun referenceTarget(type: KSType): String? {
         val declaration = type.declaration as? KSClassDeclaration ?: return null
         return if (extendsRecord(declaration)) declaration.qualifiedName?.asString() else null
@@ -232,7 +233,7 @@ internal class JetlinDbProcessor(
         }
     }
 
-    /** The `Policy<T, P>` supertype of a companion, however many interfaces deep it is declared. */
+    /** Finds the companion's `Policy<T, P>` supertype, searching through inherited interfaces. */
     private fun findPolicy(declaration: KSClassDeclaration): KSType? {
         for (reference in declaration.superTypes) {
             val type = reference.resolve()
@@ -250,11 +251,11 @@ internal class JetlinDbProcessor(
     }
 
     /**
-     * The schema as data, for the migration tooling.
+     * Writes the schema as JSON for the migration tooling.
      *
-     * Written into the generated-resources output rather than into the source tree: KSP has no business
-     * writing files a human is expected to review. `dbDiff` and `dbVerify` compare this against the
-     * snapshot that is checked in.
+     * The file goes into the generated resources output, not the source tree, because a code generator
+     * shouldn't write files that people are expected to review. `dbDiff` and `dbVerify` compare it with
+     * the snapshot checked into the repository.
      */
     private fun writeSnapshot(contents: String, dependencies: Dependencies) {
         codeGenerator.createNewFileByPath(dependencies, "jetlin-db-schema", "json")
@@ -275,7 +276,7 @@ private fun com.google.devtools.ksp.symbol.KSAnnotation.qualifiedName(): String?
 private fun KSType.qualified(): String =
     declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
 
-/** `MyThing` → `my_thing`, so that the default table name is `my_things`. */
+/** Converts a class name to snake case, for example `MyThing` → `my_thing`, for the default table name. */
 internal fun snakeCase(name: String): String = buildString {
     name.forEachIndexed { index, character ->
         if (character.isUpperCase()) {

@@ -19,8 +19,8 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /**
- * Storage, and the property that justifies the whole design: a write the database refused was never
- * visible to anyone.
+ * Tests storage, including the design's key property: a write the database refused is never visible to
+ * anyone.
  */
 class PersistenceTest {
 
@@ -39,7 +39,7 @@ class PersistenceTest {
                 val task = db.resident.find(Task::class, Id(taskId))
                 assertEquals("Read the plan", task?.title)
                 assertEquals(true, task?.done)
-                // Not a copy of the owner: the same resident User the users table was loaded into.
+                // The owner is the same User instance loaded from the users table, not a copy.
                 assertEquals("Alice", task?.owner?.name)
                 assertEquals(db.resident.find(User::class, Id(task!!.owner.id)), task.owner)
             }
@@ -99,12 +99,12 @@ class PersistenceTest {
                     assertEquals("the handler failed", failure.message)
                     h.settle()
 
-                    // The whole point of committing before applying: nothing reached the browser...
+                    // Because the commit happens before the apply, nothing reached the browser...
                     assertEquals(emptyList<Op>(), h.drain())
-                    // ...nothing reached the resident graph...
+                    // ...nothing changed in the in-memory graph...
                     assertEquals("Read the plan", task.title)
                     assertEquals(1, db.resident.all(Task::class).size)
-                    // ...and nothing reached disk.
+                    // ...and nothing was written to disk.
                     assertEquals(1, rowsIn(file, "tasks"))
                     assertEquals("Read the plan", singleValue(file, "SELECT title FROM tasks"))
                 }
@@ -125,8 +125,8 @@ class PersistenceTest {
                         first.settle()
                         second.settle()
 
-                        // Nothing subscribed either session to the record and nothing broadcast the
-                        // change: both read the same cell, so the apply invalidated both.
+                        // Neither session subscribed to the record, and nothing broadcast the change.
+                        // Both read the same cell, so applying the write invalidated both.
                         assertEquals(listOf(Op.SetText(3, "Read it twice")), first.drain())
                         assertEquals(listOf(Op.SetText(3, "Read it twice")), second.drain())
                     }
@@ -204,7 +204,7 @@ class PersistenceTest {
                 assertEquals(0, db.resident.all(Task::class).size)
             }
 
-            // And it stays gone.
+            // The record is still gone after reopening.
             Db.open(file, schema()).use { db -> assertEquals(0, db.resident.all(Task::class).size) }
         }
     }
@@ -231,10 +231,10 @@ class PersistenceTest {
                 val alice = db.transact { db.insert(User("Alice")) }
                 val first = unsafe("test fixture") { db.insertUnchecked(Task(alice, "first"), id = 7) }
 
-                // What re-seeding a fixture looks like: the old record goes and a new one takes its id. The
-                // flush has to order the delete before the insert, because a primary key is not deferrable
-                // — unlike the foreign keys, which are checked at commit so that one transaction can both
-                // create a record and point another at it.
+                // Re-seeding a fixture: the old record is deleted and a new one reuses its id. The flush
+                // must run the delete before the insert, because primary key constraints can't be deferred.
+                // Foreign keys, by contrast, are checked at commit, so one transaction can create a record
+                // and point another record at it.
                 db.transact {
                     db.delete(first)
                     unsafe("test fixture") { db.insertUnchecked(Task(alice, "second"), id = 7) }
@@ -251,8 +251,8 @@ class PersistenceTest {
     fun `one transaction can create a record and the record that points at it`(): Unit = runTest {
         withStore { file ->
             Db.open(file, schema()).use { db ->
-                // Inserted in the order the application happens to write them, which is not necessarily
-                // the order the foreign keys would need if each statement were checked on its own.
+                // Inserted in whatever order the application writes them, which may not be the order
+                // foreign keys would require if each statement were checked individually.
                 val task = db.transact {
                     val alice = db.insert(User("Alice"))
                     db.insert(Task(alice, "Read the plan"))
@@ -284,7 +284,7 @@ class PersistenceTest {
                     "data_version" in failure.message.orEmpty(),
                     "the error should name the detector, was: ${failure.message}",
                 )
-                // The refused transaction left nothing behind, in memory or on disk.
+                // The refused transaction changed nothing in memory or on disk.
                 assertEquals(1, db.resident.all(User::class).size)
                 assertEquals(2, rowsIn(file, "users"))
             }
@@ -292,7 +292,7 @@ class PersistenceTest {
     }
 }
 
-/** Runs [block] against a fresh database file, deleted afterwards however it ends. */
+/** Runs [block] against a new database file, which is deleted afterwards even if the block throws. */
 @OptIn(ExperimentalPathApi::class)
 private suspend fun withStore(block: suspend (Path) -> Unit) {
     val directory = createTempDirectory("jetlin-db")
@@ -303,7 +303,7 @@ private suspend fun withStore(block: suspend (Path) -> Unit) {
     }
 }
 
-/** Reads the file with a second connection, which is what a backup tool does. */
+/** Reads the file through a second connection, the way a backup tool would. */
 private fun rowsIn(file: Path, table: String): Int =
     (singleValue(file, "SELECT count(*) FROM $table") as Number).toInt()
 

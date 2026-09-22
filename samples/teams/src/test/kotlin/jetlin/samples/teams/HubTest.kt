@@ -27,15 +27,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The sample against its own external system, over real HTTP.
+ * Tests the sample against its stub external system over real HTTP.
  *
- * The stub runs in this process — on a port the operating system picks, through a real client and a real
- * request — which is as close to an external system as a test can honestly get. What is being checked is
- * not that HTTP works but that the two claims about caching hold where a principal can see them: each
- * principal's own data is fetched with each principal's own credential, and the thing that is the same
- * for everybody is fetched once.
+ * The stub runs in this process on a port chosen by the operating system, and is called through a real
+ * HTTP client. That is as close to a real external system as a reliable test can get. The tests check two
+ * caching properties from the page's point of view: each principal's data is fetched with that
+ * principal's own credential, and data that is the same for everyone is fetched only once.
  *
- * Both claims are about requests that did *not* happen, which is why the stub counts what it was asked.
+ * Both properties are about requests that were *not* made, which is why the stub records every call.
  */
 class HubTest {
 
@@ -60,8 +59,8 @@ class HubTest {
             }
         }
 
-        // One request per principal, each carrying that principal's own token. There is no single object
-        // for `the profile`, so there is nothing for the wrong principal to reach.
+        // One request per principal, each using that principal's own token. There is no shared profile
+        // object that the wrong principal could reach.
         assertEquals(
             listOf("me:alice@example.com", "me:bob@example.com"),
             data.calls.filter { it.startsWith("me:") },
@@ -78,7 +77,7 @@ class HubTest {
                     signedInToHub(db, hub, if (session == 0) "alice@example.com" else "bob@example.com")
 
                     eventually { onNode(hasTestTag("announcement")).assertText("Deploy freeze on Friday") }
-                    // And again in the chrome, which is a second reader of the same value.
+                    // Also shown in the chrome, a second reader of the same value.
                     onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday")
                 }
             }
@@ -99,7 +98,7 @@ class HubTest {
             runViewTest {
                 signedInToHub(db, hub, "alice@example.com")
 
-                // The todo list, rendering stored records, with something nobody here owns above it.
+                // The todo list, showing stored records, with external data in the chrome above it.
                 onNode(hasTestTag("todos")).assertExists()
                 eventually { onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday") }
             }
@@ -116,8 +115,9 @@ class HubTest {
                     signedInToHub(db, hub, "alice@example.com")
                     eventually { onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday") }
 
-                    // Changed at the far end, with nothing telling the application and nobody touching
-                    // the page. The watch is what notices, and the write is what redraws it.
+                    // The announcement changes on the external system. Nothing notifies the application
+                    // and nobody interacts with the page; the watch picks up the change and its write
+                    // redraws the banner.
                     data.announcement = "All clear"
 
                     eventually { onNode(hasTestTag("banner")).assertText("All clear") }
@@ -135,8 +135,8 @@ class HubTest {
                 onNode(hasTestTag("status-draft")).type("writing the hub sample")
                 onNode(hasTestTag("save-status")).click()
 
-                // The command invalidated the profile rather than refetching it; the read that follows
-                // the command finishing is what paid for the new copy.
+                // After the command succeeds, it refreshes the profile, and the new status appears
+                // once that fetch completes.
                 eventually {
                     onNode(hasTestTag("status")).assertText("writing the hub sample · 1 updates")
                 }
@@ -158,7 +158,7 @@ class HubTest {
                     onNode(hasTestTag("status-error"))
                         .assertText("a status has to fit in $STATUS_LIMIT characters")
                 }
-                // Nothing was written, and the page is still a page: the refusal cost a line of text.
+                // Nothing was saved, and the session still works: the only effect is an error message.
                 onNode(hasTestTag("status")).assertText("no status · 0 updates")
                 onNode(hasTestTag("save-status")).assertExists()
             }
@@ -166,7 +166,7 @@ class HubTest {
     }
 }
 
-/** Signs in as [email] and composes the hub route, with the application's real chrome around it. */
+/** Signs in as [email] and composes the hub route inside the application's real chrome. */
 private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
     setAttribute(PrincipalKey, db.user(email))
     setRoutes {
@@ -177,20 +177,20 @@ private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
 }
 
 /**
- * The stub, a client pointed at it, and a way to wait for what the page does about it.
+ * Test setup: the stub, a hub client pointed at it, and a way to wait for the page to react.
  *
- * Everything here waits through [eventually] rather than by joining coroutines. An earlier version joined
- * the fetch scope's children, which was exact until a watched value put a polling loop in that scope: a
- * loop that never finishes is not something a test can wait for.
+ * Tests wait using [eventually] instead of joining coroutines. An earlier version joined the fetch
+ * scope's children, which worked until watched values added a polling loop to that scope. The loop
+ * never finishes, so joining it would never return.
  */
 private class HubFixture(val data: HubData) {
     /**
-     * Retries [assertion] until it holds, for work the session started that `awaitIdle` cannot see.
+     * Retries [assertion] until it passes, for work started by the session that `awaitIdle` can't see.
      *
-     * A command suspends on a socket rather than queueing work on the session's dispatcher, so a session
-     * with a request outstanding is genuinely idle — it is free to do anything else, which is the point.
-     * A test that wants the outcome therefore has to wait for the outcome. This is the one place here
-     * that waits in real time, which is why it is bounded and why it reports the last failure it saw.
+     * A command waits on a network socket rather than queuing work on the session's dispatcher, so a
+     * session with a request in flight really is idle and can handle other events. A test that needs
+     * the outcome has to wait for the outcome itself. This is the only real-time wait in these tests, so
+     * it has a time limit and reports the last failure it saw.
      */
     suspend fun ViewTest.eventually(assertion: suspend () -> Unit) {
         var last: AssertionError? = null

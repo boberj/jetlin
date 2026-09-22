@@ -5,11 +5,10 @@ import java.sql.Types
 import kotlin.reflect.KClass
 
 /**
- * How a column is stored.
+ * The storage type of a column.
  *
- * SQLite has four useful storage classes and no boolean, which is why [Bool] declares `INTEGER`: the
- * distinction is kept here rather than in the column list because the conversion on the way in and
- * out belongs to the column, not to the caller.
+ * SQLite has no boolean type, so [Bool] is stored as `INTEGER`. It is still a separate constant so
+ * that the column, not the caller, knows to convert between `Boolean` and `0`/`1`.
  */
 public enum class ColumnType(internal val sql: String) {
     Integer("INTEGER"),
@@ -19,15 +18,14 @@ public enum class ColumnType(internal val sql: String) {
 }
 
 /**
- * One stored column of a record.
+ * A stored column of a record.
  *
- * [name] is both the column name and, for mutable fields, the name of the [Cell] holding it — which
- * is what lets a write to a cell be flushed as an update to one column without a dirty-check pass
- * over the record.
+ * For mutable fields, [name] is also the name of the [Cell] that holds the value. That is how a write
+ * to a cell becomes an update of a single column without comparing the whole record.
  *
- * [read] is a plain getter rather than a cell lookup so that an immutable field works too: the
- * `@Owner val owner: User` of §4.2 is a constructor property with no cell behind it, and it still has
- * to reach the insert.
+ * [read] is a getter, not a cell lookup, so that immutable fields can be stored too. For example,
+ * `@Owner val owner: User` is a constructor property without a cell, and it still needs to be
+ * written on insert.
  */
 public class Column<T : Record> internal constructor(
     public val name: String,
@@ -38,10 +36,10 @@ public class Column<T : Record> internal constructor(
 )
 
 /**
- * How one record class is stored, and how to build one back from a stored row.
+ * How a record class is stored, and how to recreate a record from a stored row.
  *
- * Written by hand for now; phase 3's KSP processor generates exactly this from the entity classes, so
- * the builder is the seam between the two and is deliberately boring.
+ * The KSP processor generates these from entity classes by calling [table]. Tests also build them by
+ * hand, so the builder is kept simple.
  */
 public class Table<T : Record> internal constructor(
     public val name: String,
@@ -52,11 +50,11 @@ public class Table<T : Record> internal constructor(
     internal val columnsByName: Map<String, Column<T>> = columns.associateBy { it.name }
 
     /**
-     * The column called [name].
+     * Returns the column called [name].
      *
-     * Generated code exposes columns this way so that `Todos.archived` and the column the table flushes
-     * are the same object — a policy matching on `when (column)` compares identities, so two equal-looking
-     * columns would silently never match.
+     * Generated code gets its column objects from here, so `Todos.archived` is the same instance the
+     * table uses. This matters because a policy's `when (column)` compares by identity; a separate
+     * but identical column object would never match.
      */
     public fun column(name: String): Column<T> =
         columnsByName[name] ?: error("Table '${this.name}' has no column '$name'")
@@ -76,8 +74,7 @@ public class Table<T : Record> internal constructor(
  * }
  * ```
  *
- * The `id` column is implicit: every record has one, and nothing else is allowed to call a column
- * `id`.
+ * Every table has an implicit `id` column, so no other column may be named `id`.
  */
 public fun <T : Record> table(
     name: String,
@@ -93,12 +90,12 @@ public class TableBuilder<T : Record> internal constructor(
     private val columns = mutableListOf<Column<T>>()
     private var loader: ((Row) -> T)? = null
 
-    /** A whole number: `Long`, `Int` or anything else `Number` that round-trips as one. */
+    /** An integer column, for `Long`, `Int` or any other `Number` that is stored as a whole number. */
     public fun integer(name: String, nullable: Boolean = false, read: (T) -> Number?) {
         add(name, ColumnType.Integer, nullable, references = null, read = read)
     }
 
-    /** A floating point number. */
+    /** A floating-point column. */
     public fun real(name: String, nullable: Boolean = false, read: (T) -> Number?) {
         add(name, ColumnType.Real, nullable, references = null, read = read)
     }
@@ -112,12 +109,12 @@ public class TableBuilder<T : Record> internal constructor(
     }
 
     /**
-     * A reference to another record, stored as that record's id and resolved back to the object at
-     * load.
+     * A reference to another record, stored as that record's id and resolved to the object when
+     * loaded.
      *
-     * Defaults to nullable, because a reference that must always point somewhere is the rarer case and
-     * the stricter one: a non-null reference can only be loaded after the table it points at, which is
-     * a constraint on the order tables are registered in.
+     * References are nullable by default. Non-null references are less common and more restrictive:
+     * the referenced table has to be loaded first, which constrains the order tables are registered
+     * in.
      */
     public fun reference(
         name: String,
@@ -129,10 +126,10 @@ public class TableBuilder<T : Record> internal constructor(
     }
 
     /**
-     * How to rebuild a record from a stored row.
+     * Declares how to create a record from a stored row.
      *
-     * The record's stored id is reapplied by the loader afterwards, so this does not have to — and
-     * cannot — set it.
+     * The block does not set the id, and can't. The loader applies the stored id after the block
+     * returns.
      */
     public fun load(block: (Row) -> T) {
         check(loader == null) { "table '$name' declares load { } twice" }
@@ -161,11 +158,11 @@ public class TableBuilder<T : Record> internal constructor(
 }
 
 /**
- * One row as it was read from disk, and the identity map to resolve its references against.
+ * A row read from the database, together with the identity map used to resolve its references.
  *
- * The accessors are explicit about type rather than inferred, because a schema and a constructor that
- * disagree should fail at the row that proves it with the column named, not produce a plausible
- * object built from a silent coercion.
+ * Each accessor names the type it expects instead of inferring it. If the schema and the constructor
+ * disagree, loading fails on the affected row with the column name in the message, instead of
+ * silently converting the value and producing a record that looks valid.
  */
 public class Row internal constructor(
     private val values: Map<String, Any?>,
@@ -187,17 +184,17 @@ public class Row internal constructor(
 
     public fun stringOrNull(name: String): String? = optionalValue(name) { it.toString() }
 
-    /** Stored as `0` or `1`, which is the only thing SQLite offers. */
+    /** Reads a boolean, which SQLite stores as `0` or `1`. */
     public fun boolean(name: String): Boolean = requireValue(name) { (it as Number).toLong() != 0L }
 
     public fun booleanOrNull(name: String): Boolean? = optionalValue(name) { (it as Number).toLong() != 0L }
 
     /**
-     * The record this column points at.
+     * The record this column references.
      *
-     * Resolved out of the identity map, so the table it points at must already be loaded — which
-     * means registered earlier in the table list. A forward reference fails here, loudly, naming both
-     * tables, rather than producing a graph with holes in it.
+     * The record is looked up in the identity map, so the referenced table must already be loaded,
+     * which means it must be registered earlier in the table list. A reference to a later table fails
+     * here with an error naming both tables, instead of leaving a missing object in the graph.
      */
     public fun <R : Record> reference(name: String, type: KClass<R>): R =
         referenceOrNull(name, type)
@@ -222,7 +219,7 @@ public class Row internal constructor(
     }
 }
 
-/** Binds one value to a statement parameter, collapsing a reference to the id it is stored as. */
+/** Binds a value to a statement parameter. A record reference is bound as the record's id. */
 internal fun bind(statement: PreparedStatement, index: Int, value: Any?) {
     when (value) {
         null -> statement.setNull(index, Types.NULL)
@@ -240,7 +237,7 @@ internal fun bind(statement: PreparedStatement, index: Int, value: Any?) {
     }
 }
 
-/** `CREATE TABLE` for one table, with foreign keys pointing at the tables they name. */
+/** The `CREATE TABLE` statement for this table, including foreign keys to the referenced tables. */
 internal fun Table<*>.ddl(tableNames: Map<KClass<out Record>, String>): String = buildString {
     append("CREATE TABLE IF NOT EXISTS ").append(name).append(" (\n")
     append("  id INTEGER PRIMARY KEY")

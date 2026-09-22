@@ -5,15 +5,15 @@ plugins {
 }
 
 dependencies {
-    // The migration runner applies SQL to the database file, so it needs the same driver the runtime has.
+    // The migration runner executes SQL against the database file, so it uses the same driver as the runtime.
     implementation(libs.sqlite.jdbc)
     implementation(libs.serialization.json)
 
     testImplementation(libs.kotlin.test)
 }
 
-// An included build gets none of the root build's conventions, so the ones that matter are repeated here:
-// the same toolchain, the same explicit API, and the same test framework and logging.
+// An included build doesn't inherit the root build's conventions, so the relevant ones are repeated here:
+// toolchain, explicit API mode, and test framework and logging settings.
 kotlin {
     jvmToolchain(24)
     explicitApi()

@@ -11,19 +11,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * How the last attempt at some suspending work is going.
+ * The state of the most recent attempt at a piece of suspending work.
  *
- * One sealed type rather than `running`, `error` and `result` side by side, for the reason [Fetched] is
- * one: separate fields can describe a state that cannot happen — running *and* failed *and* finished —
- * and every reader then has to know which combinations are real. It also makes a failure one write, so
- * the button coming back and the message appearing are one patch rather than two.
+ * Like [Fetched], this is a sealed type instead of separate `running`, `error` and `result` fields,
+ * which could describe impossible combinations such as running and failed at once. A single field also
+ * means a failure is a single write, so re-enabling the button and showing the error arrive in the
+ * same patch.
  *
- * Separate from [Fetched] even so, because [Idle] is a state a fetch does not have. A value that nothing
- * has asked for is still on its way; work that nobody has started has not been attempted at all.
+ * It is a separate type from [Fetched] because of [Idle], which a fetch has no equivalent of. A value
+ * that nobody has read yet is still going to be fetched, whereas work that nobody has started simply
+ * hasn't been attempted.
  */
 public sealed interface Run<out R> {
 
-    /** Nothing has been attempted yet, or [Action.reset] put it back here. */
+    /** Not attempted yet, or cleared by [Action.reset]. */
     public data object Idle : Run<Nothing>
 
     public data object Running : Run<Nothing>
@@ -34,12 +35,11 @@ public sealed interface Run<out R> {
 }
 
 /**
- * Suspending work started from an event handler, and how it is going.
+ * Suspending work started from an event handler, together with its current [Run] state.
  *
- * An event handler is an ordinary function, so anything slow has to be launched rather than awaited.
- * That forces the attempt to be modelled rather than hidden — which is wanted anyway, because a button
- * that stays enabled during a request and a failure with nowhere to appear are the two bugs this
- * prevents:
+ * Event handlers are not suspending functions, so slow work has to be launched instead of awaited.
+ * Exposing the attempt's state lets the page handle the two usual problems with that: a button that
+ * stays enabled while the request is running, and an error with nowhere to be shown.
  *
  * ```kotlin
  * val save = rememberAction { hub.setStatus(principal, draft.value) }
@@ -48,8 +48,8 @@ public sealed interface Run<out R> {
  * (save.state as? Run.Failed)?.let { P({ classes("error") }) { Text(it.cause.message.orEmpty()) } }
  * ```
  *
- * The work runs in the composition's scope, so it is cancelled when the session goes away. Anything that
- * has to finish regardless of who is watching belongs on a scope the application owns, not here.
+ * The work runs in the composition's coroutine scope and is cancelled when the session ends. Work
+ * that must complete even if nobody is watching should run on a scope owned by the application.
  */
 public class Action<R> internal constructor(
     private val scope: CoroutineScope,
@@ -58,18 +58,17 @@ public class Action<R> internal constructor(
 
     private val current = mutableStateOf<Run<R>>(Run.Idle)
 
-    /** Reading this subscribes the composition, so the attempt's progress recomposes the page. */
+    /** Reading this subscribes the composition, so the page recomposes as the attempt progresses. */
     public val state: Run<R> get() = current.value
 
     /**
      * Starts the work, unless it is already running.
      *
-     * Never throws: a handler that threw would take the session with it, and a failed action is a
-     * message, not the end of the page. Re-entry while [Run.Running] is ignored rather than queued —
-     * a second click on a button that is still working should not send a second request.
+     * This never throws. An exception here would end the session, and a failed action should only
+     * produce an error message. Calls made while the state is [Run.Running] are ignored, not queued,
+     * so clicking a busy button twice doesn't send a second request.
      *
-     * A new attempt replaces the last one's outcome, which is also what should happen on screen: the
-     * error goes away when you retry.
+     * Starting a new attempt replaces the previous outcome, so a retry clears the old error.
      */
     public operator fun invoke() {
         if (current.value is Run.Running) return
@@ -78,8 +77,8 @@ public class Action<R> internal constructor(
             val outcome: Run<R> = try {
                 Run.Done(block.value())
             } catch (cancelled: CancellationException) {
-                // The composition is going away; there is nobody left to show an error to, and reporting
-                // one would also cancel the scope this is running in.
+                // The composition is being disposed, so there is no page to show an error on.
+                // Recording this as a failure would also swallow the cancellation of this scope.
                 throw cancelled
             } catch (t: Throwable) {
                 Run.Failed(t)
@@ -88,22 +87,21 @@ public class Action<R> internal constructor(
         }
     }
 
-    /** Puts the action back to [Run.Idle], for dismissing a message. */
+    /** Resets the state to [Run.Idle], for example to dismiss an error message. */
     public fun reset() {
         current.value = Run.Idle
     }
 }
 
 /**
- * Remembers an [Action] over [block].
+ * Remembers an [Action] that runs [block].
  *
- * [block] takes nothing and is re-read on every call rather than captured once, which is what makes an
- * argument unnecessary: whatever the work needs, it reads from state when it runs, so it sees the draft as
- * the user left it rather than as it was when the page first composed.
+ * [block] takes no arguments. The latest [block] is used on each call instead of the one from the
+ * first composition, so the work reads its inputs from state at the moment it runs. For example, it
+ * sees the draft text as the user left it, not as it was when the page was first composed.
  *
- * That also settles what to do about a list. An action per row — remembered inside the row's `key` — is
- * what you want anyway, because one action shared across rows would disable every button when any one of
- * them was working.
+ * For a list, remember one action per row inside the row's `key`. A single action shared by all rows
+ * would disable every row's button while any one of them was running.
  */
 @Composable
 public fun <R> rememberAction(block: suspend () -> R): Action<R> {

@@ -6,41 +6,40 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 
 /**
- * The resident graph: one live object per stored row, indexed by type and id.
+ * The in-memory graph: one live object per stored row, indexed by type and id.
  *
- * Residency is what lets relation traversal be a pointer dereference. A composable runs on a
- * thread-confined session dispatcher, so a lazily loaded relation would have to block it or become
- * asynchronous; keeping the working set in memory removes the choice. The cost is that memory is a
- * real ceiling, shared with the live session compositions.
+ * Keeping every record in memory means following a relation is a field access. Composables run on a
+ * session's single confined thread, so a lazily loaded relation would either block that thread or
+ * have to become asynchronous. Keeping the data resident avoids both, at the cost of memory, which is
+ * shared with the live sessions and limits how much data an application can hold.
  *
- * Each type's records are held in a [SnapshotStateList], so adding or removing a record invalidates the
- * compositions that had iterated it — across every session in the process, because the map is
- * process-wide and the lists are ordinary snapshot state.
+ * Each type's records are kept in a [SnapshotStateList]. Adding or removing a record therefore
+ * invalidates every composition that iterated the list, in every session, because the map is shared
+ * across the process and the lists are ordinary snapshot state.
  *
- * ## Why almost nothing here is public
+ * ## Why most members are internal
  *
- * Handing out a record is an authorization decision. This class does no authorization, so its
- * record-returning members are `internal`: the public way to obtain a record is a policy-gated
- * [View], which is the guardrail that makes "a reference is authority" survivable. Phase 4 puts that
- * gate on top of these members; it must never become possible to go around it.
+ * Returning a record to application code grants access to it, and this class performs no access
+ * checks. Its record-returning members are therefore `internal`. Application code obtains records
+ * through [Gate], which returns policy-filtered [View]s. There must be no public way around the gate.
  */
 public class IdentityMap {
 
     private val tables = ConcurrentHashMap<KClass<out Record>, SnapshotStateList<Record>>()
 
-    /** Records of [type] in insertion order, as live snapshot state. */
+    /** The records of [type] in insertion order, as a snapshot state list. */
     @Suppress("UNCHECKED_CAST")
     internal fun <T : Record> records(type: KClass<T>): SnapshotStateList<T> =
         tables.computeIfAbsent(type) { mutableStateListOf() } as SnapshotStateList<T>
 
-    /** Every resident record of [type], unfiltered. */
+    /** All records of [type], without any policy filtering. */
     internal fun <T : Record> all(type: KClass<T>): View<T> = View(records(type), { true })
 
     /**
-     * Makes [record] resident.
+     * Adds [record] to the in-memory graph.
      *
-     * Registration and persistence are separate steps on purpose: a record exists as an object before
-     * anything has been stored, which is what lets a constructor be an ordinary constructor.
+     * This is separate from storing the record in the database. A record is created as an ordinary
+     * object before it is stored, which lets entity constructors be normal constructors.
      */
     internal fun <T : Record> add(record: T): T {
         @Suppress("UNCHECKED_CAST")
@@ -56,15 +55,15 @@ public class IdentityMap {
     }
 
     /**
-     * The resident record of [type] with this id, or null.
+     * Returns the record of [type] with this id, or null.
      *
-     * A scan rather than an index: at the target scale it costs less than maintaining a second
-     * structure, and — more importantly — scanning the snapshot list subscribes the caller, so a
-     * composable that looked up a record that did not exist yet recomposes when it arrives.
+     * This scans the list instead of using an index. At the intended scale, a scan is cheaper than
+     * maintaining a second data structure. It also subscribes the caller to the list, so a composable
+     * that looked up a record before it existed recomposes when the record is added.
      */
     internal fun <T : Record> find(type: KClass<T>, id: Id<T>): T? =
         records(type).firstOrNull { it.id == id.value }
 
-    /** Total resident records, for graph size next to session size; see `samples:teams:benchmark`. */
+    /** The total number of records in memory. Used by `samples:teams:benchmark` to report memory per record. */
     public val recordCount: Int get() = tables.values.sumOf { it.size }
 }

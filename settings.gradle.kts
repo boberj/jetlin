@@ -9,9 +9,9 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-// The migration tooling is a Gradle plugin, and a plugin has to be on the build's own classpath before a
-// project can apply it — which a sibling subproject cannot be. An included build is the way round that,
-// and it means `:samples:teams` applies the real plugin rather than a copy of what it does.
+// The migration tooling is a Gradle plugin. A project can only apply a plugin that is already on the
+// build's classpath, which a sibling subproject can't provide, so the plugin is an included build. This
+// lets `:samples:teams` apply the real plugin instead of a copy of its logic.
 includeBuild("jetlin-db-gradle")
 
 dependencyResolutionManagement {

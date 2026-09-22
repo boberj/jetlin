@@ -14,23 +14,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * A value that has not arrived yet, failed, or arrived.
+ * The state of a fetched value: still loading, failed, or ready.
  *
- * One sealed type rather than a value plus a pair of flags, because three independent fields can say
- * things that cannot be true — loading *and* failed *and* present — and then every reader has to know
- * which combinations are real.
+ * This is a sealed type instead of a nullable value with `loading` and `error` flags. Separate fields
+ * can express combinations that never occur, such as loading and failed at the same time, and every
+ * reader would then have to know which combinations to ignore.
  */
 public sealed interface Fetched<out V> {
 
-    /** Nothing has arrived. Either the first fetch is outstanding, or it has not been scheduled yet. */
+    /** No value yet. The first fetch is either running or has not been scheduled. */
     public data object Loading : Fetched<Nothing>
 
     /**
-     * The fetch failed and there is nothing to show.
+     * The fetch failed and there is no earlier value to fall back on.
      *
-     * Only ever the state of a value that was never obtained: a *revalidation* that fails leaves the
-     * value already in hand, because replacing data on screen with an error is a worse answer than
-     * showing something a minute old. See [Fetch].
+     * A value only reaches this state if it was never obtained. When a *revalidation* fails, [Fetch]
+     * keeps the value it already has, because showing slightly old data is more useful than replacing
+     * it with an error.
      */
     public data class Failed(public val cause: Throwable) : Fetched<Nothing>
 
@@ -38,11 +38,11 @@ public sealed interface Fetched<out V> {
 }
 
 /**
- * One value from somewhere slow, held as snapshot state.
+ * A single value from a slow source, such as an HTTP API, held in snapshot state.
  *
- * Reading [value] subscribes the calling composition, and the arrival recomposes every session that had
- * read it — in this process, with no subscription bookkeeping anywhere. That is the same mechanism a
- * stored record uses, which is why this needs no machinery beyond a cell and a coroutine:
+ * Reading [value] subscribes the current composition. When the value arrives, every session in this
+ * process that read it recomposes. No subscription code is involved: this is the same mechanism that
+ * makes a stored record reactive, so all this class needs is a state cell and a coroutine.
  *
  * ```kotlin
  * class Hub(private val client: HttpClient, private val scope: CoroutineScope) {
@@ -63,41 +63,42 @@ public sealed interface Fetched<out V> {
  * }
  * ```
  *
- * The read is what triggers the fetch: the first one schedules it, the ones that follow join the
- * outstanding one, and composition never blocks. Three things about how that is done are load-bearing,
- * and each is a comment at the line that implements it:
+ * Reading the value is what starts the fetch. The first read schedules it, later reads share the
+ * fetch that is already running, and composition never waits for it. Three implementation details
+ * matter for correctness, and each one has a comment where it is implemented:
  *
- * 1. **The read writes no snapshot state.** The in-flight marker is a plain atomic and the fetch time is
- *    a plain field. State written during a pass that read it re-invalidates the reader, every pass,
- *    forever — a composition that never settles.
- * 2. **The fetch does not run on the session's thread.** [scope] belongs to whoever owns this object and
- *    should dispatch elsewhere; a session composes on one confined thread, and network latency on it
- *    stalls everything that session is doing.
- * 3. **The arrival is one write.** However many fields the fetched value has, it is one object and one
- *    assignment, so one response is one recomposition and one patch.
+ * 1. **Reading writes no snapshot state.** The in-flight marker is a plain atomic and the attempt time
+ *    is a plain field. If a composition wrote state it had just read, that write would invalidate the
+ *    composition again on every pass, and it would never settle.
+ * 2. **The fetch does not run on the session's thread.** [scope] belongs to the owner of this object
+ *    and should dispatch to another thread. Each session composes on a single confined thread, so a
+ *    network call there would stall the whole session.
+ * 3. **The arrival is a single write.** The fetched value is one object assigned once, so a response
+ *    causes one recomposition and one patch regardless of how many fields it has.
  *
- * ## What happens when it goes wrong, and when it goes stale
+ * ## Failure and staleness
  *
- * A fetch is attempted again only when something asks for it, and the only two things that ask are a read
- * past [ttl] and [invalidate]. **Nothing wakes up when a value expires.** A read happens when the
- * composable that reads it recomposes, so a page sitting still goes on showing an expired value until
- * something recomposes it — another cell changing, a click, a navigation, or a hibernated session waking
- * and rebuilding. [ttl] is a bound on what a read will accept, not a refresh interval; polling by default
- * would mean paying for a value nobody is looking at, which is the same reason [invalidate] does not
- * refetch. A page that really must stay fresh while it sits there says so, with [fresh], and then the
- * refreshing lasts exactly as long as the page does and is shared with every other session showing it.
+ * A new fetch is attempted only on request. Two things make a request: a read after [ttl] has passed,
+ * and a call to [invalidate]. **Nothing happens automatically when a value expires.** A read only
+ * happens when the composable that reads the value recomposes, so a page nobody interacts with keeps
+ * showing the expired value until something else recomposes it: another state change, a click, a
+ * navigation, or a hibernated session waking up. In other words, [ttl] limits how old a value a read
+ * will accept; it is not a refresh interval. Polling by default would spend requests on values nobody
+ * is looking at, and [invalidate] does not fetch for the same reason. A page that needs to stay current
+ * while it is open should use [fresh]. Its polling stops when the page goes away, and it is shared with
+ * every other session showing the same value.
  *
- * A failure records its time like a success does, so a page that keeps rendering cannot turn a broken
- * endpoint into a request per recomposition — which means a failed fetch under the default infinite
- * [ttl] stays failed until [invalidate] is called. A page that shows "unavailable" should offer a retry
- * that does exactly that.
+ * Failed attempts record their time just like successful ones. Otherwise a page that keeps
+ * recomposing would send a request to a broken endpoint on every pass. The consequence is that with
+ * the default infinite [ttl], a failed fetch stays failed until [invalidate] is called, so a page that
+ * shows an error should offer a retry that calls it.
  *
- * While a revalidation is outstanding the previous value stays readable, and if it fails the previous
- * value stays. Flipping back to [Fetched.Loading] on expiry would reintroduce the placeholder flicker
- * that committing before applying exists to avoid, and it throws away something true for nothing.
+ * While a revalidation is running, the previous value remains readable, and it is kept if the
+ * revalidation fails. Switching back to [Fetched.Loading] on expiry would make the page flicker to a
+ * placeholder and discard a value that is probably still correct.
  *
- * One hazard worth knowing: a read inside a snapshot that is later discarded still schedules a fetch.
- * Wasted, not wrong.
+ * One known inefficiency: a read inside a snapshot that is later discarded still schedules a fetch.
+ * The request is wasted, but the result is still correct.
  */
 public class Fetch<V>(
     private val scope: CoroutineScope,
@@ -109,32 +110,32 @@ public class Fetch<V>(
     private val state = mutableStateOf<Fetched<V>>(Fetched.Loading)
 
     /**
-     * The outstanding fetch, if there is one.
+     * The fetch currently running, if any.
      *
-     * Deliberately *not* snapshot state: this is written while a composition is reading [value], and a
-     * write to state the reader just read would invalidate that reader on every pass.
+     * This is intentionally not snapshot state. It is written while a composition is reading [value],
+     * and writing state that the reader has just read would invalidate that reader on every pass.
      */
     private val inFlight = AtomicReference<Job?>(null)
 
-    /** When the last attempt finished, success or failure. A plain field, for the same reason. */
+    /** When the last attempt finished, whether it succeeded or failed. A plain field for the same reason. */
     @Volatile
     private var attemptedAt: Long? = null
 
     /**
-     * What each current watcher asked for, and the one loop serving all of them.
+     * The interval each current watcher asked for, and the single loop that serves all of them.
      *
-     * A list rather than a count because watchers may ask for different intervals, and the shortest is
-     * the only answer that satisfies everyone. Guarded by the list itself; the critical sections are two
-     * lines and are never held across a suspension.
+     * This is a list and not a counter because watchers can ask for different intervals, and the loop
+     * has to use the shortest. Access is synchronized on the list itself. The locked sections are short
+     * and never span a suspension point.
      */
     private val watchers = mutableListOf<Duration>()
     private var polling: Job? = null
 
     /**
-     * The current state of the value, scheduling the fetch if nothing has it yet or the copy is stale.
+     * The current state. Reading it schedules a fetch if there is no value yet or the value is stale.
      *
-     * Reading subscribes the composition, so the arrival recomposes it. Reading twice in one pass costs
-     * one fetch, and so does reading from two sessions at once.
+     * The read subscribes the composition, so the composition recomposes when the value arrives.
+     * Multiple reads in one pass, or concurrent reads from several sessions, share a single fetch.
      */
     public val value: Fetched<V>
         get() {
@@ -144,32 +145,34 @@ public class Fetch<V>(
         }
 
     /**
-     * Marks the value as needing a fresh fetch, without fetching now.
+     * Marks the value as stale without fetching it.
      *
-     * For when the value is known to be out of date but it is not this caller's business whether anyone
-     * still cares — the next reader pays, and if there is no next reader then nobody should have paid.
+     * Use this when you know the value is out of date but don't know whether anyone still needs it. The
+     * next read triggers the fetch; if nobody reads it again, no request is made.
      *
-     * Note the asymmetry, because it decides which of this and [refresh] you want: a value that *failed*
-     * goes back to [Fetched.Loading] here, and that is a write, so its readers recompose and one of them
-     * re-reads immediately. A value that is [Fetched.Ready] is left exactly as it is, so nothing
-     * recomposes and nothing re-reads — the mark is silent until something else brings the page round.
+     * The behaviour depends on the current state, which affects whether you want this or [refresh]. A
+     * [Fetched.Failed] value is reset to [Fetched.Loading]. That is a state write, so its readers
+     * recompose and one of them reads it again straight away, which starts a fetch. A [Fetched.Ready]
+     * value is left unchanged, so nothing recomposes and nothing is fetched until something else causes
+     * the page to recompose.
      */
     public fun invalidate() {
         attemptedAt = null
-        // Applied, for the same reason the arrival is: this is called from a command's coroutine, which
-        // is not a composition, and a loose write would sit in the global snapshot until the pump ran.
+        // Written through an applied snapshot, like the arrival. This is usually called from a
+        // command's coroutine, not from a composition, and a plain write would stay in the global
+        // snapshot until the GlobalSnapshotManager pump next ran.
         if (state.value is Fetched.Failed) Snapshot.withMutableSnapshot { state.value = Fetched.Loading }
     }
 
     /**
-     * Fetches now, whether or not the copy is stale.
+     * Fetches immediately, whether or not the value is stale.
      *
-     * For a caller who knows somebody is looking: a command that just changed the thing, a retry button,
-     * a poller in a `LaunchedEffect` that lives as long as the page does. It does not wait to be read,
-     * which is the whole difference from [invalidate] — and the reason not to reach for it by default,
-     * since a fetch nobody is waiting for is a request nobody needed.
+     * Use this when you know someone is looking at the value: after a command that changed it, from a
+     * retry button, or from a poller in a `LaunchedEffect` that lives as long as the page. Unlike
+     * [invalidate], it doesn't wait for a read. That is also why it shouldn't be the default choice: a
+     * fetch that nobody reads is a wasted request.
      *
-     * Joins an outstanding fetch rather than starting a second one.
+     * If a fetch is already running, this joins it instead of starting another.
      */
     public fun refresh() {
         invalidate()
@@ -177,29 +180,28 @@ public class Fetch<V>(
     }
 
     /**
-     * Keeps the value refreshed every [every] until the returned [Watch] is stopped.
+     * Refreshes the value every [every] until the returned [Watch] is stopped.
      *
-     * One loop, on this object's own scope, however many watchers there are: the second page to ask joins
-     * the first one's schedule rather than starting a second, and the loop stops when the last of them
-     * stops watching. That is the whole point of the value being shared — two sessions showing the same
-     * thing are one request between them, not two each.
+     * However many watchers there are, a single loop runs on this object's scope. A second caller
+     * joins the existing schedule, and the loop stops when the last watcher stops. Because the value is
+     * shared, two sessions showing it cost one request per interval between them, not one each.
      *
-     * `every` wins over [ttl] while anybody is watching: a watcher is saying how fresh it wants the value,
-     * which is a stronger statement than how stale a read is willing to accept. Two watchers asking for
-     * different intervals get the shorter one, because that is the only answer that satisfies both.
+     * While anyone is watching, [every] takes precedence over [ttl]: a watcher states how fresh it
+     * wants the value, which is a stronger requirement than the oldest value a read will accept. With
+     * several watchers on different intervals, the loop uses the shortest.
      *
-     * Callers in a composition want [fresh] instead, which ties this to the page rather than leaving it
-     * to be stopped by hand.
+     * Code running in a composition should use [fresh] instead, which stops the watch automatically
+     * when the composable leaves the page.
      */
     public fun watch(every: Duration): Watch {
         require(every > Duration.ZERO) { "a watch interval has to be positive, was $every" }
         synchronized(watchers) {
             val shortens = watchers.minOrNull()?.let { every < it } ?: true
             watchers += every
-            // Restarted only when this watcher wants it sooner than anyone already watching. A new
-            // watcher on the same interval — the ordinary case, a second session opening the same page —
-            // joins the schedule in flight, because restarting on every arrival would mean a busy page
-            // never reaching the end of a wait.
+            // Only restart the loop if this watcher needs a shorter interval than the current one. The
+            // common case is a second session opening the same page with the same interval; it joins
+            // the running loop. Restarting on every new watcher would reset the delay each time, and a
+            // busy page might never reach the end of it.
             if (polling == null || shortens) {
                 polling?.cancel()
                 polling = scope.launch { poll() }
@@ -218,8 +220,9 @@ public class Fetch<V>(
 
     private suspend fun poll() {
         while (true) {
-            // Re-read every turn, so that a watcher leaving relaxes the interval without a restart. A
-            // watcher *arriving* with something shorter cannot wait for that — see `watch`.
+            // Recomputed on every iteration so that when a watcher leaves, the interval can lengthen
+            // without restarting the loop. A new watcher that needs a shorter interval can't wait for
+            // this, so `watch` restarts the loop in that case.
             val every = synchronized(watchers) { watchers.minOrNull() } ?: return
             delay(every)
             refresh()
@@ -233,7 +236,8 @@ public class Fetch<V>(
     }
 
     private fun schedule() {
-        // Started lazily so that losing the race costs a cancelled job rather than a second request.
+        // The job is created lazily and only started if it wins the compare-and-set. A caller that
+        // loses the race cancels a job that never ran, so no duplicate request is sent.
         val job = scope.launch(start = CoroutineStart.LAZY) { attempt() }
         job.invokeOnCompletion { inFlight.compareAndSet(job, null) }
         if (inFlight.compareAndSet(null, job)) job.start() else job.cancel()
@@ -243,34 +247,34 @@ public class Fetch<V>(
         val arrived: Fetched<V>? = try {
             Fetched.Ready(fetch())
         } catch (cancelled: CancellationException) {
-            // Not a failure: the scope is going away, and "unavailable" on a page being torn down would
-            // be a lie about the endpoint.
+            // Cancellation means the scope is shutting down, not that the endpoint failed. Reporting it
+            // as a failure would show "unavailable" for a working endpoint.
             throw cancelled
         } catch (t: Throwable) {
-            // Null means keep what we have. A revalidation that fails is not a reason to lose a value
-            // that worked.
+            // Null means "keep the current value". A failed revalidation shouldn't discard a value
+            // that was fetched successfully.
             if (state.value is Fetched.Ready) null else Fetched.Failed(t)
         }
-        // Published as an apply rather than written loose into the global snapshot: applying notifies
-        // the recomposers, where a bare write waits for [GlobalSnapshotManager]'s pump to notice it.
-        // (What makes a twenty-field response cost one recomposition is not this line but the value
-        // being one object: every field a page reads is a read of this one cell.)
+        // Applied through a snapshot instead of written directly to the global snapshot, because
+        // applying notifies the recomposers immediately; a direct write waits for
+        // [GlobalSnapshotManager]'s pump. (A large response still costs one recomposition because the
+        // value is one object in one cell, not because of this line.)
         if (arrived != null) Snapshot.withMutableSnapshot { state.value = arrived }
         attemptedAt = now()
     }
 }
 
-/** A standing request to keep a [Fetch] fresh. Stop it when whoever wanted it stops looking. */
+/** A request to keep a [Fetch] refreshed. Call [stop] when the caller no longer needs the value. */
 public fun interface Watch {
     public fun stop()
 }
 
 /**
- * The value, kept refreshed every [every] for as long as this composable is on the page.
+ * Returns the value and keeps it refreshed every [every] while this composable is on the page.
  *
- * The framework's answer to "poll while the user is looking at it", and the reason it can be one line:
- * a composition *is* the lifecycle. While the page is composed the value is watched; when the session
- * navigates away, closes or hibernates, the composition goes and so does the watch.
+ * This covers the "poll while the user is looking" case. It needs no lifecycle plumbing because the
+ * composition is the lifecycle: the watch starts when the composable enters the composition and stops
+ * when it leaves, whether because the session navigated away, closed or hibernated.
  *
  * ```kotlin
  * @Composable
@@ -283,13 +287,13 @@ public fun interface Watch {
  * }
  * ```
  *
- * Two sessions showing the same value share one loop and one request, because they share the [Fetch] —
- * the watching is reference-counted on it, not on either composition. Ten people watching a dashboard
- * cost what one person watching it costs, and when the tenth closes the tab the requests stop.
+ * Watchers are counted on the [Fetch], not per composition, so sessions showing the same value share
+ * one loop and one request per interval. Ten people viewing a dashboard cost the same as one, and the
+ * requests stop once the last of them closes the page.
  *
- * A hibernated session stops watching, which is the right answer and not an accident: its composition is
- * torn down, so nobody is looking. When it wakes and recomposes it watches again, and the first read
- * revalidates anything that went stale while it slept.
+ * Hibernating a session stops its watch, which is intended: its composition is torn down, so nobody
+ * is looking. When the session wakes and recomposes it starts watching again, and the first read
+ * revalidates any value that went stale in the meantime.
  */
 @Composable
 public fun <V> Fetch<V>.fresh(every: Duration): Fetched<V> {

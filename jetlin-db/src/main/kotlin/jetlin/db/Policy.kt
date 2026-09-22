@@ -1,19 +1,19 @@
 package jetlin.db
 
 /**
- * Whoever the framework is acting on behalf of — normally a `User` entity.
+ * The identity the framework acts on behalf of, usually a `User` entity.
  *
- * A marker, so that a policy's principal type cannot accidentally be a string or an id. The principal is
- * deliberately a live record rather than a snapshot taken at login: a policy that reads
- * `principal.isAdmin` reads a cell, which is what makes revocation reactive.
+ * This marker interface stops a policy's principal type from accidentally being a string or an id.
+ * The principal is meant to be a live record, not a copy taken at sign-in. A policy that reads
+ * `principal.isAdmin` then reads a cell, so revoking the role takes effect immediately.
  */
 public interface Principal
 
 /**
- * Who may see and change a record.
+ * Access rules for an entity: who may read, change, create and delete its records.
  *
- * Declared on the entity's companion, which is what makes it impossible to have an entity with no
- * access rules — KSP fails the build on one.
+ * A policy is implemented by the entity's companion object. The KSP processor fails the build for any
+ * entity without one, so every entity has access rules.
  *
  * ```kotlin
  * // Owner only.
@@ -33,54 +33,53 @@ public interface Principal
  * }
  * ```
  *
- * Because the graph is resident, a policy is a plain Kotlin expression over live objects. There is no
- * SQL translation, no expression tree and no second representation to keep in step with the schema —
- * which is the main thing the memory image buys.
+ * Because all records are in memory, a policy is ordinary Kotlin code operating on live objects. It
+ * doesn't have to be translated to SQL, so there is no expression tree and no second representation
+ * to keep consistent with the schema. This is the main benefit of keeping the data in memory.
  *
- * ## Two consequences worth knowing before writing one
+ * ## Things to know before writing a policy
  *
- * **Policies sit on the recomposition hot path.** Reading a policy-filtered collection evaluates the
- * policy per record, per read, and deliberately does not cache: a cached decision outlives the state it
- * was based on, which is exactly how reactive revocation gets broken. So a policy must be cheap, pure
- * and free of side effects. No IO, no suspending calls.
+ * **Policies run during recomposition.** Reading a policy-filtered collection evaluates the policy for
+ * each record on every read. Results are not cached, because a cached decision can outlive the state
+ * it was based on, which would break reactive revocation. A policy must therefore be cheap, pure and
+ * free of side effects: no IO and no suspending calls.
  *
- * **The principal is an ordinary parameter, not a context parameter.** Policies are called by the
- * framework and never by application code, so there is nothing to protect at this layer. Context
- * parameters are for the application-facing API, where they stop a mutation from compiling without a
- * principal in scope.
+ * **The principal is a normal parameter, not a context parameter.** Only the framework calls policies,
+ * so there is nothing to enforce here. Context parameters are used in the application-facing API
+ * instead, where they make a mutation without a principal in scope a compile error.
  */
 public interface Policy<T : Record, P : Principal> {
 
-    /** Whether [principal] may obtain and read [record] at all. */
+    /** Whether [principal] may obtain and read [record]. */
     public fun canRead(record: T, principal: P): Boolean
 
-    /** Whether [principal] may change [record]. Defaults to "whoever can read it can write it". */
+    /** Whether [principal] may change [record]. By default, anyone who can read it can change it. */
     public fun canWrite(record: T, principal: P): Boolean = canRead(record, principal)
 
     /**
-     * Whether [principal] may change one particular column.
+     * Whether [principal] may change a specific column of [record].
      *
-     * The reason `update { }` takes a block rather than assigning fields directly: one block can have
-     * `title = "x"` accepted and `archived = true` refused.
+     * This per-column check is why `update { }` takes a block instead of allowing direct assignment:
+     * each assignment in the block is checked separately, so `title = "x"` can be allowed while
+     * `archived = true` is refused.
      */
     public fun canWrite(record: T, column: Column<T>, principal: P): Boolean = canWrite(record, principal)
 
-    /** Whether [principal] may store [record] in the first place. */
+    /** Whether [principal] may store a new [record]. */
     public fun canCreate(record: T, principal: P): Boolean = canWrite(record, principal)
 
     public fun canDelete(record: T, principal: P): Boolean = canWrite(record, principal)
 }
 
 /**
- * The policy for a record only its owner may see.
+ * A policy for records that only their owner may access.
  *
  * ```kotlin
  * companion object : Policy<Todo, User> by owned(Todo::owner)
  * ```
  *
- * The commonest shape by a wide margin, and the one most likely to be written wrong by hand — an
- * `||` that was meant to be `&&` in a policy is a silent disclosure, so the shape that needs no
- * expression is worth having.
+ * This is by far the most common policy. Having a ready-made version avoids hand-written mistakes,
+ * such as using `||` where `&&` was meant, which would silently expose records.
  */
 public fun <T : Record, P : Principal> owned(owner: (T) -> P): Policy<T, P> =
     object : Policy<T, P> {
@@ -88,14 +87,14 @@ public fun <T : Record, P : Principal> owned(owner: (T) -> P): Policy<T, P> =
     }
 
 /**
- * Thrown when a principal tries to change or store something a policy refuses.
+ * Thrown when a policy refuses a write, create or delete.
  *
- * Reads do not throw: a record a principal may not read is absent — missing from collections, `null` from a
- * lookup — because a thrown read would disclose that the record exists. Writes do throw, because a write
- * a policy refuses is a bug or an attack, and either way the caller asked for something impossible
- * rather than asking about something invisible.
+ * Reads never throw this. A record the principal may not read is simply absent: missing from
+ * collections and `null` from lookups, because an error would reveal that the record exists. A refused
+ * write does throw, because it indicates a bug or an attack; the caller asked to do something it isn't
+ * allowed to, rather than asking about something it can't see.
  *
- * Thrown inside a transaction it unwinds the whole of it: nothing is committed and nothing is applied,
- * so the denial produces no patch at all.
+ * When thrown inside a transaction, it rolls back the entire transaction. Nothing is committed or
+ * applied, so no patch is sent.
  */
 public class AccessDenied internal constructor(message: String) : RuntimeException(message)

@@ -4,11 +4,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * A schema as data: what the entities declare, and what the repository has recorded.
+ * A schema as data. Used both for the schema the entities declare and for the recorded snapshot.
  *
- * Written by `:jetlin-db-ksp` into the generated resources, and checked into the repository as
- * `db/schema.json`. The two are compared to decide what a migration has to do, and `dbVerify` fails when
- * they disagree — which is the only thing that keeps a generated migration trustworthy.
+ * `:jetlin-db-ksp` writes the declared schema into the generated resources, and the recorded schema is
+ * checked into the repository as `db/schema.json`. Comparing them determines what a migration has to
+ * do, and `dbVerify` fails when they differ. That check is what ensures generated migrations are based
+ * on an up-to-date snapshot.
  */
 @Serializable
 public data class SchemaFile(
@@ -24,7 +25,7 @@ public data class SchemaFile(
             prettyPrintIndent = "  "
         }
 
-        /** An empty schema: what a repository with no snapshot yet is compared against. */
+        /** An empty schema, used as the recorded schema when a repository has no snapshot yet. */
         public val Empty: SchemaFile = SchemaFile()
 
         public fun parse(text: String): SchemaFile = json.decodeFromString(text)
@@ -51,7 +52,7 @@ public data class ColumnSchema(
     val primaryKey: Boolean = false,
     val owner: Boolean = false,
 ) {
-    /** Column definition as it appears inside `CREATE TABLE`. */
+    /** The column definition as written inside `CREATE TABLE`. */
     internal fun definition(): String = buildString {
         append(name).append(' ').append(type)
         if (primaryKey) append(" PRIMARY KEY")
@@ -60,11 +61,11 @@ public data class ColumnSchema(
     }
 
     /**
-     * What to put in an existing row when this column arrives.
+     * The value to fill into existing rows when this column is added.
      *
-     * A guess, and deliberately a visible one: the generated migration carries it as SQL a human reads
-     * before running. There is no value a framework can know is right, and refusing to generate anything
-     * would leave the author with the harder half of the job.
+     * This is a guess, and it is written into the generated migration so the author sees it before
+     * running it. The framework can't know the correct value, but generating nothing would leave the
+     * author to write the whole migration by hand.
      */
     internal fun backfill(): String = when {
         nullable -> "NULL"

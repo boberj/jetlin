@@ -34,52 +34,56 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * An external system, and how an application reaches one.
+ * A client for an external system (the "hub"), showing how an application uses data it doesn't own.
  *
- * Everything above this line in the sample is stored: records in SQLite, resident, gated by a policy.
- * This is the other kind of data — someone else's, arriving over HTTP, late, and sometimes not at all —
- * and the point of the file is that it needs almost nothing from the framework. A [Fetch] is snapshot
- * state with a coroutine behind it, so an arrival recomposes whoever read it, in every session, by the
- * same mechanism a committed transaction does.
+ * The rest of this sample works with stored data: records in SQLite, held in memory and checked
+ * against policies. The hub's data is different. It belongs to another system, arrives over HTTP after
+ * a delay, and sometimes doesn't arrive. This file shows that the framework needs very little extra to
+ * support it. A [Fetch] is snapshot state updated by a coroutine, so when a value arrives, every
+ * session that read it recomposes, the same way they do after a committed transaction.
  *
  * ## Why there is no policy here
  *
- * A stored record is reached through the gate, because one identity map holds one object per row and
- * everybody shares it. Nothing of the sort happens here: a profile is fetched with the credential of the
- * principal who asked for it, and the cache is keyed by that principal, so there is no object for the
- * wrong principal to reach. The question a policy would answer is answered by construction instead —
- * which is the honest reason this sample has one authorization model and not two.
+ * Stored records have to go through the gate because the identity map holds one shared object per row,
+ * visible to every session. This cache is different. Each profile is fetched with the credentials of
+ * the principal who requested it, and cached under that principal's key, so there is no way for
+ * another principal to reach it. The access question is answered by how the cache is keyed, which is
+ * why this sample needs only one authorization model.
  *
- * That argument holds exactly as far as the key does. A cache shared across principals — one object for
- * `acme/private` fetched with whoever asked first — would put Alice's authority in Bob's hands, and it
- * would need the gate and an authority on the key. That is the design in §11 of the plan, and it is not
- * built, because nothing here needs it yet.
+ * That only holds as long as the cache is keyed by principal. A cache shared between principals, for
+ * example one object for `acme/private` fetched with the credentials of whoever asked first, would
+ * give Bob data fetched with Alice's access. It would need policy checks and an authority component in
+ * the cache key. `docs/db-framework-plan.md` §11 describes that design; it hasn't been built because
+ * nothing needs it yet.
  */
 class Hub(
     private val baseUrl: String,
     private val client: HttpClient = HttpClient(CIO),
     /**
-     * How often a page that is open keeps the announcement fresh.
+     * How often an open page refreshes the announcement.
      *
-     * Short enough to see by hand: `curl -X POST -d 'text' -H 'Authorization: Bearer teams-application'
-     * localhost:8081/hub/announcement` and every open window changes within this, with no push from the
-     * application and one request between all of them.
+     * It is short so you can watch it work. Run `curl -X POST -d 'text' -H 'Authorization: Bearer
+     * teams-application' localhost:8081/hub/announcement`, and every open window updates within this
+     * interval. The application pushes nothing, and all the windows share one request per interval.
      */
     val refreshEvery: Duration = 15.seconds,
     /**
-     * Where fetches run: never a session's dispatcher.
+     * The scope fetches run on. It must not be a session's dispatcher.
      *
-     * A session composes on one confined thread, and a request on it would stall everything that session
-     * is doing. This scope also outlives any one session, which is what lets two of them share a fetch.
+     * Each session composes on a single confined thread, so a network request on that thread would
+     * stall the whole session. This scope also outlives individual sessions, which is what allows
+     * several sessions to share one fetch.
      */
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : AutoCloseable {
 
     /**
-     * The one thing everybody sees the same way, fetched with the application's own credential.
+     * The announcement, which is the same for everyone and is fetched with the application's own
+     * credential.
      *
-     * One [Fetch] for the whole process, so a hundred sessions cost one request a minute — the shape
-     * §11.5 calls the application-token case, and the only one where sharing a cache is sound.
+     * There is a single [Fetch] for the whole process, so a hundred sessions cost one request a minute.
+     * This is what §11.5 of the plan calls the application-token case, and it is the only case where a
+     * cache shared between principals is safe.
      */
     val announcement: Fetch<String> = Fetch(scope, ttl = 1.minutes) {
         val body = client.get("$baseUrl/hub/announcement") { bearer(APPLICATION_TOKEN) }.orRefuse()
@@ -91,8 +95,8 @@ class Hub(
     /**
      * This principal's profile, fetched with this principal's credential.
      *
-     * Keyed by the principal, which is the whole of the access control: Bob's read creates Bob's [Fetch]
-     * with Bob's token, and Alice's copy is not something he can name.
+     * The cache is keyed by principal, and that is all the access control this needs. When Bob reads
+     * his profile, it creates a [Fetch] that uses Bob's token, and he has no way to refer to Alice's.
      */
     fun profile(of: User): Fetch<Profile> = profiles.computeIfAbsent(of.email) { email ->
         Fetch(scope, ttl = 30.seconds) {
@@ -106,15 +110,16 @@ class Hub(
     }
 
     /**
-     * Sets this principal's status, and marks their profile as needing a fresh copy.
+     * Sets this principal's status on the hub, then refetches their profile.
      *
-     * A command rather than an assignment, and suspending, which is what keeps it out of `db.transact { }`:
-     * a transaction takes a non-suspending block precisely because a rollback cannot un-send a request.
+     * This is a suspending function, not a property assignment, so it can't be called inside
+     * `db.transact { }`. That is intended: a transaction's block can't suspend because a rollback can't
+     * undo an HTTP request.
      *
-     * `refresh` rather than `invalidate`, because somebody demonstrably is looking: they pressed the
-     * button. Marking it stale would work here too — the action's own state change recomposes the page,
-     * which re-reads — but that is a coincidence of this page's markup rather than a property, and a
-     * command should not depend on one.
+     * It calls `refresh` instead of `invalidate` because the user is known to be looking: they just
+     * pressed the button. `invalidate` would happen to work on this page too, since the action's state
+     * change recomposes the page and causes a re-read. But that depends on how this particular page is
+     * built, and a command shouldn't rely on it.
      */
     suspend fun setStatus(of: User, text: String) {
         client.post("$baseUrl/hub/me/status") {
@@ -130,25 +135,25 @@ class Hub(
     }
 }
 
-/** What the hub knows about someone. One request fills all of it, so it arrives as one object. */
+/** A user's profile on the hub. One request returns all of it, so it arrives as a single object. */
 data class Profile(val status: String, val updates: Int)
 
-/** What the hub says when it will not do something. Shown on the page; never thrown at the session. */
+/** The hub's reason for refusing a request. It is shown on the page and never ends the session. */
 class HubRefused(message: String) : RuntimeException(message)
 
-/** The credential the application uses as itself, for the things that are the same for everyone. */
+/** The application's own credential, used for data that is the same for every user. */
 const val APPLICATION_TOKEN: String = "teams-application"
 
 /**
- * The external system, in process.
+ * A stub of the external system, running in the same process.
  *
- * A stub, and it says so: it is a fixture with a real HTTP boundary rather than a third-party API, which
- * is the only kind of external system a test can depend on. It is mounted on the same Ktor instance that
- * serves the sample, so there is one port and no network.
+ * This is not a real third-party API. It is a test fixture with a real HTTP boundary, which is
+ * something tests can depend on. It is mounted on the same Ktor server as the sample, so it uses the
+ * same port and needs no network access.
  *
- * Its "authentication" is a bearer token that is the user's email address, which is exactly as much
- * authentication as this sample's cookie — and for the same reason: the interesting half is what happens
- * to the data, not how someone proved who they are.
+ * Its authentication is a bearer token containing the user's email address. That is no weaker than
+ * the sample's own sign-in cookie, and for the same reason: the sample is about what happens to the
+ * data, not about how users prove their identity.
  */
 fun Application.hubService(data: HubData = HubData()) {
     routing {
@@ -157,8 +162,8 @@ fun Application.hubService(data: HubData = HubData()) {
             data.calls += "announcement"
             call.respondJson { put("text", data.announcement) }
         }
-        // So that the polling can be seen doing something: change this from a terminal and watch every
-        // open window follow, without the application knowing anything happened.
+        // Lets you see the polling work. Change the announcement from a terminal and every open window
+        // updates, even though the application was never told about the change.
         post("/hub/announcement") {
             if (call.token() != APPLICATION_TOKEN) return@post call.refuse("the application token is required")
             data.announcement = call.receiveText().trim()
@@ -176,8 +181,8 @@ fun Application.hubService(data: HubData = HubData()) {
             val who = call.token() ?: return@post call.refuse("a user token is required")
             val text = call.receiveText().trim()
             if (text.length > STATUS_LIMIT) {
-                // The failure path, and a real one: a page has to be able to show a refusal that the
-                // application could not have predicted.
+                // A real failure path: the page has to be able to show a refusal that the application
+                // had no way to anticipate.
                 call.respondText(
                     "a status has to fit in $STATUS_LIMIT characters",
                     status = HttpStatusCode.UnprocessableEntity,
@@ -190,17 +195,17 @@ fun Application.hubService(data: HubData = HubData()) {
     }
 }
 
-/** What the stub remembers between requests. Per instance, so a test starts from a known state. */
+/** The stub's state between requests. Each test can create its own instance to start from a known state. */
 class HubData(var announcement: String = "Deploy freeze on Friday") {
     private val statuses = ConcurrentHashMap<String, String>()
     private val updates = ConcurrentHashMap<String, Int>()
 
     /**
-     * How many times each endpoint has been asked, and by whom.
+     * A log of the requests each endpoint received, and from whom.
      *
-     * A fixture that can be asked what it was asked. Worth having because the interesting claims about
-     * caching — one announcement for everybody, one profile per principal — are claims about requests
-     * that did *not* happen, and nothing else can see those.
+     * The important caching properties (one announcement fetch for everyone, one profile fetch per
+     * principal) are about requests that were *not* made. Only the server can observe that, so the
+     * stub records every call for tests to check.
      */
     val calls: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
 
@@ -220,7 +225,7 @@ private fun io.ktor.client.request.HttpRequestBuilder.bearer(token: String) {
     header(HttpHeaders.Authorization, "Bearer $token")
 }
 
-/** The body, or the hub's own words about why not. */
+/** Returns the response body, or throws [HubRefused] with the hub's error message. */
 private suspend fun HttpResponse.orRefuse(): String {
     if (!status.isSuccess()) throw HubRefused(bodyAsText().ifBlank { status.description })
     return bodyAsText()

@@ -43,12 +43,12 @@ public class LiveView(
     private val titleState = mutableStateOf<String?>(null)
 
     /**
-     * The document title the composition asked for, or null if it asked for nothing.
+     * The document title set by the composition, or null if it didn't set one.
      *
-     * Read by whatever renders the page, *after* the first composition has settled. It comes from the
-     * composition rather than from the route table because a route's title can depend on what the route
-     * resolved — and a title derived from a record that the principal may not read would disclose it in
-     * `<head>`, which is rendered before the body that refused to show it.
+     * The page renderer reads this after the first composition has settled. The title comes from the
+     * composition instead of the route table because it can depend on the record the route resolved.
+     * `<head>` is rendered before the body, so a title computed from a record the principal may not read
+     * would reveal it even though the body refused to show it.
      */
     public val title: String? get() = titleState.value
 

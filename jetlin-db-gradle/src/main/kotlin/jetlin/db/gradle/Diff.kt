@@ -1,11 +1,11 @@
 package jetlin.db.gradle
 
-/** One difference between the recorded schema and what the entities now declare. */
+/** A difference between the recorded schema and the schema the entities currently declare. */
 public sealed interface Change {
-    /** Whether applying this loses data that cannot be recovered by running the migration backwards. */
+    /** Whether applying this change loses data that reversing the migration couldn't restore. */
     public val destructive: Boolean
 
-    /** One line, for the migration's header and for `dbVerify`'s failure message. */
+    /** A one-line description, used in the migration's header and in `dbVerify`'s error message. */
     public val summary: String
 
     public data class AddTable(val table: TableSchema) : Change {
@@ -31,7 +31,7 @@ public sealed interface Change {
     /**
      * A column whose type, nullability or foreign key changed.
      *
-     * The case SQLite cannot do in place, and therefore the case that makes the generator interesting.
+     * SQLite can't make these changes in place, so they require a table rebuild.
      */
     public data class AlterColumn(
         val table: String,
@@ -39,8 +39,8 @@ public sealed interface Change {
         val to: ColumnSchema,
     ) : Change {
         override val destructive: Boolean
-            // Narrowing is the lossy direction: a value that does not fit is silently coerced by SQLite,
-            // and a row that does not satisfy a new NOT NULL stops the migration rather than warning.
+            // Narrowing can lose data. SQLite silently converts values that don't fit a new type, and a
+            // row that violates a new NOT NULL makes the migration fail.
             get() = from.nullable && !to.nullable || from.type != to.type
 
         override val summary: String get() = buildString {
@@ -64,10 +64,10 @@ public sealed interface Change {
 }
 
 /**
- * What has to happen to turn [from] into [to].
+ * Lists the changes that turn schema [from] into schema [to].
  *
- * Ordered so that the SQL can be applied in sequence: tables arrive before the columns that reference
- * them, and drops come last, so a table is never removed while something still points at it.
+ * The changes are ordered so the SQL can run top to bottom. New tables come before columns that
+ * reference them, and drops come last, so a table isn't removed while something still references it.
  */
 public fun diff(from: SchemaFile, to: SchemaFile): List<Change> {
     val changes = mutableListOf<Change>()
@@ -87,7 +87,8 @@ public fun diff(from: SchemaFile, to: SchemaFile): List<Change> {
         }
     }
 
-    // Drops last: a column or table still referenced is a foreign key failure rather than a silent hole.
+    // Drops go last. If something still references a dropped table or column, the foreign key check
+    // fails the migration instead of leaving a dangling reference.
     for (table in from.tables) {
         val now = to.table(table.name) ?: continue
         for (column in table.columns) {

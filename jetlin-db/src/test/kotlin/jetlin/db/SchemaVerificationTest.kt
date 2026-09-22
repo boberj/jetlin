@@ -11,12 +11,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /**
- * Booting onto a database that does not match the entities.
+ * Tests opening a database whose schema doesn't match the entities.
  *
- * The failure this prevents is the quiet one. `CREATE TABLE IF NOT EXISTS` says nothing about a table that
- * already exists in a different shape, so a migration that was never applied would show up as a failed
- * insert during a deploy, or as a column that is silently never read — not as something anyone could find
- * by looking.
+ * Without the check, this would fail silently. `CREATE TABLE IF NOT EXISTS` ignores a table that exists
+ * with a different structure, so an unapplied migration would only show up as a failed insert during a
+ * deploy, or as a column that is never read.
  */
 class SchemaVerificationTest {
 
@@ -35,7 +34,7 @@ class SchemaVerificationTest {
     @Test
     fun `a missing column refuses to boot, naming it`(): Unit = withStore { file ->
         Db.open(file, schema()).use { }
-        // What an un-applied migration looks like from the database's side.
+        // This is what an unapplied migration looks like in the database.
         execute(file, "ALTER TABLE tasks DROP COLUMN archived")
 
         val failure = assertFailsWith<IllegalStateException> { Db.open(file, schema()).close() }
@@ -72,8 +71,8 @@ class SchemaVerificationTest {
 
         val failure = assertFailsWith<IllegalStateException> { Db.open(file, schema()).close() }
 
-        // Loud rather than ignored: a column nothing reads is either a migration half-applied or a column
-        // somebody removed from an entity without migrating, and both want a decision.
+        // An extra column fails startup instead of being ignored. It means either a partly applied
+        // migration or a column removed from an entity without a migration, and both need a decision.
         assertContains(failure.message.orEmpty(), "'tasks.legacy_notes' is stored but no entity declares it")
     }
 

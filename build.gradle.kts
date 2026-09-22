@@ -25,8 +25,9 @@ subprojects {
 }
 
 /**
- * An included build is not reached by the root build's own lifecycle tasks, so the tooling's tests would
- * silently never run. `./gradlew build` and `./gradlew check` stay the two commands that cover everything.
+ * The root build's lifecycle tasks don't run tasks in included builds, so without these the migration
+ * tooling's tests would never run. With them, `./gradlew build` and `./gradlew check` still cover the
+ * whole repository.
  */
 for (lifecycle in listOf("build", "check")) {
     tasks.register(lifecycle) {

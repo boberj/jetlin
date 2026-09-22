@@ -1,54 +1,59 @@
 # jetlin-db
 
-Persistence for jetlin applications. Entities are ordinary Kotlin objects that live in memory, backed by
-Compose snapshot state and stored in SQLite. Reading a field subscribes the composable that read it;
-writing one commits to disk and recomposes every session that was reading it. Access control is declared
-per entity as a Kotlin function and enforced where data is obtained.
+`jetlin-db` is the persistence layer for Jetlin applications. Entities are ordinary Kotlin objects kept
+in memory, backed by Compose snapshot state and stored in SQLite. Reading a field subscribes the
+composable that read it. Writing a field commits the change to disk and then recomposes every session
+that read it. Access control is declared per entity as Kotlin functions, and it is enforced whenever
+application code obtains a record.
 
-Status: **built and tested, not yet used by a production application.** `samples/teams` is the readable
-proof; section 8 lists what is missing, in the order it would stop you shipping.
+Status: **built and tested, but not yet used by a production application.** `samples/teams` shows it
+in use. Section 8 lists what is missing, ordered by how likely each gap is to block a release.
 
-`samples/demo` deliberately keeps its own in-memory store. It was ported to this framework and then put
-back: the port worked — its 16 application tests and its browser suite passed unchanged — but a sample
-whose job is to demonstrate the view layer is clearer without a database in it, and keeping one sample on
-plain `mutableStateOf` also keeps it honest that `jetlin-db` is optional. See the decision log in
-`db-framework-plan.md` §13 for what the port cost, which is the useful part of the answer.
+`samples/demo` intentionally keeps its own in-memory store. It was ported to `jetlin-db` and then
+reverted. The port worked: its 16 application tests and its browser tests passed without changes. But
+the demo exists to show the view layer, and it is clearer without a database. Keeping one sample on
+plain `mutableStateOf` also shows that `jetlin-db` is optional. The decision log in
+`db-framework-plan.md` §13 records what the port involved, which is a useful estimate for porting an
+existing application.
 
 ---
 
 ## 1. How it works
 
-Three things, and the second is the one that is not obvious.
+The design rests on three mechanisms. The second is the least obvious.
 
-**The identity map.** Everything stored is resident: one live object per stored row, for the life of the
-process. Relation traversal is a pointer dereference, so there is no N+1, no lazy-loading protocol, and —
-decisively — no read that can block the single thread a session composes on.
+**The identity map.** Every stored row is loaded into memory as a single live object, and stays there
+for the life of the process. Following a relation is a field access, so there is no N+1 problem, no
+lazy loading, and, most importantly, no read that can block the single thread a session composes on.
 
-**Cells.** A record's mutable state lives in snapshot state with a name attached. A read inside a
-composable subscribes that composable. A write invalidates every composable that read it, in every
-session, because the map is process-wide and the cells are ordinary Compose state.
+**Cells.** A record's mutable fields are stored in named snapshot state, called cells. Reading a cell
+in a composable subscribes that composable. Writing a cell invalidates every composable that read it,
+in every session, because the identity map is shared across the process and cells are ordinary Compose
+state.
 
-**The snapshot is the transaction.** Compose snapshots are MVCC: isolated reads, an atomic apply,
-conflict detection on merge. A database transaction is the same shape, so `transact` uses one.
+**Transactions are snapshots.** Compose snapshots provide MVCC: isolated reads, atomic apply, and
+conflict detection on merge. That is the same model as a database transaction, so `transact` uses a
+snapshot.
 
 ```
  db.transact { todo.update { done = true } }
       │
-      ├─ 1. take a mutable snapshot          ← reads isolated, writes invisible
+      ├─ 1. take a mutable snapshot          ← reads isolated, writes not yet visible
       ├─ 2. run the block                    ← cells record which columns changed
-      ├─ 3. BEGIN; UPDATE todos …; COMMIT    ← SQLite decides whether this is allowed
-      └─ 4. snapshot.apply()                 ← only now can any session see it
+      ├─ 3. BEGIN; UPDATE todos …; COMMIT    ← SQLite accepts or rejects the write
+      └─ 4. snapshot.apply()                 ← only now can other sessions see it
                 │
-                └──► the compositions that read those cells recompose ──► patches
+                └──► compositions that read those cells recompose ──► patches
 ```
 
-Step 3 before step 4 is the point. A write the database refuses — a constraint violation, a policy
-denial, a block that threw — never becomes visible to any composition, so no session ever renders a value
-the database rejected, and there is nothing to roll back on screen. The usual optimistic-update-then-revert
-has a visible wrong state in it; this has none.
+The order of steps 3 and 4 is the key point. If the database rejects a write (a constraint
+violation, a policy denial, or an exception in the block), the change never becomes visible to any
+composition. No session renders a value the database refused, so nothing has to be reverted on screen.
+The common approach of updating the UI optimistically and reverting on failure briefly shows a wrong
+value; this approach never does.
 
-It also means the failure modes are all the same failure mode: `AccessDenied`, a SQLite error and an
-exception from your own code all unwind the snapshot, and all of them produce no patch.
+It also means every kind of failure is handled the same way. `AccessDenied`, a SQLite error and an
+exception from your own code all discard the snapshot, and none of them produce a patch.
 
 ---
 
@@ -70,54 +75,55 @@ class Todo(
 }
 ```
 
-A column is a delegated property or a primary-constructor property, and nothing else. A plain `var` on an
-entity is a compile error: nothing records it, so a write would reach the screen and never the database,
-and that divergence is invisible until a restart.
+A column is either a delegated property or a primary-constructor property. A plain `var` on an entity
+is a compile error: nothing would record writes to it, so a change would appear on screen but never
+reach the database, and the difference wouldn't be noticed until a restart lost it.
 
-KSP generates, from that declaration: the table, a `Todos` object holding its columns, a `TodoDraft` type
-for writes, the policy-gated accessors, and a schema snapshot for the migration tooling. An `@Entity` with
-no policy fails the build.
+From this declaration, KSP generates the table definition, a `Todos` object holding the column objects,
+a `TodoDraft` type used for writes, the policy-checked accessors, and a schema snapshot for the
+migration tooling. An `@Entity` without a policy fails the build.
 
-### The three access shapes
+### The three access patterns
 
-All three are in `samples/teams`, where they can be read rather than taken on trust.
+All three are used in `samples/teams`, so you can see them working.
 
 ```kotlin
 // 1. Owner only.
 companion object : Policy<Note, User> by owned(Note::owner)
 
-// 2. Shared by a property of a related record, written by the owner.
+// 2. Shared through a related record, and writable by the owner.
 override fun canRead(record: Todo, principal: User): Boolean =
     record.owner == principal || (record.team != null && record.team == principal.team)
 override fun canWrite(record: Todo, principal: User): Boolean = record.owner == principal
 
-// 3. Read by many, one column restricted.
+// 3. Widely readable, with one restricted column.
 override fun canWrite(record: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
     Todos.archived -> principal.admin
     else -> canWrite(record, principal)
 }
 ```
 
-Because the graph is resident, a policy is a plain Kotlin expression over live objects. No SQL
-translation, no expression tree, no second representation to keep in step with the schema. That is the
-main thing the memory image buys, and section 5 is what it buys on top.
+Because all records are in memory, a policy is ordinary Kotlin code operating on live objects. It
+doesn't need to be translated to SQL, so there is no expression tree and no second representation to
+keep consistent with the schema. That is the main benefit of keeping data in memory, and section 5
+describes a further one.
 
-Two consequences worth knowing before writing one:
+Two things to know before writing a policy:
 
-- **A policy sits on the recomposition hot path.** A filtered collection evaluates it per record, per read,
-  and caches nothing. Keep policies cheap, pure and free of IO — a `:conventions` test enforces the last
-  of those.
-- **The principal is an ordinary parameter here.** Policies are called by the framework and never by
-  application code, so there is nothing to protect at this layer. Context parameters are for the
-  application-facing API, where they stop a mutation from compiling without a principal in scope.
+- **Policies run during recomposition.** A filtered collection evaluates its policy for each record on
+  every read, and caches nothing. Keep policies cheap, pure and free of IO. A `:conventions` test
+  enforces the last of these.
+- **The principal is a normal parameter here.** Only the framework calls policies, so there is nothing
+  to enforce at this level. Context parameters are used in the application-facing API instead, where
+  they make a write without a principal in scope a compile error.
 
 ---
 
 ## 3. Getting a principal, and protecting routes
 
-The principal enters a session through `attributes { }`, which runs on the HTTP call and again when a socket
-wakes a hibernated session — so the principal is recomputed from the connection that arrived rather than
-trusted from a snapshot that may be minutes old.
+The principal is added to a session by `attributes { }`. That block runs for the initial HTTP request
+and again when a WebSocket wakes a hibernated session, so the principal is recomputed from the new
+connection instead of being restored from a snapshot that may be minutes old.
 
 ```kotlin
 val PrincipalKey = AttributeKey<User?>("principal")
@@ -134,18 +140,19 @@ jetlin {
 }
 ```
 
-**The principal is nullable.** A login page and a marketing page have to be reachable; authentication is a
-route requirement, not a precondition of having a session.
+**The principal is nullable.** Pages such as a login page or a marketing page must be reachable
+without signing in. Authentication is a requirement of individual routes, not of having a session.
 
-`db.authenticate(User::class) { it.email == email }` is the framework's one privileged root: it resolves a
-record with no principal, because otherwise the system cannot bootstrap. A `:conventions` test names it, and
-will fail on a second one added without the same argument.
+`db.authenticate(User::class) { it.email == email }` is the framework's one privileged entry point. It
+looks up a record without a principal, because otherwise there would be no way to establish the first
+principal. A `:conventions` test lists it as an allowed exception, and fails if another unchecked
+entry point is added without the same justification.
 
-`WithPrincipal` bridges a gap that is a property of the language rather than of the design: context
-parameters are lexical and do not flow through a `@Composable () -> Unit`, so the principal is put back into
-scope at the root of each page.
+`WithPrincipal` works around a language limitation, not a design choice. Context parameters are
+lexically scoped and aren't passed through a `@Composable () -> Unit`, so each page brings the
+principal back into scope at its root.
 
-### Guards are a value, not an exception
+### Guards return a value
 
 ```kotlin
 public sealed interface Access {
@@ -155,44 +162,45 @@ public sealed interface Access {
 }
 ```
 
-A view that throws ends the session and restarts the page, which is right for a bug and wrong for "you
-are not signed in". A **failed role check is `NotFound`, not forbidden**: a 403 on `/admin/users` confirms
-there is an admin panel. Disclosure is the explicit choice, never the default.
+A view that throws ends the session and reloads the page. That is right for a bug but wrong for an
+ordinary case like "you need to sign in", so guards return a value instead of throwing. **A failed role
+check returns `NotFound`, not a forbidden page.** A 403 on `/admin/users` would confirm that an admin
+panel exists. Revealing that should be an explicit choice, never the default.
 
 ### Entity-bound routes
 
-The part worth building. Let the route resolve its own subject:
+This is the most important part of route protection. The route looks up its own subject:
 
 ```kotlin
 view(
     "/todo/{id}",
-    subject = { request -> db.todoFor(request) },   // the gated lookup
+    subject = { request -> db.todoFor(request) },   // the policy-checked lookup
     title = { todo -> "${todo.title} · Teams" },
     requires = Principals.signedIn,
 ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
 ```
 
-`db.todoFor` goes through `Todos.find`, which is gated, so it returns null for a record this principal may not
-read — and null renders not-found *before* the body composes and before the title is set. This deletes a
-bug class rather than guarding against it: under this API the insecure version is not expressible, because
-there is no path parameter left to look up by hand.
+`db.todoFor` uses `Todos.find`, which is policy-checked, so it returns null for a record this principal
+may not read. A null subject shows the not-found page *before* the body is composed and before the title
+is set. This removes a whole class of bug instead of just guarding against it. The view never receives
+the path parameter, so it can't look up an arbitrary id by hand.
 
-The title matters more than it looks. `<head>` is rendered before the body, so a title computed from a record
-discloses it even when the body refused to show it. Every route test in this repository asserts the title
-separately for that reason.
+The title matters more than it might seem. `<head>` is rendered before the body, so a title computed
+from a record would reveal the record even if the body refused to show it. For that reason, every route
+test in this repository checks the title separately.
 
-### Three ways in, all tested
+### Three ways to reach a route, all tested
 
 | Entry | What happens |
 |---|---|
-| Deep link | The guard runs at the HTTP layer. A redirect is a 302 with no session built; a refusal is a 404. |
-| In-session navigation | No page load. The guard runs in the composition and redirects client-side. |
-| Hibernation wake | `attributes { }` re-runs, so the principal is recomputed — and the **current** route's guard is re-evaluated, not only the one being entered. A role revoked while a laptop slept is noticed when it opens. |
+| Deep link | The guard runs in the HTTP layer. A redirect is a 302 and no session is created; a refusal is a 404. |
+| Navigation within a session | No page load. The guard runs in the composition and redirects on the client. |
+| Waking from hibernation | `attributes { }` runs again, so the principal is recomputed, and the guard for the **current** route is re-evaluated, not only guards on routes being entered. A role revoked while a laptop was asleep takes effect when it wakes. |
 
-**Guards are not the security boundary.** The record's policy is. A guard is UX plus a cheap early exit: it
-stops you rendering a page that would have been empty. If a guard is ever the only thing protecting data,
-one forgotten guard is a leak. Keep the order — `find` gated, traversal gated, `update` gated, guards on
-top, never instead.
+**Guards are not the security boundary; record policies are.** A guard improves the user experience and
+avoids rendering a page that would be empty. If a guard is ever the only protection for some data,
+forgetting that guard leaks it. Keep the layers in order: `find` is policy-checked, traversal is
+policy-checked, `update` is policy-checked, and guards are added on top, never as a replacement.
 
 ---
 
@@ -210,10 +218,10 @@ fun TodoListPage(db: Db) {
 }
 ```
 
-`db.todos` is a generated `View<Todo>`: a live, policy-filtered list over the identity map. `filter`,
-`sortedBy` and `groupBy` are the stdlib. There is deliberately no query DSL — at this scale a linear scan
-over resident objects is cheaper than parsing anything, and a scan cannot drift out of step with the
-schema.
+`db.todos` is a generated `View<Todo>`: a live list over the identity map, filtered by the policy.
+Queries use the standard library's `filter`, `sortedBy` and `groupBy`. There is intentionally no query
+DSL. At this scale, a linear scan of in-memory objects is cheaper than parsing a query, and it can't get
+out of sync with the schema.
 
 Writes go through a draft:
 
@@ -223,216 +231,231 @@ todo.update { done = !done }
 todo.delete()
 ```
 
-`update` carries `context(principal: User)`, so a mutation with no principal in lexical scope does not
-compile — and because a context parameter really is a parameter, that is checkable against the bytecode,
+`update` takes `context(principal: User)`, so a write without a principal in scope doesn't compile. A
+context parameter is a real parameter in the compiled code, so this can be checked in the bytecode,
 which is what `PolicyTest` does.
 
-**Why `update { }` rather than `todo.done = true`?** A property setter has nowhere to put a context
-parameter, so bare assignment could only check an ambient principal at runtime. `update { }` costs eight
-characters and keeps the guarantee at compile time. The draft is also what makes column-level policy
-possible: one block can have `title = "x"` accepted and `archived = true` refused.
+**Why `update { }` instead of `todo.done = true`?** A property setter can't take a context parameter,
+so plain assignment could only check a thread-local principal at runtime. `update { }` is slightly
+longer to write, but keeps the check at compile time. The draft also makes column-level policies
+possible, because each assignment in the block is checked separately: `title = "x"` can be allowed
+while `archived = true` is refused.
 
-A refusal throws and unwinds the whole transaction rather than skipping the refused column. A silently
-skipped write — changed on screen, absent from disk — is the exact failure this design exists to avoid.
+A refused column throws and rolls back the whole transaction, instead of skipping just that column. A
+silently skipped write, shown on screen but not saved, is exactly the failure this design is meant to
+prevent.
 
-### A reference is authority
+### Holding a reference grants access
 
-Access is checked where a record is **obtained**: a collection, a lookup, a relation. Once application
-code holds a record, reading its fields is unchecked. The alternatives were weighed and rejected: a
-per-principal facade costs an allocation and a check on the recomposition hot path and makes the type flowing
-through the application a view rather than an entity; requiring a principal in the type of every read
-propagates `User` into every composable that touches data.
+Access is checked when a record is **obtained**: from a collection, a lookup or a relation. Once
+application code has a record, reading its fields isn't checked. The alternatives were considered and
+rejected. A per-principal wrapper would add an allocation and a check to every recomposition, and would
+mean the application handles a wrapper instead of the entity. Requiring a principal in the type of
+every read would spread `User` into every composable that touches data.
 
-What makes that survivable is not that it is safe — it is that its failure mode is findable:
+This approach isn't leak-proof, but leaks can be found, for these reasons:
 
-1. Nothing ungated reaches application code, and a `:conventions` test holds that line.
-2. Relation collections are policy-filtered per read.
-3. Writes re-check, because a reference can outlive the check that produced it.
-4. There is exactly one escape hatch. It is called `unsafe`, it is greppable, and it logs at WARN every
-   time it runs.
-5. The leak detector (`-Djetlin.db.leakDetector=true`) records which principals obtained a record and fails
-   any field read under a principal that never did, with the acquisition site attached as the exception's
-   cause. On in every test in this repository; off in production, where it costs one branch.
+1. No unchecked lookup is reachable from application code, and a `:conventions` test enforces that.
+2. Relation collections are filtered by policy on every read.
+3. Writes are checked again, because a reference can outlive the check that produced it.
+4. There is exactly one way to bypass the checks. It is called `unsafe`, it is easy to search for, and
+   it logs a warning every time it runs.
+5. The leak detector (`-Djetlin.db.leakDetector=true`) records which principals obtained each record,
+   and throws when a field is read by a principal that never obtained it. The exception's cause is the
+   stack trace where the record was obtained. It is enabled for every test in this repository. In
+   production it is off and costs one branch per read.
 
 ---
 
 ## 5. Reactive authorization
 
-The framework's most distinctive property, and it is emergent rather than built.
+This is the framework's most distinctive feature, and it follows from the design rather than being
+built separately.
 
-A policy reads live state. Reading a filtered view subscribes the composition to whatever the policy
-touched. So revocation is just a write:
+A policy reads live state, and reading a filtered view subscribes the composition to everything the
+policy read. So revoking access is just a write:
 
 ```kotlin
-// Alice, in her own session, takes a todo back off the team.
+// Alice, in her own session, unshares a todo from the team.
 with(alice) { todo.update { team = null } }
 ```
 
-Bob is looking at `/` in another session. His page iterated `db.todos`, whose filter read
-`record.team == principal.team`. Alice's write invalidates exactly the compositions that read that, Bob's list
-recomposes, and the record leaves his page. Nothing subscribed, nothing broadcast, no invalidation code
-anywhere in the application.
+Bob has `/` open in another session. His page iterated `db.todos`, whose filter read
+`record.team == principal.team`. Alice's write invalidates exactly the compositions that read it, Bob's
+list recomposes, and the todo disappears from his page. There are no subscriptions, broadcasts or
+invalidation code anywhere in the application.
 
-It works for guards too, because a guard is also a read of live state:
+Guards work the same way, because a guard also reads live state:
 
 ```kotlin
-// An admin demoting someone who is sitting on /admin/users.
+// An admin removes the admin role from someone who is viewing /admin/users.
 with(root) { user.update { admin = false } }
 ```
 
-That user's `Guarded` re-evaluates, resolves to `NotFound`, and they are off the page. No polling, no
-logout broadcast. Same for entity-bound routes: unshare a project and whoever is holding one of its todos
-open lands on not-found.
+That user's `Guarded` re-evaluates to `NotFound`, and they are moved off the page, without polling or a
+logout broadcast. Entity-bound routes behave the same way: if a project is unshared, anyone viewing one
+of its todos is moved to the not-found page.
 
-This is easy to lose by accident — by caching a policy result per entity instead of per (entity, principal),
-or by snapshotting the principal at login — which is why there are tests for it in
-`jetlin-db/PolicyTest.kt`, `jetlin-db/EntityRouteTest.kt`, `jetlin-testing/GuardTest.kt` and
-`samples/teams/TeamsAppTest.kt` rather than only a paragraph here.
+This behaviour is easy to break by accident, for example by caching a policy result per entity instead
+of per (entity, principal) pair, or by copying the principal at sign-in. That is why it is covered by
+tests in `jetlin-db/PolicyTest.kt`, `jetlin-db/EntityRouteTest.kt`, `jetlin-testing/GuardTest.kt` and
+`samples/teams/TeamsAppTest.kt`, not just described here.
 
 ---
 
-## 6. Storage and residency
+## 6. Storage and memory
 
-SQLite through `org.xerial:sqlite-jdbc`, in WAL mode, `synchronous=NORMAL`, `foreign_keys=ON`, a
-`busy_timeout`. One file, in process, no server. Litestream is the backup story and needs no code.
+Storage uses SQLite through `org.xerial:sqlite-jdbc`, with WAL mode, `synchronous=NORMAL`,
+`foreign_keys=ON` and a `busy_timeout`. It is a single file accessed in process, with no database
+server. For backups, use Litestream, which requires no code changes.
 
-At boot, every table is read into the identity map and references are resolved against what is already
-resident — which is why load order is part of the generated schema rather than the application's problem.
+At startup, every table is loaded into the identity map, and references are resolved against records
+that are already loaded. That is why the load order is part of the generated schema instead of
+something the application has to manage.
 
-One process writes. An outside writer is detected rather than tolerated: `PRAGMA data_version` is
-unchanged by our own commits and bumped by anyone else's, so it is checked before every flush and a
-mismatch refuses the write, loudly. An exclusive lock would prevent it outright, but in WAL mode an
-exclusive lock shuts out readers too — including the backup tool — so detection one commit late is the
-trade taken.
+Only one process may write to the database. Writes by another process are detected, not supported.
+SQLite's `PRAGMA data_version` doesn't change for this connection's own commits but does change when
+another connection commits, so it is checked before every write, and a change makes the write fail with
+an error. An exclusive lock would prevent outside writes entirely, but in WAL mode it also blocks
+readers, including the backup tool. Detecting an outside write one commit late was chosen as the better
+trade-off.
 
-Transactions are serialized per database. One JDBC connection cannot carry two at once, and serializing
-them also makes commit order and apply order the same order, which is what makes last-write-wins in
-memory equal to what is on disk. Reads are not serialized and never block.
+Transactions run one at a time per database. A single JDBC connection can't run two transactions at
+once, and serializing them also makes commits and snapshot applies happen in the same order. That is
+what keeps last-write-wins in memory consistent with what is on disk. Reads are not serialized and
+never block.
 
-**Memory is the ceiling.** The working set is resident and shares a budget with the live session
-compositions. Two benchmarks measure the two halves:
+**Memory is the limit.** All records are held in memory, in the same heap as the live session
+compositions. Two benchmarks measure the two parts:
 
 ```
-./gradlew :samples:teams:benchmark          # the graph, over a table worth measuring
+./gradlew :samples:teams:benchmark          # the record graph, with a large table
 records:            20000 resident
 graph:              1096 bytes per record (20 MB total)
 
-./gradlew :samples:demo:benchmark           # sessions; PAGE=real for an application's own page
+./gradlew :samples:demo:benchmark           # sessions; PAGE=real for the application's own page
 page:               synthetic          | the application's todo list
 nodes per session:  113                | 42
 live:               129 kB per session | 65 kB per session
 ```
 
-**A resident record costs about 1.1 kB** — a `Todo` with four columns, one reference and strings of
-ordinary length. That figure barely moves between 2,000 records and 20,000, so a hundred thousand is
-around 110 MB and a million is a gigabyte: residency stops being free somewhere in the hundreds of
-thousands of records, not the thousands.
+**A record in memory costs about 1.1 kB.** That was measured for a `Todo` with four columns, one
+reference and strings of typical length. The figure stays nearly constant between 2,000 and 20,000
+records, so 100,000 records would take about 110 MB and a million about 1 GB. Memory becomes a real
+concern somewhere in the hundreds of thousands of records, not the thousands.
 
-**A session costs what its page costs**, at roughly 1.5 kB a node in both of those measurements — the
-virtual DOM and the composition around it, not anything the database adds. So a page that lists a large
-collection is the thing to watch rather than the collection itself: records are charged once to the graph,
-and again per session for each one a session actually *renders*.
+**A session costs roughly what its page costs**, about 1.5 kB per node in both measurements. That cost
+is the virtual DOM and the composition around it; the database adds nothing to it. So a page that
+renders a large collection matters more than the size of the collection. Each record is counted once in
+the graph, and then again in each session for each record that session actually *renders*.
 
-Reading a policy-filtered collection does add to a composition's read set, because the policy is evaluated
-per record and a page filtering a big table subscribes to cells in every record it scanned. Measured, that
-is about 30 bytes per scanned record per session: real, and an order of magnitude below the cost of
-rendering one.
+Reading a policy-filtered collection does increase a composition's read set. The policy is evaluated
+for every record, so a page that filters a large table subscribes to cells in every record it scanned.
+The measured cost is about 30 bytes per scanned record per session. That is a real cost, but about an
+order of magnitude less than rendering the record.
 
-There is an exit if it is ever needed, and it needs no change to the model: a cell that starts absent
-renders a placeholder instead of blocking, so cold tables can move off the resident graph. Residency is an
-optimization, not a foundation. It is not used for the database in v1 — a microsecond SQLite read should
-not produce a placeholder flicker. That cell exists, as `jetlin.runtime.Fetch`, and is what an application
-uses for data it does not own; `docs/architecture.md` §8 describes it.
+If memory ever becomes a problem, there is a way out that doesn't change the model. A cell that starts
+out empty can render a placeholder instead of blocking, so rarely used tables could be moved out of
+memory. Keeping everything in memory is an optimization, not a requirement of the design. v1 doesn't do
+this for the database, because a SQLite read that takes microseconds shouldn't cause a placeholder to
+flicker on screen. That kind of cell does exist, as `jetlin.runtime.Fetch`, and applications use it for
+data they don't own. `docs/architecture.md` §8 describes it.
 
 ---
 
 ## 7. Migrations
 
-KSP writes the schema the entities declare into the build output. `db/schema.json` is the copy this
-repository has recorded. Everything else follows from comparing the two.
+KSP writes the schema declared by the entities into the build output. `db/schema.json` is the copy
+checked into the repository. The migration tasks work by comparing the two.
 
 ```
 ./gradlew dbDiff --name=share_todos_by_team   # writes db/migrations/0002_share_todos_by_team.sql
 ./gradlew dbMigrate                           # applies pending migrations
-./gradlew dbVerify                            # fails if entities and db/schema.json disagree (CI)
+./gradlew dbVerify                            # fails if the entities and db/schema.json differ (CI)
 ```
 
-A migration is a SQL file a human reads and may edit, named `0001_what_it_does.sql`, applied in order and
-recorded in a `jetlin_migrations` table. What is in the file is what runs.
+A migration is a SQL file that is meant to be read and, if needed, edited. Files are named like
+`0001_what_it_does.sql`, applied in order, and recorded in a `jetlin_migrations` table. The SQL in the
+file is exactly what runs.
 
-SQLite's `ALTER TABLE` can add a column, drop a column, rename a column and rename a table. A type, a
-nullability or a foreign key requires building a new table, copying the rows, dropping the old one and
-renaming — the twelve-step procedure SQLite documents. The generator emits that; the runner does the parts
-that need a live connection:
+SQLite's `ALTER TABLE` can add, drop and rename columns and rename tables. Changing a column's type,
+nullability or foreign key requires creating a new table, copying the rows, dropping the old table and
+renaming the new one: the twelve-step procedure in SQLite's documentation. The generator writes that
+SQL. The runner handles the steps that need a live connection:
 
-- foreign keys off for the duration, because the rebuild drops a table other tables reference;
-- `PRAGMA foreign_key_check` before committing, so a new constraint that orphans rows fails rather than
-  warns;
-- every index, trigger and view that existed is still there afterwards. A rebuild takes them with it, and
-  a generator that cannot see a particular database cannot know what to re-create. So the runner notices
-  and stops, naming what was lost. A view over a rebuilt table is the classic version of this trap.
+- It disables foreign keys during the migration, because the rebuild drops a table that other tables
+  reference.
+- It runs `PRAGMA foreign_key_check` before committing, so a new constraint that orphans existing rows
+  fails the migration instead of producing a warning.
+- It checks that every index, trigger and view that existed before still exists afterwards. A rebuild
+  drops everything attached to the old table, and the generator can't know which of these objects a
+  given database has. So the runner detects the loss and stops, naming what was lost. A view over a
+  rebuilt table is the most common case.
 
-A destructive migration carries a marker line that has to be deleted before it will run. An acknowledgement
-in the file shows up in a review forever; a `--force` flag is invisible the moment it has been typed.
+A migration that destroys data contains a marker line, and `dbMigrate` refuses to run it until the
+line is deleted. Deleting a line in the file shows up in code review permanently; a `--force` flag
+would leave no trace once typed.
 
-`Db.open` creates tables that do not exist and then **verifies** the ones that do: a column missing, a
-type or nullability that disagrees, a foreign key that is not there, or a stored column no entity declares
-all refuse to boot, naming the table and column. That is what makes an un-applied migration a startup
-failure instead of a failed insert during a deploy.
+`Db.open` creates any missing tables and **verifies** the existing ones. A missing column, a
+mismatched type or nullability, a missing foreign key, or a stored column no entity declares all make
+startup fail, with the table and column named. That turns a forgotten migration into a startup error
+instead of a failed insert during a deploy.
 
 ---
 
 ## 8. What is missing
 
-In the order it would stop you shipping.
+Ordered by how likely each gap is to block a release.
 
-**A leaked reference is authority.** Chosen knowingly; see section 4. The leak detector makes it findable
-in development, not impossible.
+**Holding a reference grants access.** This was a deliberate choice; see section 4. The leak detector
+makes leaks detectable during development, but can't prevent them.
 
-**Transitive visibility on write is not caught.** Moving a project to another team changes who may read
-its todos, but only the project's own policy is consulted — nothing declares that a todo's visibility
-depends on its project's team, so the write does not fan out. *Reads are always correct*: the next time a
-todo's policy runs it gives the right answer. What is missing is the invalidation, and the case where it
-shows is a page that was already open when the project moved. Catching it needs policies to declare their
-visibility dependencies.
+**Visibility changes through relations aren't propagated on write.** Moving a project to another team
+changes who can read its todos, but only the project's own policy is evaluated for that write. Nothing
+declares that a todo's visibility depends on its project's team, so the change doesn't propagate.
+*Reads are always correct*: the next time a todo's policy runs, it gives the right answer. What's
+missing is invalidation, and the problem only shows on a page that was already open when the project
+moved. Fixing it requires policies to declare what their visibility depends on.
 
-**No defense in depth.** SQLite has no row-level security, so the framework is the only enforcement layer.
-Arbitrary Kotlin policies do not translate to Postgres RLS, so an application that later needs a second
-layer will not get one for free.
+**No second layer of enforcement.** SQLite has no row-level security, so the framework's policies are
+the only enforcement. Arbitrary Kotlin policies can't be translated to Postgres RLS, so an application
+that later needs a database-level layer would have to write one separately.
 
-**Memory is the ceiling.** Section 6.
+**Memory is the limit.** See section 6.
 
-**No indexes.** Every ad-hoc query is a linear scan over resident objects. Fine at the target scale;
-revisit with a measurement rather than a hunch.
+**No indexes.** Every ad-hoc query is a linear scan over in-memory objects. That is fine at the
+intended scale. Revisit it based on measurements, not guesses.
 
-**A reference cycle cannot be loaded.** References resolve against what is already resident, so
-`User.team` / `Team.owner` pointing at each other is a build error naming both. A fixup pass over nullable
-references is the obvious fix and does not change the model.
+**Reference cycles can't be loaded.** References are resolved against records already loaded, so two
+entities that reference each other with non-null references (such as `User.team` and `Team.owner`) are
+a build error that names both. A second pass that fills in nullable references after loading would fix
+this without changing the model.
 
-**One process.** The resident graph is per-process: a second node would hold a second copy and the two
-would diverge. That is a harder blocker for multi-node than the session store, and it is recorded next to
-it in `architecture.md` §13.
+**Single process only.** The in-memory graph belongs to one process. A second node would hold its own
+copy, and the two would drift apart. This is a harder obstacle to running on multiple nodes than the
+session store, and it is listed alongside it in `architecture.md` §13.
 
-**In-session navigation to an entity-bound route shows the route's fallback title.** The title travels in
-the navigate message, which is filled from the route table before the new view has resolved anything. Page
-loads and hibernation wakes are correct. Fixing it means a protocol change.
+**Navigating within a session to an entity-bound route shows the route's fallback title.** The title is
+sent in the navigation message, which is built from the route table before the new view has looked up
+its record. Page loads and waking from hibernation show the correct title. Fixing this requires a
+protocol change.
 
 ---
 
-## 9. Where the pieces live
+## 9. Modules
 
 ```
 :jetlin-db          Record, cells, the identity map, View, Policy, the gate, transactions, SQLite
-:jetlin-db-ksp      the processor: tables, column objects, drafts, gated accessors, schema snapshot
+:jetlin-db-ksp      the processor: tables, column objects, drafts, policy-checked accessors, schema snapshot
 :jetlin-db-gradle   dbDiff, dbMigrate, dbVerify, and the migration engine they share
-:samples:teams      a two-login sample exercising all three access shapes
+:samples:teams      a sample with two users, using all three access patterns
 ```
 
-`Record`, `Policy`, `View`, `Id` and the cell delegate contain no database concepts — no SQL, no
-connection, no transaction, no table. That is deliberate: the read side and the authorization model
-generalize to data that is not in a database at all, and keeping the boundary honest now is the
-difference between that extraction being a file move and being a redesign.
+`Record`, `Policy`, `View`, `Id` and the cell delegate contain nothing specific to databases: no SQL,
+connections, transactions or tables. This is deliberate. The read side and the authorization model
+could also apply to data that isn't in a database, and keeping the boundary clean now means that
+extracting them later would be a matter of moving files, not redesigning.
 
-`:jetlin-db` depends on `:jetlin-runtime` for the snapshot machinery and **not** on `:jetlin-html`. Route
-guards are routing, not storage, so `Access`, `Guard`, `Principals` and `Guarded` live in `:jetlin-html` and
-work for an application whose principal is not a record.
+`:jetlin-db` depends on `:jetlin-runtime` for the snapshot system, and **not** on `:jetlin-html`. Route
+guards are part of routing, not storage, so `Access`, `Guard`, `Principals` and `Guarded` live in
+`:jetlin-html`. They also work for applications whose principal isn't a stored record.

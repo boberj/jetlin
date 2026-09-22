@@ -9,56 +9,61 @@ import kotlin.concurrent.withLock
 import kotlin.reflect.KClass
 
 /**
- * One SQLite file, and the resident graph read out of it.
+ * A SQLite database file and the in-memory graph of records loaded from it.
  *
- * ## The snapshot system is the transaction system
+ * ## Transactions are snapshots
  *
- * Compose snapshots are MVCC — isolated reads, an atomic apply, conflict detection on merge — which is
- * the same shape as a database transaction. [transact] exploits that: it takes a mutable snapshot, runs
- * the block inside it, commits the resulting writes to SQLite, and only then applies the snapshot.
+ * Compose snapshots provide MVCC: isolated reads, atomic apply, and conflict detection on merge. That
+ * is the same model as a database transaction, so [transact] uses one. It takes a mutable snapshot,
+ * runs the block inside it, commits the resulting writes to SQLite, and applies the snapshot only
+ * after the commit succeeds.
  *
- * Committing *before* applying is the point. A write the database refuses — a constraint violation, a
- * failed flush, or a block that threw — never becomes visible to any composition, so no session ever
- * renders a value the database rejected and there is nothing to roll back on screen. This is strictly
- * better than the usual optimistic-update-then-revert, and it is the single strongest argument for this
- * design. Anything that moves the commit after the apply has thrown it away.
+ * The order is what matters. If the database rejects a write (a constraint violation, a failed flush,
+ * or an exception from the block), the snapshot is discarded and no composition ever sees the change.
+ * No session renders a value the database refused, so there is nothing to revert on screen. Compared
+ * with the common approach of updating optimistically and reverting on failure, the user never sees a
+ * wrong value. This is the main reason for the design, and any change that applies the snapshot before
+ * committing would lose it.
  *
  * ## Residency
  *
- * Everything stored is in memory, as live objects, for the life of the process. Relation traversal is
- * therefore a pointer dereference: no query, no N+1, and — decisively — no read that can block the
- * single thread a session composes on. The cost is that memory is a real ceiling shared with the live
- * sessions, which is a cliff to document rather than discover.
+ * Every stored record is kept in memory as a live object for the life of the process. Following a
+ * relation is a field access, so there are no queries, no N+1 problem and, most importantly, no reads
+ * that block the single thread a session composes on. The cost is memory, which is shared with the
+ * live sessions and is a hard limit on how much data an application can hold. `docs/db.md` §6 has
+ * the measured figures.
  *
- * ## What this framework does not do for you
+ * ## Limitations to be aware of
  *
- * Four things, in the order they are likely to bite.
+ * These are listed roughly in order of how likely they are to cause a problem.
  *
- * **A route guard is not the security boundary.** The record's policy is. A guard is UX plus a cheap early
- * exit — it stops you rendering a page that would have been empty. If a guard is ever the only thing
- * protecting data, one forgotten guard is a leak. Keep the order: the lookup is gated, traversal is
- * gated, `update` is gated, and guards go on top of that, never instead of it.
+ * **Route guards are not the security boundary; record policies are.** A guard improves the user
+ * experience and avoids rendering a page that would be empty, but if a guard is the only thing
+ * protecting some data, forgetting it leaks that data. Lookups, traversal and `update` are all checked
+ * against policies. Guards are an extra layer on top of those checks, not a replacement.
  *
- * **A leaked reference is authority.** Access is checked where a record is *obtained*, not where its
- * fields are read, so a record that escapes the session that obtained it — cached in a companion object,
- * captured by a long-lived closure, stashed in a field — carries its access with it. [LeakDetector]
- * exists to make that findable in development and test builds; nothing makes it impossible.
+ * **Holding a record reference grants access to it.** Access is checked when a record is *obtained*,
+ * not each time a field is read. A record that outlives the session that obtained it, for example in
+ * a companion object cache, a long-lived closure or a field, can be read by whoever ends up holding
+ * it. [LeakDetector] can find such leaks in development and test builds, but nothing prevents them.
  *
- * **Policies sit on the recomposition hot path.** A filtered collection evaluates its policy per record,
- * per read, and deliberately caches nothing, because a cached decision outlives the state it was based
- * on. Keep policies pure, cheap and free of IO. That is also what makes revocation reactive.
+ * **Policies run during recomposition.** A filtered collection evaluates its policy for each record
+ * on every read, and caches nothing, because a cached decision can outlive the state it was based on.
+ * Policies must therefore be pure, cheap and free of IO. Not caching is also what makes revocation
+ * reactive.
  *
- * **Transitive visibility on write is not caught.** Moving a project to another team changes who may
- * read its todos, but only the project's own policy is consulted — the todos' policies are not re-run
- * against the change, because nothing declares that their visibility depends on it. Reads are always
- * correct; it is the *write* that does not fan out. Out of scope for v1.
+ * **Visibility changes are not propagated through relations on write.** Moving a project to another
+ * team changes who can read its todos, but only the project's policy is evaluated for that write.
+ * Nothing declares that a todo's visibility depends on its project, so the todos' policies aren't
+ * re-run. Reads always give the right answer; what's missing is the invalidation of pages that were
+ * already showing those todos. This is out of scope for v1.
  */
 public class Db private constructor(
     private val connection: Connection,
     private val tables: List<Table<out Record>>,
 ) : AutoCloseable {
 
-    /** The resident graph. Obtaining a record from it is an authorization decision; see [IdentityMap]. */
+    /** The in-memory graph of records. Getting a record out of it requires an access check; see [IdentityMap]. */
     public val resident: IdentityMap = IdentityMap()
 
     private val tablesByType: Map<KClass<out Record>, Table<out Record>> =
@@ -68,34 +73,34 @@ public class Db private constructor(
         tables.associate { it.type to it.name }
 
     /**
-     * `PRAGMA data_version` as of our last commit.
+     * The value of `PRAGMA data_version` after our last commit.
      *
-     * SQLite leaves this value alone for changes made through this connection and bumps it for changes
-     * made through any other, which makes it exactly the detector for the one thing that would quietly
-     * invalidate the resident graph: another process writing the file.
+     * SQLite increments this value when another connection changes the file, but not for changes made
+     * through this connection. That makes it a reliable way to detect another process writing the
+     * file, which would make the in-memory graph silently out of date.
      */
     private var dataVersion: Long = 0
 
     /**
-     * Held for the whole of a transaction, so that transactions do not interleave.
+     * Held for the duration of each transaction, so that transactions run one at a time.
      *
-     * Two reasons, and the first is not optional: one JDBC connection cannot carry two transactions at
-     * once, and `autoCommit` is connection-wide state. The second is that serializing writes makes
-     * commit order and snapshot-apply order the same order, which is what [Record]'s last-write-wins
-     * merge relies on to keep memory equal to the file.
+     * This is necessary for two reasons. A JDBC connection can't run two transactions at once, and
+     * `autoCommit` applies to the whole connection. Serializing also makes commits and snapshot applies
+     * happen in the same order, which the last-write-wins merge policy in [Record] relies on to keep
+     * memory consistent with the file.
      *
-     * Reads are not serialized and never block: they go through the snapshot system, which is what that
-     * system is for. SQLite allows one writer anyway, so a write lock is not a concession.
+     * Reads are not serialized and never block, because they go through the snapshot system. SQLite
+     * only allows one writer at a time anyway, so this lock costs no concurrency.
      */
     private val writeLock = ReentrantLock()
 
     public companion object {
         /**
-         * Opens (or creates) the database at [path] and loads it.
+         * Opens the database at [path], creating it if necessary, and loads every table into memory.
          *
-         * [tables] is also the load order, and a table's non-null references may only point at tables
-         * declared before it — references are resolved against what is already resident, so a forward
-         * reference fails with both tables named rather than leaving a hole in the graph.
+         * Tables are loaded in the order of [tables]. A non-null reference may only point to a table
+         * earlier in the list, because references are resolved against records that are already
+         * loaded. A reference to a later table fails with an error naming both tables.
          */
         public fun open(path: Path, tables: List<Table<out Record>>): Db {
             val connection = DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}")
@@ -115,19 +120,19 @@ public class Db private constructor(
     }
 
     /**
-     * Runs [block] as one transaction: one snapshot, one SQLite commit, one recomposition.
+     * Runs [block] as a single transaction: one snapshot, one SQLite commit and one recomposition.
      *
-     * Not `suspend`, and [block] cannot suspend, which is deliberate twice over. An event handler is an
-     * ordinary function, so a transaction has to be callable from one. And a non-suspending block
-     * cannot await an external call, which makes "write the record and POST to an API atomically" — a
-     * thing SQLite cannot honour, because a rollback cannot un-send a request — fail to compile rather
-     * than fail in production.
+     * Neither this function nor [block] is `suspend`, for two reasons. Event handlers are not
+     * suspending functions, and they need to be able to call this. And a block that can't suspend
+     * can't await a call to an external service. A rollback can't undo an HTTP request, so combining
+     * a database write and an API call in one transaction can't be made atomic. With this signature,
+     * trying to do so is a compile error.
      *
-     * Calling this inside a transaction that is already open joins it rather than nesting: the writes
-     * accumulate and the outermost call commits them together.
+     * A call made while a transaction is already open joins that transaction instead of nesting. Its
+     * writes are added to the outer transaction and committed with it.
      */
     public fun <T> transact(block: () -> T): T {
-        // Already inside one: join it. The outer call owns the snapshot, the lock and the commit.
+        // A transaction is already open, so join it. The outer call owns the snapshot, lock and commit.
         if (Transactions.current != null) return block()
 
         return writeLock.withLock {
@@ -139,8 +144,8 @@ public class Db private constructor(
                         block().also { commit(writes) }
                     }
                 }
-                // Last, and only if the database accepted everything: applying is what makes the change
-                // visible to every session in the process.
+                // Applied last, after the commit succeeded. Applying the snapshot is what makes the
+                // changes visible to the rest of the process.
                 snapshot.apply().check()
                 result
             } catch (t: Throwable) {
@@ -151,21 +156,21 @@ public class Db private constructor(
     }
 
     /**
-     * Stores [record] and makes it resident.
+     * Stores [record] and adds it to the in-memory graph.
      *
-     * Ungated on purpose: the policy-checked way in is phase 4's `View.add`, which calls this. Nothing
-     * public may reach it.
+     * This performs no policy check. The checked entry point is `View.add`, which calls this, and
+     * nothing public may call it directly.
      */
     internal fun <T : Record> insert(record: T): T {
         val writes = requireTransaction(record)
         require(record.database == null) { "$record is already stored" }
-        tableFor(record) // Fail now, with the class named, rather than at the flush.
+        tableFor(record) // Fails here with the class name, instead of later during the flush.
         resident.add(record)
         writes.insert(record)
         return record
     }
 
-    /** Removes [record] from disk and from the resident graph. Ungated; see [insert]. */
+    /** Deletes [record] from the database and the in-memory graph. No policy check; see [insert]. */
     internal fun delete(record: Record) {
         val writes = requireTransaction(record)
         resident.remove(record)
@@ -179,10 +184,10 @@ public class Db private constructor(
         )
 
     /**
-     * Writes everything the block did, inside one SQLite transaction.
+     * Writes all of the block's changes to SQLite in one transaction.
      *
-     * Runs while the snapshot is still entered, because the values being written are the ones only
-     * visible inside it.
+     * This runs while the snapshot is still entered, because the new values are only visible inside
+     * it.
      */
     private fun commit(writes: WriteSet) {
         if (writes.isEmpty) return
@@ -190,15 +195,15 @@ public class Db private constructor(
 
         connection.autoCommit = false
         try {
-            // Foreign keys checked at commit rather than per statement, which is what makes an order
-            // possible at all: a transaction can create a row and the row that points at it, or point a
-            // row away from something it then deletes, and no single statement order satisfies both while
-            // every statement is checked on its own. Per-transaction, and SQLite clears it on commit.
+            // Check foreign keys at commit instead of after each statement. Without this, no fixed
+            // statement order works for every transaction: inserting a row and a row that references
+            // it needs one order, and re-pointing a reference away from a row that is then deleted needs
+            // the other. The setting applies to this transaction only; SQLite resets it on commit.
             connection.createStatement().use { it.execute("PRAGMA defer_foreign_keys=ON") }
 
-            // Deletes first, because a primary key is *not* deferred: re-seeding a fixture under an id it
-            // used before has to free the id before claiming it. Updates last, so they can name a row this
-            // transaction inserted.
+            // Deletes go first because primary key constraints can't be deferred. Re-seeding a fixture
+            // with an id it used before has to free that id before inserting it again. Updates go last
+            // so they can refer to rows inserted in this transaction.
             writes.deletes.forEach { deleteRow(it) }
             writes.inserts.forEach { insertRow(it) }
             writes.updates.forEach { (record, columns) -> updateRow(record, columns) }
@@ -210,15 +215,15 @@ public class Db private constructor(
             connection.autoCommit = true
         }
 
-        // Only now, and not at the call: the field is a plain one rather than snapshot state, so a
-        // transaction that rolled back must not leave a record claiming to be stored.
+        // Set only after a successful commit. `database` is a plain field, not snapshot state, so
+        // setting it earlier would leave a record marked as stored after a rollback.
         writes.inserts.forEach { it.database = this }
         writes.deletes.forEach { it.database = null }
         dataVersion = readDataVersion()
     }
 
-    // The three statements that turn a record into a row. Named for what they write: past this point it is
-    // SQLite's tuple rather than the object, which is the only place the word "row" means anything here.
+    // The three statements that write a record to its table. They are named after rows because this is
+    // where the object becomes a SQLite row; elsewhere in this module, the object is called a record.
     private fun <T : Record> insertRow(record: T) {
         val table = tableFor(record)
         val columns = table.columns
@@ -260,12 +265,13 @@ public class Db private constructor(
     }
 
     /**
-     * Pragmas, as §4.9 of the plan specifies them.
+     * Sets the connection pragmas (see `docs/db-framework-plan.md` §4.9).
      *
-     * WAL so that a reader — a backup tool, say — never blocks the writer. `synchronous=NORMAL`
-     * because WAL makes it durable across a process crash, which is the failure worth surviving here;
-     * only a power cut can lose the last commits. Foreign keys on, because they are off by default in
-     * SQLite and silently so.
+     * - WAL mode, so readers such as a backup tool never block the writer.
+     * - `synchronous=NORMAL`, which in WAL mode survives a process crash. Only a power loss can lose
+     *   the most recent commits.
+     * - `foreign_keys=ON`, because SQLite disables foreign key enforcement by default and gives no
+     *   warning about it.
      */
     private fun configure() {
         connection.createStatement().use { statement ->
@@ -283,14 +289,14 @@ public class Db private constructor(
     }
 
     /**
-     * Refuses to boot on a schema the entities do not describe.
+     * Fails startup if the stored schema doesn't match the entities.
      *
-     * `CREATE TABLE IF NOT EXISTS` is silent about a table that already exists in a different shape, which
-     * is exactly what an un-applied migration looks like. Without this the first symptom would be a failed
-     * insert in production, or — worse — a column quietly never read.
+     * `CREATE TABLE IF NOT EXISTS` does nothing when a table exists with a different structure, which
+     * is what happens when a migration hasn't been applied. Without this check, the first sign of the
+     * problem would be a failed insert in production, or a column that is silently never read.
      *
-     * Compared as sets rather than in order: column order is not part of what a schema means, and a
-     * rebuild in a migration is free to write them in a different one.
+     * Columns are compared as sets. Column order has no meaning in the schema, and a migration that
+     * rebuilds a table may change it.
      */
     private fun verifySchema() {
         val problems = tables.flatMap { table -> problemsWith(table) }
@@ -344,8 +350,8 @@ public class Db private constructor(
                             results.getString("name"),
                             StoredColumn(
                                 type = results.getString("type"),
-                                // SQLite reports an INTEGER PRIMARY KEY as nullable because it is the rowid
-                                // alias and NULL there means "assign one". It is never really null.
+                                // SQLite reports an INTEGER PRIMARY KEY as nullable because it aliases the
+                                // rowid, where inserting NULL means "allocate an id". It is never null.
                                 nullable = !primaryKey && results.getInt("notnull") == 0,
                             ),
                         )
@@ -363,7 +369,7 @@ public class Db private constructor(
             }
         }
 
-    /** Reads every table into the identity map, resolving references as it goes. */
+    /** Loads every table into the identity map, resolving references along the way. */
     private fun load() {
         tables.forEach { table -> loadTable(table) }
     }
@@ -387,16 +393,16 @@ public class Db private constructor(
     }
 
     /**
-     * Refuses to write if another connection has changed the file since our last commit.
+     * Throws if another connection has written the file since our last commit.
      *
-     * The resident graph is the working copy of the whole database, so an outside write does not
-     * conflict with one row — it invalidates everything in memory. There is no sound way to merge that,
-     * which leaves detecting it loudly.
+     * The in-memory graph is a copy of the entire database, so an external write doesn't just
+     * conflict with one row: any part of the graph might now be wrong. There is no safe way to merge
+     * that, so the only option is to fail visibly.
      *
-     * An exclusive lock would prevent it outright, and §4.9 asks for one, but it also locks out
-     * readers, and the same section promises Litestream. A backup tool that cannot read the file is
-     * worth less than a guarantee that is enforced one commit late, so this is the trade taken; see the
-     * decision log.
+     * An exclusive lock would prevent external writes entirely, and §4.9 of the plan asks for one.
+     * But in WAL mode an exclusive lock also blocks readers, which would stop Litestream (which the
+     * same section relies on for backups) from reading the file. Detecting the problem one commit
+     * late is the better trade-off. The decision log in `docs/db-framework-plan.md` §13 records this.
      */
     private fun verifySoleWriter() {
         val current = readDataVersion()

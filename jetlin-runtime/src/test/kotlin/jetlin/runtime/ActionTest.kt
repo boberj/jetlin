@@ -19,12 +19,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
- * Suspending work started from a handler, seen from a composition.
+ * Tests [Action] from the point of view of a composition.
  *
- * The interesting assertions are the two failure-shaped ones: a command that throws must cost a message
- * rather than the session, and a second click on a working button must cost nothing. Both are properties
- * of where the `try` is and of when `invoke` returns early, and both are invisible until something
- * actually fails.
+ * The most important tests cover failure cases: a command that throws must produce an error message
+ * instead of ending the session, and clicking a busy button again must do nothing. These depend on where
+ * the `try` is placed and on when `invoke` returns early, and neither would be noticed until something
+ * actually failed.
  */
 class ActionTest {
 
@@ -68,7 +68,7 @@ class ActionTest {
             host.awaitRun(save)
 
             assertEquals("root(done: saved)", root.render())
-            // The button coming back and the outcome appearing are one write, so they are one patch.
+            // Re-enabling the button and showing the outcome is a single state write, so it is one patch.
             assertEquals(1, host.changeCount - running)
         }
     }
@@ -88,7 +88,7 @@ class ActionTest {
                 Text(save.state.text())
             }
 
-            // What a double click looks like when the button was not disabled quickly enough.
+            // Simulates a double click that arrives before the button has been disabled.
             host.transact { save() }
             host.transact { save() }
             host.awaitIdle()
@@ -122,7 +122,7 @@ class ActionTest {
             host.transact { save() }
             host.awaitIdle()
 
-            // The error is gone the moment the retry starts: it cannot be read beside a live attempt.
+            // The error is cleared as soon as the retry starts, so it is never shown during an attempt.
             assertEquals("root(running)", root.render())
 
             second.complete("saved")
@@ -157,8 +157,8 @@ class ActionTest {
         lateinit var save: Action<String>
         CompositionHost(TestApplier(root)).use { host ->
             host.setContent {
-                // Captures `draft`. Remembered once, but re-read on every pass — otherwise this action
-                // would keep saving the draft as it was when the page first composed.
+                // Captures `draft`. The action is remembered once, but the block is updated on every
+                // pass; otherwise it would keep saving the draft from the first composition.
                 save = rememberAction { "saved $draft" }
                 Text(save.state.text())
             }
@@ -173,11 +173,11 @@ class ActionTest {
 }
 
 /**
- * Waits for an attempt to finish, then for the page to catch up.
+ * Waits for an attempt to finish, then for the page to update.
  *
- * `awaitIdle` cannot do this on its own: work suspended on something outside the session is not queued
- * work, and the session really is idle while it waits — which is the property that makes an action worth
- * having in the first place. So a test that wants the outcome waits for the outcome, boundedly.
+ * `awaitIdle` alone isn't enough. While the action is suspended waiting on something outside the
+ * session, the session has no queued work and really is idle, which is exactly what an action is for.
+ * So this waits for the outcome itself, with a time limit.
  */
 private suspend fun CompositionHost.awaitRun(action: Action<*>) {
     withContext(Dispatchers.Default) {
@@ -188,7 +188,7 @@ private suspend fun CompositionHost.awaitRun(action: Action<*>) {
     awaitIdle()
 }
 
-/** The four states as a page would show them. */
+/** Formats the four [Run] states as display text. */
 private fun Run<String>.text(): String = when (this) {
     is Run.Idle -> "idle"
     is Run.Running -> "running"

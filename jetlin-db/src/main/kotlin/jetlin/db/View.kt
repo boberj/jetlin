@@ -3,17 +3,17 @@ package jetlin.db
 /**
  * A live, filtered list of records.
  *
- * A view is not a query result and holds no records of its own: it reads the identity map every time it
- * is asked something. That is what makes `db.todos` usable straight from a composable — iterating it
- * subscribes the composition to the underlying list *and* to whatever the filter read, so a record
- * appearing, vanishing or ceasing to be visible recomposes exactly the readers that would care.
+ * A view doesn't store records. Every operation reads the identity map again, which is why
+ * `db.todos` can be used directly in a composable. Iterating it subscribes the composition to the
+ * underlying list and to everything the filter read. When a record is added, removed, or becomes
+ * visible or invisible, only the compositions that depend on it recompose.
  *
- * Ordinary stdlib operations are the query language: `filter`, `sortedBy`, `groupBy`, `count`. There
- * is deliberately no DSL — at the scale this framework targets a linear scan over resident objects is
- * cheaper than parsing anything, and a scan cannot drift out of step with the schema.
+ * Queries use the standard library: `filter`, `sortedBy`, `groupBy`, `count` and so on. There is no
+ * query DSL. At the scale this framework is designed for, a linear scan of in-memory objects is
+ * cheaper than parsing a query, and it can't get out of sync with the schema.
  *
- * The filter is applied on every operation rather than cached, because caching it is exactly how
- * reactive authorization gets broken: a cached decision outlives the state the policy read.
+ * The filter runs on every operation and is never cached. A cached result could outlive the state
+ * the policy read, which would break reactive authorization.
  */
 public class View<T : Record> internal constructor(
     private val records: List<T>,
@@ -22,11 +22,10 @@ public class View<T : Record> internal constructor(
 ) : List<T> {
 
     /**
-     * Stores [record], if this principal may create it.
+     * Stores [record] if this principal may create it.
      *
-     * Only on a view that is a whole collection. A derived one — `project.tasks`, or anything that came
-     * out of `filter` — has no answer to "added to what", and silently adding to the wrong place is
-     * worse than not offering it.
+     * This only works on a view of a whole table. On a derived view, such as `project.tasks`, it's not
+     * clear what the record should be added to, so it throws instead of guessing.
      */
     public fun add(record: T): T {
         val gate = gate ?: error(

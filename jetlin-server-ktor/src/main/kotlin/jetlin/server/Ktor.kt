@@ -145,10 +145,10 @@ public class JetlinConfig {
      * Registers a view. [path] may contain parameters, e.g. `/todo/{id}`, readable with
      * `pathParam("id")`.
      *
-     * [requires] is what the route demands of whoever asks for it — authentication, a role. It is
-     * evaluated in the route table rather than in the view body, because a guard inside the body has
-     * already run the body, and it is evaluated again inside the composition, which is what makes a
-     * revoked role move a principal off the page they are already on.
+     * [requires] is the guard for this route, such as requiring a signed-in user or a role. It is part
+     * of the route table instead of the view body, because by the time a check inside the body runs,
+     * the body has already started rendering. The guard is also evaluated inside the composition, so if
+     * a role is revoked, the user is moved off the page they're currently on.
      */
     public fun view(
         path: String,
@@ -160,7 +160,7 @@ public class JetlinConfig {
     }
 
     /**
-     * Registers a view for one record, resolved by the route itself.
+     * Registers a view for a single record, which the route looks up itself.
      *
      * ```kotlin
      * view(
@@ -171,11 +171,11 @@ public class JetlinConfig {
      * ) { todo -> TodoDetailPage(todo) }
      * ```
      *
-     * This is the shape worth having rather than a convenience: [subject] goes through the gated lookup,
-     * so it is null for a record this principal may not read, null renders not-found before the body composes,
-     * and the title comes from the subject — so `<head>` cannot disclose a record the body refused. Under
-     * this API the insecure version is not expressible, because there is no path parameter left to look
-     * up by hand.
+     * This overload exists for security, not convenience. [subject] should use the policy-checked
+     * lookup, which returns null for a record this principal may not read. A null subject renders the
+     * not-found page before the body composes, and the title is computed from the subject only after
+     * that, so `<head>` can't reveal a record the body refused to show. Because the view receives the
+     * record instead of the path parameter, it can't accidentally look up an arbitrary id by hand.
      */
     public fun <T : Any> view(
         path: String,
@@ -260,7 +260,7 @@ internal class ViewRegistration(
 public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
     val config = JetlinConfig().apply(configure)
     val router = Router(config.views.map { it.pattern to it })
-    // The guards of the whole table, so that a link can ask the same question the route will.
+    // The guards for every route, so links can be checked against the same rule as their route.
     val guards = RouteGuards(config.views.map { it.pattern to it.guard })
     install(WebSockets)
     // One line a minute at most for each: both are reached at request rate, and a warning
@@ -293,8 +293,8 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         for (registration in config.views) {
             get(registration.pattern.pattern) {
                 val request = call.toRequestContext(config)
-                // Answered before a session is built: a redirect costs nothing but a header, and
-                // rendering a page for someone who is about to be sent elsewhere costs a composition.
+                // Checked before creating a session. A redirect only costs a response header, while
+                // rendering a page for someone who is about to be redirected costs a whole composition.
                 val access = registration.guard?.check(request) ?: Access.Allow
                 if (access is Access.Redirect) {
                     call.respondRedirect(access.to)
@@ -327,11 +327,11 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                     return@get
                 }
                 call.respondText(
-                    // The composition's own title wins: only it knows what the route resolved, and
-                    // only it knows whether this principal was allowed to see it.
+                    // Prefer the title set by the composition, since only the composition knows what the
+                    // route resolved and whether this principal was allowed to see it.
                     renderPage(config, session.view.title ?: registration.title, session),
                     ContentType.Text.Html,
-                    // A route that refused this principal is a page that is not there for them.
+                    // A route that refused this principal responds as if the page didn't exist.
                     if (access == Access.NotFound) HttpStatusCode.NotFound else HttpStatusCode.OK,
                 )
             }

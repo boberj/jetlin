@@ -19,9 +19,10 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /**
- * Who may see and change what, and what happens to an open page when the answer changes.
+ * Tests access policies, and how open pages react when access changes.
  *
- * The policies under test are the three shapes of §4.3, declared on the entities in `Entities.kt`.
+ * The policies under test are the three patterns from §4.3 of the plan, declared on the entities in
+ * `Entities.kt`.
  */
 class PolicyTest {
 
@@ -37,7 +38,7 @@ class PolicyTest {
         assertTrue(Task.canRead(task, alice))
         assertFalse(Task.canRead(task, bob))
 
-        // The column-level rule: only an admin may archive, whoever owns the record.
+        // Column-level rule: only an admin may archive, regardless of who owns the record.
         assertFalse(Task.canWrite(task, Tasks.archived, alice))
         assertTrue(Task.canWrite(task, Tasks.archived, root))
         assertTrue(Task.canWrite(task, Tasks.title, alice))
@@ -106,7 +107,7 @@ class PolicyTest {
         }
 
         assertEquals(listOf("filed"), with(alice) { project.tasks.map { it.title } })
-        // Bob can see the project's tasks because the project is shared, and nothing else of Alice's.
+        // Bob sees the project's tasks because the project is shared, and none of Alice's other records.
         assertEquals(listOf("filed"), with(bob) { project.tasks.map { it.title } })
         assertEquals(listOf("filed"), with(bob) { db.tasks.map { it.title } })
     }
@@ -149,8 +150,8 @@ class PolicyTest {
             }
         }
 
-        // The transaction is the unit: a partially applied update is exactly the state this design
-        // exists to avoid, so the allowed write goes back too.
+        // The whole transaction is rolled back, including the permitted write. A partially applied
+        // update is exactly what this design is meant to prevent.
         assertEquals("Read the plan", task.title)
         assertFalse(task.archived)
     }
@@ -173,7 +174,7 @@ class PolicyTest {
         val mine = with(alice) { db.tasks.add(Task(alice, "mine")) }
         assertEquals(listOf(mine), with(alice) { db.tasks.toList() })
 
-        // Creating a record for someone else is refused by the same rule that hides it.
+        // Creating a record owned by someone else is refused by the same rule that hides it from you.
         assertFailsWith<AccessDenied> { with(bob) { db.tasks.add(Task(alice, "theirs")) } }
         assertFailsWith<AccessDenied> { with(bob) { mine.delete() } }
 
@@ -203,7 +204,7 @@ class PolicyTest {
             val project = db.store(Project(alice, "Inbox", shared = true))
             with(alice) { db.store(Task(alice, "shared").also { it.project = project }) }
 
-            // Bob's session, reading a collection filtered by Bob's access.
+            // Bob's session, reading a collection filtered by what Bob may see.
             harness {
                 Div {
                     with(bob) {
@@ -216,8 +217,8 @@ class PolicyTest {
                 with(alice) { project.update { shared = false } }
                 h.settle()
 
-                // No invalidation code anywhere: the policy read `project.shared`, so writing it
-                // invalidated exactly the compositions whose filter had read it.
+                // There is no invalidation code. The policy read `project.shared`, so writing it
+                // invalidated the compositions whose filter had read it, and no others.
                 assertEquals(listOf(Op.Remove(parent = 1, index = 0, count = 1)), h.drain())
             }
         }
@@ -230,8 +231,8 @@ class PolicyTest {
 
         with(root) { task.update { archived = true } }
 
-        // An admin demoting themselves: the policy reads `principal.admin`, a cell, so the next write is
-        // refused without anything having been told.
+        // An admin removes their own admin role. The policy reads `principal.admin`, which is a cell, so
+        // the next write is refused without any explicit notification.
         with(root) { root.update { admin = false } }
 
         assertFailsWith<AccessDenied> { with(root) { task.update { archived = false } } }
@@ -246,10 +247,10 @@ class PolicyTest {
             val bob = db.store(User("Bob"))
             val task = with(alice) { db.tasks.add(Task(alice, "Read the plan")) }
 
-            // Acquired for Alice, through the gate.
+            // Obtained for Alice through the gate.
             with(alice) { assertEquals(task, db.tasks.single()) }
 
-            // Read under Bob, who never obtained it: a reference that leaked out of Alice's session.
+            // Read as Bob, who never obtained it. This simulates a reference leaking out of Alice's session.
             val failure = assertFailsWith<LeakDetected> { CurrentPrincipal.with(bob) { task.title } }
 
             assertContains(failure.message.orEmpty(), "never obtained it")
@@ -288,7 +289,7 @@ class PolicyTest {
 
         assertEquals(emptyList(), with(bob) { db.tasks.toList() })
 
-        // For the handful of things an application does as itself: a backfill, an admin console.
+        // For the rare work an application does on its own behalf, such as a backfill or an admin console.
         val seen = unsafe("test fixture reads every record") { with(bob) { db.tasks.map { it.title } } }
         assertEquals(listOf("Read the plan"), seen)
 
@@ -297,17 +298,17 @@ class PolicyTest {
         }
         assertTrue(task.archived)
 
-        // And back to normal immediately afterwards.
+        // Policy checks apply again as soon as the block ends.
         assertFailsWith<AccessDenied> { with(bob) { task.update { archived = false } } }
     }
 
     @Test
     fun `every generated mutation requires a principal to call`(): Unit {
-        // A context parameter is a parameter: `update` cannot be called without one, and this is the
-        // claim that compiles away — so it is asserted against the bytecode rather than the source.
+        // `update` can't be called without a principal because the principal is a context parameter.
+        // That guarantee exists only at compile time, so this test checks the compiled bytecode.
         val update = Class.forName("jetlin.db.TaskTableKt").methods.single { it.name.startsWith("update") }
 
-        // A context parameter comes before the extension receiver in the JVM signature.
+        // In the JVM signature, a context parameter comes before the extension receiver.
         assertEquals(
             listOf(User::class.java, Task::class.java),
             update.parameterTypes.take(2).toList(),
@@ -316,16 +317,16 @@ class PolicyTest {
     }
 }
 
-/** The text of the first `<span>`, for asserting what a session is showing. */
+/** The text of the first `<span>`, for checking what the session shows. */
 private suspend fun Harness.textOfFirstSpan(): String = html().substringAfter("<span").substringAfter('>')
     .substringBefore("</span>")
 
 /**
- * A database in a temporary file, with a convenience for storing fixtures.
+ * A database in a temporary file, with a helper for storing fixtures.
  *
- * Fixtures go in through [store], which is `unsafe` by construction: setting up "a task owned by
- * someone else" is exactly the thing the gate refuses, and a test that had to satisfy the policy to
- * create its own fixtures could not test the policy.
+ * [store] always runs inside `unsafe`. Creating a fixture such as "a task owned by someone else" is
+ * exactly what the policies refuse, and a test that had to satisfy the policy to set up its fixtures
+ * couldn't test the policy.
  */
 @OptIn(ExperimentalPathApi::class)
 private fun withDb(block: (Db) -> Unit) {
@@ -337,7 +338,7 @@ private fun withDb(block: (Db) -> Unit) {
     }
 }
 
-/** The same, for a test that drives a live session. */
+/** The same as above, for tests that run a live session. */
 @OptIn(ExperimentalPathApi::class)
 private suspend fun withLiveDb(block: suspend (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-db")

@@ -11,9 +11,10 @@ sqlite = "3.49.1.0"
 ksp = "2.3.12"
 
 [libraries]
-# androidx.compose.runtime:runtime directly, rather than through the org.jetbrains.compose.runtime
-# redirect: the redirect resolves to its own `runtime-desktop` artifact as well as androidx's, and two
-# files called `runtime-desktop-1.12.0.jar` cannot both live in an application distribution's flat `lib/`.
+# Depends on androidx.compose.runtime:runtime directly instead of the org.jetbrains.compose.runtime
+# redirect. The redirect pulls in its own `runtime-desktop` artifact in addition to androidx's, and the two
+# jars have the same file name (`runtime-desktop-1.12.0.jar`), which breaks the flat `lib/` directory of an
+# application distribution.
 compose-runtime = { module = "androidx.compose.runtime:runtime", version.ref = "compose-runtime" }
 
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

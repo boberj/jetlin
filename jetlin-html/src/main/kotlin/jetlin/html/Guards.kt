@@ -8,19 +8,19 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
- * What a route decided about this request.
+ * The outcome of checking a route's requirements for a request.
  *
- * A value rather than an exception, deliberately: a view that throws ends the session and restarts the
- * page, which is right for a bug and wrong for "you are not signed in".
+ * This is a return value, not an exception. A view that throws ends the session and reloads the page,
+ * which is appropriate for a bug but not for an ordinary outcome like "you need to sign in".
  */
 public sealed interface Access {
     public data object Allow : Access
 
     /**
-     * The route is not here for this principal.
+     * The route does not exist as far as this principal is concerned.
      *
-     * The default refusal, in preference to anything that says "forbidden": a 403 on `/admin/users`
-     * confirms there is an admin panel. Disclosure should be the explicit choice, not the default one.
+     * Use this as the default refusal instead of a "forbidden" response. A 403 on `/admin/users`
+     * reveals that an admin panel exists. Revealing that should be a deliberate choice.
      */
     public data object NotFound : Access
 
@@ -28,21 +28,21 @@ public sealed interface Access {
 }
 
 /**
- * What a route requires.
+ * A requirement a request must meet to reach a route.
  *
- * Evaluated against the session's [RequestContext], which is where the application's principal lives —
- * so a guard is a pure function of the request and whatever `attributes { }` attached to it, and can be
- * evaluated at the HTTP layer, inside the composition, or in a test, with the same answer.
+ * A guard is evaluated against the session's [RequestContext], which holds the application's
+ * principal. It is a pure function of the request and the values `attributes { }` added to it, so it
+ * gives the same answer whether it runs in the HTTP layer, inside the composition, or in a test.
  *
- * **A guard is not the security boundary.** The record's policy is. A guard is UX plus a cheap early exit: it
- * stops a page rendering that would have been empty. If a guard is ever the only thing protecting data,
- * one forgotten guard is a leak.
+ * **Guards are not the security boundary; record policies are.** A guard improves the user experience
+ * and avoids rendering a page that would be empty. If a guard is the only thing protecting some data,
+ * forgetting it leaks that data.
  */
 public fun interface Guard {
     public fun check(request: RequestContext): Access
 }
 
-/** Both, in order: the first refusal wins. */
+/** Combines two guards. They are checked in order, and the first refusal is returned. */
 public infix fun Guard.and(other: Guard): Guard = Guard { request ->
     when (val first = check(request)) {
         Access.Allow -> other.check(request)
@@ -51,10 +51,10 @@ public infix fun Guard.and(other: Guard): Guard = Guard { request ->
 }
 
 /**
- * Guards for an application's own principal type.
+ * Creates guards for the application's own principal type.
  *
- * Jetlin knows nothing about authentication, so the application says where its principal lives and gets
- * typed guards back:
+ * Jetlin has no built-in authentication. The application provides the attribute key its principal is
+ * stored under, and gets typed guards in return:
  *
  * ```kotlin
  * val PrincipalKey = AttributeKey<User?>("principal")
@@ -69,24 +69,25 @@ public class Principals<P : Any>(
     private val key: AttributeKey<P?>,
     private val signIn: String = "/login",
 ) {
-    /** The principal this request belongs to, if any. */
+    /** The principal for this request, or null if nobody is signed in. */
     public fun of(request: RequestContext): P? = request[key]
 
     /**
-     * Requires a principal, and sends anyone else to the sign-in page with where they were going.
+     * Requires a signed-in principal. Anyone else is redirected to the sign-in page, with the original
+     * URL in `next`.
      *
-     * A redirect rather than a not-found, because a page that exists and needs signing in is not a
-     * secret: the principal is about to prove who they are anyway.
+     * This redirects instead of returning not-found because the existence of a page that requires
+     * signing in isn't secret; the user is about to authenticate anyway.
      */
     public val signedIn: Guard = Guard { request ->
         if (request[key] != null) Access.Allow else Access.Redirect(signInUrl(request))
     }
 
     /**
-     * Requires a principal [predicate] accepts.
+     * Requires a principal that satisfies [predicate].
      *
-     * Signed out redirects to sign in; signed in and refused is [Access.NotFound], because whether the
-     * route exists at all is not this principal's business.
+     * A request with no principal is redirected to sign in. A signed-in principal that fails the
+     * predicate gets [Access.NotFound], so the route's existence isn't revealed to them.
      */
     public fun where(predicate: (P) -> Boolean): Guard = Guard { request ->
         val principal = request[key]
@@ -101,9 +102,10 @@ public class Principals<P : Any>(
 }
 
 /**
- * The guards of the route table, so that a link can ask the same question the route will.
+ * The guards from the route table, so a link can be checked against the same rule as its route.
  *
- * Hiding a link and blocking a route are one fact, and two copies of it drift.
+ * Whether a link is shown and whether its route is accessible should be the same decision. Keeping two
+ * separate copies of that rule would let them drift apart.
  */
 public class RouteGuards(private val routes: List<Pair<RoutePattern, Guard?>>) {
     public fun forUrl(url: String): Guard? {
@@ -122,14 +124,17 @@ public val LocalRouteGuards: ProvidableCompositionLocal<RouteGuards> =
 /**
  * Composes [content] only if [guard] allows this request.
  *
- * Evaluated inside the composition, which is what makes eviction free: a guard reads live state — a
- * principal's role is a cell — so revoking that role invalidates this composable, which re-evaluates to a
- * redirect and moves the principal off the page they are sitting on. No polling, no logout broadcast.
+ * The guard is evaluated inside the composition, so it reacts to changes in the state it reads. A
+ * principal's role, for example, is a cell. Revoking the role invalidates this composable, the guard
+ * is re-evaluated, and the user is redirected away from the page they're on, without polling or a
+ * logout broadcast.
  *
- * It is also why the same guard covers all three ways into a route: a deep link (the HTTP layer answers
- * first, and this agrees), an in-session navigation (the request changes, this recomposes), and a
- * hibernated session waking up (the attributes are recomputed from the arriving connection, so a role
- * revoked while the session slept is noticed on the first recomposition rather than never).
+ * For the same reason, one guard covers all three ways of reaching a route:
+ *
+ * - A deep link: the HTTP layer checks the guard first, and this check agrees with it.
+ * - Navigation within a session: the request changes, and this composable recomposes.
+ * - A hibernated session waking up: the attributes are recomputed from the new connection, so a role
+ *   revoked while the session was hibernated takes effect on the first recomposition.
  */
 @Composable
 public fun Guarded(
@@ -145,8 +150,8 @@ public fun Guarded(
             notFound()
         }
         is Access.Redirect -> {
-            // Nothing is rendered while leaving: the page being left is not this principal's to see, and a
-            // flash of it is a disclosure however brief.
+            // Render nothing while the redirect happens. This principal isn't allowed to see the page,
+            // and even briefly showing it would disclose its contents.
             val navigator = LocalNavigator.current
             LaunchedEffect(access.to) { navigator.replace(access.to) }
         }
@@ -154,18 +159,19 @@ public fun Guarded(
 }
 
 /**
- * Resolves what this route is about, and composes [content] with it.
+ * Resolves the record a route refers to, and composes [content] with it.
  *
- * The point of letting a route resolve its own subject is that the insecure shape stops being
- * expressible. `view("/todo/{id}") { TodoStore.find(pathParam("id")) }` is a textbook insecure direct
- * object reference; here there is no path parameter left to look up by hand, and [resolve] goes through
- * the gated lookup, which returns null for a record this principal may not read.
+ * Having the route resolve its own subject prevents a common vulnerability.
+ * `view("/todo/{id}") { TodoStore.find(pathParam("id")) }` is an insecure direct object reference:
+ * the view looks up whatever id is in the URL. Here, the view never sees the raw path parameter, and
+ * [resolve] uses the policy-checked lookup, which returns null for records this principal may not read.
  *
- * Null resolves to not-found *before* [content] composes, and — this is the part that is easy to miss —
- * before the title is set, so the document title cannot disclose a record the body refused to show.
+ * A null subject shows the not-found page before [content] is composed and before the document title
+ * is set. The title ordering is easy to overlook: if the title were set first, it could reveal a
+ * record that the body refused to show.
  *
- * Reactive, like every other read: unshare the project and whoever is holding one of its todos open
- * lands on not-found.
+ * The lookup is reactive like any other read. If a project stops being shared, anyone viewing one of
+ * its todos is moved to the not-found page.
  */
 @Composable
 public fun <T : Any> Subject(
@@ -185,10 +191,10 @@ public fun <T : Any> Subject(
 }
 
 /**
- * Composes [content] only if the route at [url] would admit this principal.
+ * Composes [content] only if the route at [url] would allow this principal.
  *
- * For navigation: `IfPermitted("/admin/users") { NavLink("/admin/users") { Text("Users") } }` hides the
- * link by the same rule that blocks the route, so the two cannot disagree.
+ * Use it for navigation links. `IfPermitted("/admin/users") { NavLink("/admin/users") { Text("Users") } }`
+ * hides the link using the route's own guard, so the link and the route always agree.
  */
 @Composable
 public fun IfPermitted(url: String, content: @Composable () -> Unit) {
@@ -197,7 +203,7 @@ public fun IfPermitted(url: String, content: @Composable () -> Unit) {
     if (guard == null || guard.check(request) == Access.Allow) content()
 }
 
-/** The page shown for a route that is not here, or not here for this principal. */
+/** The page shown when a route doesn't exist, or doesn't exist for this principal. */
 @Composable
 public fun NotFoundPage() {
     Div({ classes("jl-not-found") }) {
@@ -206,11 +212,11 @@ public fun NotFoundPage() {
 }
 
 /**
- * Sets the document title for whatever is currently composed.
+ * Sets the document title from inside the composition.
  *
- * A title has to be able to come from the composition rather than from the route table, because a
- * route's title can depend on what the route resolved — and a title computed from a record before anything
- * checked whether the principal may read it is a disclosure in `<head>`.
+ * The route table can't always provide the title, because it may depend on the record the route
+ * resolved. Setting it from the composition means the title is only computed after the access check.
+ * A title computed from a record before that check would leak the record through `<head>`.
  */
 @Composable
 public fun DocumentTitle(title: String) {
@@ -218,7 +224,7 @@ public fun DocumentTitle(title: String) {
     SideEffect { holder.set(title) }
 }
 
-/** Where [DocumentTitle] puts what it is told. Supplied by the view hosting the composition. */
+/** Receives titles set by [DocumentTitle]. Provided by the view that hosts the composition. */
 public fun interface TitleSink {
     public fun set(title: String?)
 }

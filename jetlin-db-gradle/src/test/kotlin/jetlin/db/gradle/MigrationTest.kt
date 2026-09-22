@@ -10,12 +10,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * Migrations, applied to a real database.
+ * Tests generated migrations by applying them to a real database.
  *
- * Generated SQL that looks right is not the thing worth testing — SQLite's own limits are where migrations
- * go wrong, and they only show up when something runs. Every case here creates a database from the old
- * schema, puts a row in it, applies what the generator produced, and then reads the schema back out and
- * checks the row survived.
+ * Checking that the generated SQL looks right isn't enough. Migrations usually fail because of SQLite's
+ * own limitations, which only show up when the SQL runs. Each test creates a database with the old
+ * schema, inserts a row, applies the generated migration, then reads back the schema and checks that
+ * the row survived.
  */
 class MigrationTest {
 
@@ -38,7 +38,7 @@ class MigrationTest {
         val after = schema(table("tasks", id(), text("title"), integer("done", nullable = false)))
         val sql = migrationFor(before, after)
 
-        // The backfill is in the SQL a human reads, not hidden in the tool.
+        // The backfill value appears in the SQL for the author to review, not hidden inside the tool.
         assertContains(sql, "ADD COLUMN done INTEGER NOT NULL DEFAULT 0")
 
         val database = migrated(before, after) { connection ->
@@ -68,7 +68,7 @@ class MigrationTest {
         assertContains(refusal.message.orEmpty(), "have not been acknowledged")
         assertTrue("notes" in columnsOf(database, "tasks").map { it.name }, "nothing was applied")
 
-        // Reading it is the acknowledgement.
+        // Deleting the marker line acknowledges the migration.
         store.write(file, sql.replace("$ACKNOWLEDGEMENT_MARKER\n", ""))
         applyMigrations(database, store)
 
@@ -130,7 +130,7 @@ class MigrationTest {
         create(database, before)
         DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
             connection.createStatement().use {
-                // A row pointing at a user that does not exist: legal before the constraint, not after.
+                // A row referencing a user that doesn't exist. Valid before the constraint is added, not after.
                 it.execute("INSERT INTO tasks (id, owner) VALUES (1, 404)")
             }
         }
@@ -158,12 +158,12 @@ class MigrationTest {
         val sql = migrationFor(before, after).replace("$ACKNOWLEDGEMENT_MARKER\n", "")
         store.write(file, sql)
 
-        // The generator cannot see what a database has on it, so the runner is what notices. Views are the
-        // classic version of this trap; an index is the easy one to demonstrate.
+        // The generator can't see which objects a particular database has, so the runner has to detect
+        // the loss. Views are the most common case; an index is the simplest to demonstrate.
         val failure = assertFailsWith<IllegalStateException> { applyMigrations(database, store) }
         assertContains(failure.message.orEmpty(), "index tasks_by_rank")
 
-        // With the index re-created in the migration, it goes through.
+        // Once the migration re-creates the index, it succeeds.
         store.write(file, sql + "\nCREATE INDEX tasks_by_rank ON tasks(rank);\n")
         applyMigrations(database, store)
 
@@ -224,7 +224,7 @@ private fun integer(name: String, nullable: Boolean = false, references: String?
 private fun migrationFor(before: SchemaFile, after: SchemaFile): String =
     migrationSql(before, after, diff(before, after))
 
-/** Builds a database from [before], lets [seed] put rows in it, then applies the generated migration. */
+/** Creates a database with schema [before], lets [seed] insert rows, then applies the generated migration. */
 private fun migrated(
     before: SchemaFile,
     after: SchemaFile,
@@ -253,7 +253,7 @@ private fun create(database: File, schema: SchemaFile) {
     }
 }
 
-/** The schema as the database now has it, in the same shape the snapshot records. */
+/** Reads the database's current schema, in the same format as the schema snapshot. */
 private fun columnsOf(database: File, table: String): List<ColumnSchema> =
     DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
         val references = mutableMapOf<String, String>()
@@ -272,9 +272,9 @@ private fun columnsOf(database: File, table: String): List<ColumnSchema> =
                             ColumnSchema(
                                 name = name,
                                 type = results.getString("type"),
-                                // SQLite reports `notnull = 0` for an INTEGER PRIMARY KEY, because it is the
-                                // rowid alias and writing NULL there means "assign one". It is never
-                                // actually null, so reading it back as optional would be a false difference.
+                                // SQLite reports `notnull = 0` for an INTEGER PRIMARY KEY because it aliases
+                                // the rowid, where inserting NULL means "allocate an id". The column is never
+                                // null, so treating it as optional would report a difference that isn't real.
                                 nullable = !primaryKey && results.getInt("notnull") == 0,
                                 references = references[name],
                                 primaryKey = primaryKey,

@@ -26,10 +26,10 @@ import jetlin.runtime.fresh
 import jetlin.runtime.rememberAction
 
 /**
- * The chrome, composed once for the session above whichever view is current.
+ * The page chrome. It is composed once per session, around whichever view is current.
  *
- * The admin link is hidden by the same guard that blocks the route, which is the point of `IfPermitted`:
- * hiding a link and refusing a route are one fact, and two copies of it drift.
+ * `IfPermitted` hides the admin link using the same guard that protects the route, so the link and the
+ * route can't disagree about who may use them.
  */
 @Composable
 fun Shell(hub: Hub?, content: @Composable () -> Unit) {
@@ -48,30 +48,30 @@ fun Shell(hub: Hub?, content: @Composable () -> Unit) {
                 Link("/login", { classes("link") }) { Text("Switch user") }
             }
         }
-        // External data in the chrome rather than on a page of its own, because that is where this kind
-        // of thing actually goes. One Fetch behind it for the whole process, so a hundred sessions
-        // showing this banner cost one request a minute between them — and when it changes at the other
-        // end, every one of those sessions is recomposed by the write that fills the cell.
+        // External data shown in the chrome, which is where an announcement banner usually goes. A
+        // single Fetch serves the whole process, so a hundred sessions showing the banner share one
+        // request a minute. When the announcement changes, the write that stores the new value
+        // recomposes all of those sessions.
         if (principal != null && hub != null) Announcement(hub)
         content()
     }
 }
 
 /**
- * The announcement, when there is one.
+ * The announcement banner, shown once the announcement has loaded.
  *
- * Renders nothing at all while it is loading or if it failed: the chrome is not the place for a
- * placeholder, and an announcement nobody has yet is not news. The three-way read is still there — it is
- * just that two of the three answers are "say nothing", which is a perfectly good way to handle them.
+ * While the announcement is loading, or if it failed to load, nothing is rendered. A placeholder or an
+ * error message would be out of place in the chrome. The code still handles all three [Fetched] states;
+ * two of them just render nothing.
  *
- * Worth watching on the very first page load after a restart: the banner is absent from the server-rendered
- * HTML and appears a moment later, because the first read is what started the fetch and nothing blocks a
- * first paint on a network call. Every load after that has it server-side, including the first one in
- * somebody else's session — there is one of these for the whole process.
+ * On the first page load after a restart, the banner is missing from the server-rendered HTML and
+ * appears a moment later. The first read starts the fetch, and the first paint doesn't wait for network
+ * calls. After that, the value is cached for the whole process, so every later page load includes it in
+ * the server-rendered HTML, even in other sessions.
  *
- * `fresh` is what keeps it current: while any page is showing this, the value is re-fetched on a loop, and
- * the loop stops when the last of those pages goes away. Ten people watching cost what one costs, because
- * the watching is counted on the value rather than on any one session.
+ * `fresh` keeps the value current. While any page is showing the banner, the value is refetched
+ * periodically, and the polling stops when the last such page closes. Watchers are counted on the value,
+ * not per session, so ten viewers cost the same as one.
  */
 @Composable
 private fun Announcement(hub: Hub) {
@@ -80,11 +80,11 @@ private fun Announcement(hub: Hub) {
 }
 
 /**
- * Signing in, such as it is: pick a seeded account and a cookie is set.
+ * The sign-in page. Choosing a seeded account sets a cookie.
  *
- * Reads nothing from the database. A sign-in page is the one page whose job is to precede having a principal,
- * and the accounts it offers are this sample's fixture rather than data — which keeps the page from needing
- * a hole in the gate to render itself.
+ * It reads nothing from the database. The sign-in page is shown before there is a principal, so it lists
+ * the sample's fixed accounts instead of querying for them, which would need a way around the policy
+ * checks.
  */
 @Composable
 fun SignInPage() {
@@ -95,7 +95,7 @@ fun SignInPage() {
             for (account in SEEDED_ACCOUNTS) {
                 key(account.email) {
                     Li({ classes("person") }) {
-                        // A plain link to a route that sets a cookie. Nothing here is jetlin-db's business.
+                        // A plain link to a route that sets a cookie. jetlin-db isn't involved.
                         Link("/signin/${account.email}", { testTag("signin-${account.label.lowercase()}") }) {
                             Text(account.label)
                         }
@@ -108,11 +108,11 @@ fun SignInPage() {
 }
 
 /**
- * Todos: the principal's own, plus anything shared with their team.
+ * The principal's own todos, plus any shared with their team.
  *
- * `db.todos` is a generated, policy-filtered collection. Iterating it subscribes this composition to the
- * list *and* to whatever the policy read — which is why sharing a todo with the team makes it appear here
- * with nothing else happening.
+ * `db.todos` is a generated collection filtered by the policy. Iterating it subscribes this composition
+ * to the list and to everything the policy read. That is why a todo appears here as soon as a teammate
+ * shares it, with no other code involved.
  */
 @Composable
 context(principal: User)
@@ -160,7 +160,8 @@ private fun TodoRow(db: Db, todo: Todo) {
         Input({
             attr("type", "checkbox")
             testTag("done")
-            // A teammate can see it and cannot change it, so the checkbox says so rather than failing.
+            // A teammate can see the todo but not change it, so the checkbox is disabled instead of
+            // letting the write fail.
             disabled(!mine)
             if (todo.done) attr("checked", "")
             onChange { if (mine) todo.update { done = !done } }
@@ -179,7 +180,7 @@ private fun TodoRow(db: Db, todo: Todo) {
     }
 }
 
-/** One todo, reached by a route that resolved it. A principal who may not read it never gets here. */
+/** The detail page for one todo. The route has already resolved it, so the principal is allowed to read it. */
 @Composable
 context(principal: User)
 fun TodoDetailPage(db: Db, todo: Todo) {
@@ -201,8 +202,8 @@ fun TodoDetailPage(db: Db, todo: Todo) {
                 attr("type", "checkbox")
                 testTag("archived")
                 if (todo.archived) attr("checked", "")
-                // Column-level policy: the control is disabled for anyone who is not an admin, and the
-                // write would be refused even if the browser sent it anyway.
+                // Column-level policy: the checkbox is disabled for non-admins, and the write would be
+                // refused on the server even if the event were sent anyway.
                 disabled(!principal.admin)
                 onChange { todo.update { archived = !archived } }
             })
@@ -212,7 +213,7 @@ fun TodoDetailPage(db: Db, todo: Todo) {
     }
 }
 
-/** Shape 1: notes nobody else can see, however they ask. */
+/** Pattern 1: private notes that only their owner can see. */
 @Composable
 context(principal: User)
 fun NotesPage(db: Db) {
@@ -227,7 +228,7 @@ fun NotesPage(db: Db) {
     }
 }
 
-/** An admin-only page, guarded in the route table. */
+/** An admin-only page. The guard is declared in the route table. */
 @Composable
 context(principal: User)
 fun AdminUsersPage(db: Db) {
@@ -243,8 +244,8 @@ fun AdminUsersPage(db: Db) {
                         Button({
                             classes("link")
                             testTag("toggle-admin")
-                            // Revoking a role while someone is looking at this page moves them off it:
-                            // the guard read `admin`, so writing it re-evaluates the guard.
+                            // If a user is viewing this page when their admin role is revoked, they are
+                            // moved off it: the route guard read `admin`, so changing it re-runs the guard.
                             onClick { user.update { admin = !admin } }
                         }) { Text(if (user.admin) "Revoke admin" else "Make admin") }
                     }
@@ -257,12 +258,13 @@ fun AdminUsersPage(db: Db) {
 }
 
 /**
- * The other kind of data, on a page of its own.
+ * A page showing data from the external system.
  *
- * Nothing here is stored and nothing here is gated, and the page does not look very different for it: a
- * read subscribes, an arrival recomposes, a write is refused by whoever owns the data rather than by a
- * policy. What *is* different is that every read has three answers rather than one, which is the honest
- * cost of the value living somewhere else — and why `Fetched` is a type rather than a nullable.
+ * None of this data is stored or policy-checked, but the page works much like the others: reading a
+ * value subscribes the page, an arrival recomposes it, and a write can be refused (here by the external
+ * system instead of by a policy). The main difference is that every value has three possible states
+ * (loading, failed or ready) instead of one. That is the cost of data that lives elsewhere, and the
+ * reason `Fetched` is a sealed type instead of a nullable value.
  */
 @Composable
 context(principal: User)
@@ -270,7 +272,7 @@ fun HubPage(hub: Hub) {
     val status = rememberSavedField("", key = "status") {
         if (it.isBlank()) "Say something" else null
     }
-    // Remembered per page rather than per application: the in-flight state belongs to this button.
+    // Remembered in this page, not globally, because the in-progress state belongs to this button.
     val save = rememberAction { hub.setStatus(principal, status.value.trim()) }
 
     Div({ classes("card") }) {
@@ -280,8 +282,8 @@ fun HubPage(hub: Hub) {
         }
 
         H2 { Text("Announcement") }
-        // One Fetch for everybody, because the announcement is the same for everybody. A hundred
-        // sessions reading this cost one request a minute between them.
+        // The announcement is the same for everyone, so a single Fetch serves every session. A hundred
+        // sessions reading it share one request a minute.
         P({ testTag("announcement") }) { Text(hub.announcement.value.say { it }) }
 
         H2 { Text("Your status") }
@@ -298,21 +300,22 @@ fun HubPage(hub: Hub) {
             Button({
                 classes("btn")
                 testTag("save-status")
-                // The request is outstanding, so the button says so. This is the whole reason an action
-                // has a state rather than being a fire-and-forget launch.
+                // Disabled while the request is running. This is why an action exposes its state
+                // instead of just launching a coroutine.
                 disabled(!status.isValid || save.state is Run.Running)
                 onClick { save() }
             }) { Text(if (save.state is Run.Running) "Saving…" else "Save") }
         }
-        // A refusal the application could not have predicted, shown where the user is looking. The
-        // session is untouched: an action catches, so a failed command costs a line of text.
+        // Shows errors the application couldn't anticipate, next to the control that caused them. The
+        // action catches the exception, so a failed command only produces this message and the session
+        // carries on.
         (save.state as? Run.Failed)?.let { failed ->
             P({ classes("muted"); testTag("status-error") }) { Text(failed.cause.message.orEmpty()) }
         }
     }
 }
 
-/** The three answers a fetched value can give, as a page would put them. */
+/** Formats each of the three [Fetched] states as display text. */
 private fun <V> Fetched<V>.say(ready: (V) -> String): String = when (this) {
     is Fetched.Loading -> "…"
     is Fetched.Failed -> "unavailable"

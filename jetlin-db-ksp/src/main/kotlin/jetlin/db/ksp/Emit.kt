@@ -1,13 +1,13 @@
 package jetlin.db.ksp
 
 /**
- * The generated code.
+ * Generates the table file for one entity.
  *
- * Fully qualified names throughout, and no imports: generated code has no reader to please and every
- * import is a way for it to collide with something the entity's own file declared.
+ * The generated code uses fully qualified names and no imports. Nobody reads it for style, and each
+ * import could clash with a name declared in the entity's own file.
  *
- * Kept as pure string building so the output can be asserted in a unit test. The alternative —
- * checking generated code by compiling it — only tells you that *something* compiled.
+ * Generation is plain string building so the exact output can be checked in unit tests. Compiling the
+ * output would only show that it compiles, not that it is correct.
  */
 internal fun emitTable(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
@@ -20,9 +20,9 @@ internal fun emitTable(entity: EntityModel): String = buildString {
     }
 
     appendLine("/**")
-    appendLine(" * How [$type] is stored, and the columns a policy can name.")
+    appendLine(" * The table for [$type], and the column objects a policy can refer to.")
     appendLine(" *")
-    appendLine(" * A column here is the object the table flushes, so `when (column)` in a policy matches.")
+    appendLine(" * These are the same column instances the table writes, so `when (column)` in a policy matches them.")
     appendLine(" */")
     appendLine("${entity.visibility} object ${entity.objectName} {")
     appendLine()
@@ -50,39 +50,39 @@ internal fun emitTable(entity: EntityModel): String = buildString {
 }
 
 /**
- * The only way application code obtains one of these records.
+ * Generates the accessors that are application code's only way to obtain records of this entity.
  *
- * Every one takes the principal as a context parameter, so a page that forgot to have a principal in scope
- * does not compile rather than quietly reading someone else's records.
+ * Each takes the principal as a context parameter. Code without a principal in scope fails to compile,
+ * instead of running and reading records the user shouldn't see.
  */
 private fun emitAccessors(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
     val principal = entity.principal
-    appendLine("    /** Every stored ${entity.simpleName} this principal may read. */")
+    appendLine("    /** All stored ${entity.simpleName} records that this principal may read. */")
     appendLine("    context(principal: $principal)")
     appendLine("    ${entity.visibility} fun all(db: jetlin.db.Db): jetlin.db.View<$type> =")
     appendLine("        jetlin.db.Gate.view(db, table, policy, principal)")
     appendLine()
-    appendLine("    /** The ${entity.simpleName} with this id, or null — including when it exists and is not readable. */")
+    appendLine("    /** The ${entity.simpleName} with this id, or null if it doesn't exist or this principal may not read it. */")
     appendLine("    context(principal: $principal)")
     appendLine("    ${entity.visibility} fun find(db: jetlin.db.Db, id: jetlin.db.Id<$type>): $type? =")
     appendLine("        jetlin.db.Gate.find(db, table, policy, principal, id)")
 }
 
 /**
- * `update { }` and `delete()`, as extensions carrying the principal.
+ * Generates `update { }` and `delete()` as extension functions that take the principal.
  *
- * Assignment straight to a field was considered and rejected: a property setter has nowhere to put a
- * context parameter, so `todo.done = true` could only be checked against an ambient principal at runtime.
- * `update { }` costs eight characters and keeps the guarantee at compile time.
+ * Direct assignment such as `todo.done = true` was considered and rejected. A property setter can't
+ * take a context parameter, so it could only check a thread-local principal at runtime. `update { }`
+ * is slightly longer to write but keeps the check at compile time.
  */
 private fun emitMutators(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
     val principal = entity.principal
     appendLine("/**")
-    appendLine(" * Changes this ${entity.simpleName} as one transaction: committed to disk before any session sees it.")
+    appendLine(" * Changes this ${entity.simpleName} in one transaction, committed to disk before any session sees the change.")
     appendLine(" *")
-    appendLine(" * Refused writes throw [jetlin.db.AccessDenied]; a refusal inside a transaction commits nothing.")
+    appendLine(" * A refused write throws [jetlin.db.AccessDenied] and rolls back the whole transaction.")
     appendLine(" */")
     appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.update(block: ${entity.draftQualified}.() -> Unit) {")
@@ -92,7 +92,7 @@ private fun emitMutators(entity: EntityModel): String = buildString {
     appendLine("    }")
     appendLine("}")
     appendLine()
-    appendLine("/** Removes this ${entity.simpleName}, if this principal may delete it. */")
+    appendLine("/** Deletes this ${entity.simpleName} if this principal may delete it. */")
     appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.delete(): Unit =")
     appendLine("    jetlin.db.Gate.delete(this, ${entity.objectQualified}.policy, principal)")
@@ -111,7 +111,7 @@ private fun declare(column: ColumnModel): String {
     }
 }
 
-/** How one column is read back out of a stored row. */
+/** The expression that reads one column from a stored row. */
 private fun read(column: ColumnModel): String {
     val name = "\"${column.name}\""
     return when {
@@ -135,10 +135,12 @@ private fun read(column: ColumnModel): String {
 }
 
 /**
- * Rebuilds one record from a row: constructor first, then whatever the constructor does not take.
+ * Generates the code that recreates a record from a row: the constructor call, followed by
+ * assignments for columns the constructor doesn't take.
  *
- * Columns the constructor accepts go through it, so an immutable column and a `val` cell both work.
- * What is left over must be settable, which [validate] has already established.
+ * Columns with a matching constructor parameter are passed to the constructor, which is what makes
+ * immutable columns and `val` cells loadable. The remaining columns must be settable; [validate] has
+ * already checked that.
  */
 private fun loadBody(entity: EntityModel): String = buildString {
     val byConstructor = entity.columns.filter { it.constructorParameter }
@@ -157,16 +159,16 @@ private fun loadBody(entity: EntityModel): String = buildString {
 }
 
 /**
- * The draft type `update { }` hands to the caller.
+ * Generates the draft type that `update { }` passes to its block.
  *
- * Only settable columns appear: an immutable one is written once, by the insert, and there is nothing a
- * draft could do with it. The column-level policy check lands in these setters in phase 4 — which is
- * the whole reason a draft exists rather than assignment straight to the record.
+ * Only settable columns are included. Immutable columns are written once on insert and can't be
+ * changed. Each setter checks the column-level policy before writing, which is the reason drafts exist
+ * instead of assigning to the record directly.
  */
 private fun emitDraft(entity: EntityModel): String = buildString {
     val settable = entity.columns.filter { it.settable }
     appendLine("/**")
-    appendLine(" * The fields of a [${entity.qualifiedName}] that `update { }` may write.")
+    appendLine(" * The fields of a [${entity.qualifiedName}] that `update { }` can set.")
     appendLine(" */")
     appendLine("${entity.visibility} class ${entity.draftName} internal constructor(")
     appendLine("    private val record: ${entity.qualifiedName},")
@@ -187,16 +189,16 @@ private fun emitDraft(entity: EntityModel): String = buildString {
         appendLine("        }")
     }
     if (settable.isEmpty()) {
-        appendLine("    // Nothing on ${entity.simpleName} is settable: every column is written by the insert.")
+        appendLine("    // ${entity.simpleName} has no settable columns; all of them are written on insert.")
     }
     appendLine("}")
 }
 
 /**
- * The list of tables, in load order.
+ * Generates the schema object listing every table in load order.
  *
- * An application passes this to `Db.open`, so the order non-null references require is part of the
- * generated schema rather than something to get right by hand.
+ * Applications pass this list to `Db.open`. Because it is generated, the order required by non-null
+ * references doesn't have to be maintained by hand.
  */
 internal fun emitSchema(entities: List<EntityModel>, packageName: String, objectName: String): String =
     buildString {
@@ -209,7 +211,7 @@ internal fun emitSchema(entities: List<EntityModel>, packageName: String, object
         }
         val visibility = if (entities.any { it.isInternal }) "internal" else "public"
         appendLine("/**")
-        appendLine(" * Every stored entity, ordered so that a table is loaded after the tables it references.")
+        appendLine(" * All stored entities, ordered so that each table is loaded after the tables it references.")
         appendLine(" */")
         appendLine("$visibility object $objectName {")
         appendLine("    $visibility val tables: List<jetlin.db.Table<out jetlin.db.Record>> = listOf(")
@@ -234,30 +236,30 @@ internal fun emitSchema(entities: List<EntityModel>, packageName: String, object
     }
 
 /**
- * `db.todos` — the collection an application reads from.
+ * Generates the collection accessor an application reads from, such as `db.todos`.
  *
- * Generated rather than left to the application because it is the shape §4.5 is written in, and because
- * writing it by hand means writing the principal into it by hand.
+ * It is generated so that the principal parameter is always present. This is the accessor shape
+ * described in §4.5 of the design plan.
  */
 private fun emitCollection(entity: EntityModel, packageName: String): String = buildString {
     val qualifier = entity.objectQualified(packageName)
-    appendLine("/** Every stored ${entity.simpleName} this principal may read. */")
+    appendLine("/** All stored ${entity.simpleName} records that this principal may read. */")
     appendLine("context(principal: ${entity.principal})")
     appendLine("${entity.visibility} val jetlin.db.Db.${entity.collectionName}: jetlin.db.View<${entity.qualifiedName}>")
     appendLine("    get() = $qualifier.all(this)")
 }
 
 /**
- * The other side of a reference: `project.tasks`.
+ * Generates the inverse side of a reference, such as `project.tasks`.
  *
- * Filtered by the *referencing* entity's policy, evaluated per read. That is what makes unsharing
- * reactive — a record that stops being readable leaves the collection, and the pages that iterated it
- * recompose, with no invalidation anywhere.
+ * The collection is filtered by the policy of the *referencing* entity, on every read. That makes
+ * unsharing reactive: a record that is no longer readable drops out of the collection, and pages that
+ * iterated it recompose without any invalidation code.
  */
 private fun emitInverse(inverse: InverseModel, packageName: String): String = buildString {
     val source = inverse.source
     val qualifier = source.objectQualified(packageName)
-    appendLine("/** Every ${source.simpleName} whose `${inverse.column}` is this one, and that this principal may read. */")
+    appendLine("/** The ${source.simpleName} records whose `${inverse.column}` is this record and that this principal may read. */")
     appendLine("context(principal: ${source.principal})")
     appendLine("${inverse.visibility} val ${inverse.targetType}.${inverse.name}: jetlin.db.View<${source.qualifiedName}>")
     appendLine("    get() {")
@@ -278,11 +280,12 @@ internal data class InverseModel(
 )
 
 /**
- * Every inverse relation worth generating.
+ * Lists the inverse relations to generate.
  *
- * Named after the referencing entity — `project.tasks` — unless one entity references the same target
- * twice, in which case the column name disambiguates: two relations called `tasks` would be a compile
- * error on generated code, which is the worst kind.
+ * Each is named after the referencing entity, as in `project.tasks`. If an entity references the same
+ * target through two columns, the column name is added to tell them apart. Otherwise there would be two
+ * properties called `tasks`, and the generated code would fail to compile in a way that is hard for the
+ * user to fix.
  */
 internal fun inverses(entities: List<EntityModel>): List<InverseModel> {
     val known = entities.associateBy { it.qualifiedName }
@@ -307,10 +310,11 @@ internal fun inverses(entities: List<EntityModel>): List<InverseModel> {
 }
 
 /**
- * The schema as data, for the migration tooling to diff against what is checked in.
+ * Generates the schema as JSON, which the migration tooling compares with the checked-in snapshot.
  *
- * JSON written by hand because this module has no serialization dependency and the shape is five
- * fields deep. Sorted, so that reordering entity declarations does not show up as a schema change.
+ * The JSON is written by hand because this module has no serialization dependency and the structure is
+ * small. Tables and columns are sorted, so reordering entity declarations doesn't appear as a schema
+ * change.
  */
 internal fun emitSnapshot(entities: List<EntityModel>): String = buildString {
     val tableNames = entities.associate { it.qualifiedName to it.tableName }

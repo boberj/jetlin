@@ -102,17 +102,17 @@ public class ViewTest internal constructor(
         get() = view ?: error("No content set; call setContent { ... } first")
 
     /**
-     * Attaches a session attribute — the principal, normally.
+     * Sets a session attribute, usually the principal.
      *
      * ```kotlin
      * setAttribute(PrincipalKey, root)
      * setRoutes(appRoutes)
      * ```
      *
-     * Takes effect for every view composed from here on, which includes the one
-     * [hibernateAndRestore] builds. That is how the wake case is tested: a session that slept wakes with
-     * its attributes recomputed from the connection that woke it, so changing the principal and waking is
-     * exactly what a role revoked while hibernated looks like.
+     * The attribute applies to every view composed after this call, including the one that
+     * [hibernateAndRestore] creates. That makes it possible to test waking from hibernation: a woken
+     * session recomputes its attributes from the new connection, so changing the principal and then
+     * calling [hibernateAndRestore] simulates a role being revoked while the session was hibernated.
      */
     public fun <T> setAttribute(key: AttributeKey<T>, value: T?) {
         request = request.with(key, value)
@@ -122,10 +122,10 @@ public class ViewTest internal constructor(
     public val currentUrl: String get() = live.currentUrl
 
     /**
-     * The document title the composition asked for.
+     * The document title set by the composition.
      *
-     * Worth asserting on its own: a route's title is rendered into `<head>` before the body, so a title
-     * derived from a record discloses it even when the body refused to show it.
+     * Assert on it separately from the body. The title is rendered into `<head>` before the body, so a
+     * title computed from a record reveals the record even if the body refused to show it.
      */
     public suspend fun title(): String? {
         live.awaitIdle()

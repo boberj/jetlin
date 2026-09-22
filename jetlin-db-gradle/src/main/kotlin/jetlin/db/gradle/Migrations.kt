@@ -4,7 +4,7 @@ import java.io.File
 import java.sql.Connection
 import java.sql.DriverManager
 
-/** One migration file: its ordering prefix, its name on disk, and its SQL. */
+/** A migration file. Its name starts with a numeric prefix that determines the order migrations run in. */
 public data class Migration(val file: File) {
     public val name: String get() = file.name
 
@@ -14,11 +14,12 @@ public data class Migration(val file: File) {
 }
 
 /**
- * Reading, writing and applying the migrations of one repository.
+ * Reads and writes the migration files in one directory.
  *
- * Migrations are SQL files checked in next to the code, named `0001_what_it_does.sql`, applied in name
- * order, and recorded in a table so that applying twice does nothing. No framework-specific format: what
- * is in the file is what runs, which is the only way a generated migration can be reviewed honestly.
+ * Migrations are SQL files checked in with the code and named like `0001_what_it_does.sql`. They are
+ * applied in name order, and each applied migration is recorded in a table so it never runs twice.
+ * The files are plain SQL with no framework-specific format, so the SQL a reviewer reads is exactly
+ * the SQL that runs.
  */
 public class Migrations(private val directory: File) {
 
@@ -30,7 +31,7 @@ public class Migrations(private val directory: File) {
             .sortedBy { it.name }
             .map { Migration(it) }
 
-    /** The next file name, keeping the numeric prefix ordered and padded. */
+    /** Returns the file for a new migration, numbered one higher than the latest and zero-padded. */
     public fun nextFile(description: String): File {
         val next = all().mapNotNull { it.name.substringBefore('_').toIntOrNull() }.maxOrNull()?.plus(1) ?: 1
         val slug = description.trim().lowercase()
@@ -46,7 +47,7 @@ public class Migrations(private val directory: File) {
     }
 }
 
-/** What [applyMigrations] did, for the task to report. */
+/** The migrations [applyMigrations] applied and the ones that were already applied, for the task to report. */
 public data class MigrationResult(val applied: List<String>, val alreadyApplied: List<String>)
 
 private const val HISTORY = "jetlin_migrations"
@@ -54,17 +55,19 @@ private const val HISTORY = "jetlin_migrations"
 /**
  * Applies every pending migration to the database at [databaseFile].
  *
- * Each migration runs as one transaction with foreign keys disabled, which is what the rebuild procedure
- * requires, and is checked before committing:
+ * Each migration runs in its own transaction with foreign keys disabled, as SQLite's table rebuild
+ * procedure requires. Before committing, the runner checks two things:
  *
- * - `PRAGMA foreign_key_check` — a rebuild that left a dangling reference is a failure, not a warning.
- * - every index, trigger and view that existed on a rebuilt table still exists. A rebuild drops the old
- *   table, and everything attached to it goes with it. Rather than guess at re-creating them — the
- *   generator cannot see what a database has — the runner notices and stops, naming what was lost, so the
- *   migration can be edited to re-create it. Views referencing a rebuilt table are the classic trap here.
+ * - `PRAGMA foreign_key_check` reports no violations. A rebuild that leaves a dangling reference fails
+ *   the migration.
+ * - Every index, trigger and view that existed before the migration still exists. Rebuilding a table
+ *   drops the old table along with everything attached to it. The generator can't see which of these
+ *   objects a particular database has, so instead of trying to re-create them, the runner detects the
+ *   loss and fails with the names of the missing objects. The migration can then be edited to re-create
+ *   them. Views over a rebuilt table are the most common case.
  *
- * A failure rolls the migration back and leaves the history untouched, so the fix is to edit the file and
- * run again rather than to repair a half-migrated database by hand.
+ * On failure, the migration is rolled back and not recorded as applied. Fix the file and run the task
+ * again; there is no half-migrated database to repair.
  */
 public fun applyMigrations(databaseFile: File, migrations: Migrations): MigrationResult {
     databaseFile.parentFile?.mkdirs()
@@ -102,8 +105,8 @@ public fun applyMigrations(databaseFile: File, migrations: Migrations): Migratio
 private fun apply(connection: Connection, migration: Migration) {
     val dependentsBefore = dependentObjects(connection)
 
-    // Off for the duration, and restored afterwards: the rebuild procedure drops a table other tables
-    // still reference, which is only legal while the constraint is not being enforced row by row.
+    // Disabled during the migration and re-enabled afterwards. The rebuild procedure drops a table that
+    // other tables still reference, which SQLite only allows while foreign keys are not enforced.
     connection.createStatement().use { it.execute("PRAGMA foreign_keys=OFF") }
     connection.autoCommit = false
     try {
@@ -135,7 +138,7 @@ private fun apply(connection: Connection, migration: Migration) {
     }
 }
 
-/** Indexes, triggers and views, by name: what a rebuild silently takes with it. */
+/** The names of all indexes, triggers and views: the objects a table rebuild drops without warning. */
 private fun dependentObjects(connection: Connection): Set<String> {
     val objects = mutableSetOf<String>()
     connection.createStatement().use { statement ->
@@ -159,11 +162,11 @@ private fun violations(connection: Connection): String? {
 }
 
 /**
- * Splits a migration into statements.
+ * Splits a migration into statements at semicolons that are outside quotes and comments.
  *
- * Naive on purpose — semicolons outside quotes and comments — because a migration is DDL and a `BEGIN …
- * END` trigger body is the one thing it cannot handle. A trigger written by hand can be applied by a
- * migration that contains only it, and that limitation is worth less than the clarity of a short splitter.
+ * This is intentionally simple, because migrations are mostly DDL. The one construct it can't handle
+ * is a trigger with a `BEGIN … END` body, since the semicolons inside the body are treated as statement
+ * separators. Supporting that would need a real SQL tokenizer.
  */
 internal fun statements(sql: String): List<String> {
     val statements = mutableListOf<String>()

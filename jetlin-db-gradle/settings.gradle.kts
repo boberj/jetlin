@@ -14,8 +14,8 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
     }
-    // The same catalog the rest of the repository uses: a plugin pinned to a different SQLite than the
-    // runtime would be a migration tool that disagrees with the thing it migrates.
+    // Use the repository's version catalog, so the migration tool and the runtime use the same SQLite
+    // driver version.
     versionCatalogs {
         create("libs") {
             from(files("../gradle/libs.versions.toml"))

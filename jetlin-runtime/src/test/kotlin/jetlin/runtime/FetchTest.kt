@@ -24,20 +24,20 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 
 /**
- * A value that arrives late, seen from a composition.
+ * Tests [Fetch] from the point of view of a composition.
  *
- * Every assertion here is about what a session does rather than about the state machine: whether the
- * placeholder reached the tree, whether the arrival cost one pass, whether a second reader cost a second
- * request. The state machine is only interesting because of those.
+ * The assertions check observable session behaviour rather than the internal state machine: whether the
+ * placeholder was rendered, whether the arrival caused exactly one recomposition, and whether a second
+ * reader caused a second request.
  *
- * Two of these tests would hang rather than fail if the design were wrong, and that is deliberate: a read
- * that wrote snapshot state would invalidate its own reader every pass, so [CompositionHost.awaitIdle]
- * would never return. A test that hangs on a recomposition loop is a truer report than one that counts
- * passes and happens to stop.
+ * Two of these tests hang instead of failing if reading ever writes snapshot state. Such a write would
+ * invalidate the reader on every pass, so [CompositionHost.awaitIdle] would never return. That is
+ * intentional: a hang points directly at a recomposition loop, whereas counting passes up to some limit
+ * could stop early and hide it.
  */
 class FetchTest {
 
-    /** Where fetches run: never the session's dispatcher, which is the point. */
+    /** The scope fetches run on. It is deliberately separate from the session's dispatcher. */
     private val fetches = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     @AfterTest
@@ -59,8 +59,8 @@ class FetchTest {
             host.setContent { Text(fetch.value.text()) }
             assertEquals("root(…)", root.render(), "the session composed without waiting for the fetch")
 
-            // Nothing further should happen on its own. If the read had written state, this would be
-            // where the loop showed up — as a hang, not as a wrong number.
+            // Nothing else should happen now. If the read had written state, the recomposition loop
+            // would show up here as a hang.
             host.awaitIdle()
             val settled = host.changeCount
 
@@ -85,7 +85,7 @@ class FetchTest {
 
         val root = TestNode("root")
         CompositionHost(TestApplier(root)).use { host ->
-            // Two readers in one pass, which is what a page showing the same value twice looks like.
+            // Two reads in one pass, as on a page that shows the same value twice.
             host.setContent {
                 Text(fetch.value.text())
                 Text(fetch.value.text())
@@ -131,7 +131,7 @@ class FetchTest {
             assertEquals("root(tick 0,call 1)", root.render())
 
             clock.advance(29.seconds)
-            host.transact { page.tick++ } // A recomposition, which is what re-reads the value.
+            host.transact { page.tick++ } // Forces a recomposition, which reads the value again.
             fetches.settle()
             host.awaitIdle()
 
@@ -165,13 +165,13 @@ class FetchTest {
             clock.advance(31.seconds)
             host.transact { page.tick++ }
             host.awaitIdle()
-            // Waiting for the revalidation to be under way rather than assuming it: scheduling a fetch
-            // hands a coroutine to a dispatcher, and asserting on the count before that coroutine has
-            // run is a race the test would lose on a loaded machine.
+            // Wait until the revalidation has actually started. Scheduling a fetch only hands a coroutine
+            // to a dispatcher, so checking the count immediately would be a race that could fail on a
+            // busy machine.
             revalidating.await()
 
-            // The revalidation is outstanding and the page still shows something true. Flipping back to
-            // the placeholder here is the flicker this design exists to avoid.
+            // While the revalidation is running, the page still shows the previous value. Showing the
+            // placeholder again here would be the flicker this design avoids.
             assertEquals("root(tick 1,first)", root.render())
             assertEquals(2, calls.get())
 
@@ -199,8 +199,8 @@ class FetchTest {
             host.awaitIdle()
 
             clock.advance(31.seconds)
-            // One pass, which re-reads the value and so schedules the revalidation. Counting from after
-            // it means the only thing left to count is what the arrival did.
+            // Recompose once, which re-reads the value and schedules the revalidation. Counting from
+            // after this pass isolates the effect of the arrival.
             host.transact { page.tick++ }
             host.awaitIdle()
             val revalidating = host.changeCount
@@ -257,11 +257,11 @@ class FetchTest {
             val host = CompositionHost(TestApplier(root))
             host.setContent { Text(fetch.fresh(every = 30.milliseconds).text()) }
 
-            // Three turns of the loop, which is three requests nobody asked for by hand.
+            // Three iterations of the loop, so three requests that nothing else triggered.
             awaitCalls(calls, atLeast = 3)
             host.close()
 
-            // And then it stops: nobody is looking, so nobody is paying.
+            // After the watch stops, no more requests are made.
             val whenClosed = calls.get()
             realDelay(150.milliseconds)
             assertEquals(whenClosed, calls.get(), "a page that is gone should not still be polling")
@@ -280,15 +280,15 @@ class FetchTest {
         realDelay(200.milliseconds)
         val both = calls.get()
 
-        // Six turns of a 30ms loop in 200ms, give or take. Two loops would be a dozen, and the gap is
-        // the point: sessions showing the same thing are one request between them, not one each.
+        // A 30 ms loop runs about six times in 200 ms. Two separate loops would make about a dozen
+        // requests; one shared loop means the sessions share each request.
         assertTrue(both in 2..9, "expected one loop's worth of requests, got $both")
 
-        // One of them leaves. The value is still on somebody's page, so it is still being kept fresh.
+        // One watcher stops. The other is still watching, so polling continues.
         first.close()
         awaitCalls(calls, atLeast = both + 2)
 
-        // The last one leaves, and only then does it stop.
+        // Polling stops only when the last watcher stops.
         second.close()
         val whenBothClosed = calls.get()
         realDelay(150.milliseconds)
@@ -304,7 +304,7 @@ class FetchTest {
         realDelay(60.milliseconds)
         assertEquals(0, calls.get(), "a ten second watch should not have fired yet")
 
-        // A page that wants it fresher joins, and gets what it asked for rather than what was there.
+        // A watcher with a shorter interval joins, and the loop switches to the shorter interval.
         val quick = fetch.watch(every = 25.milliseconds)
         awaitCalls(calls, atLeast = 2)
 
@@ -326,8 +326,8 @@ class FetchTest {
             host.awaitIdle()
             assertEquals("root(unavailable)", root.render())
 
-            // What a retry button does. The failure is cleared first, because there is no value on screen
-            // to flicker away from.
+            // This is what a retry button does. The failed state is reset first, since there is no good
+            // value on screen that the reset could hide.
             host.transact { fetch.invalidate() }
             fetches.settle()
             host.awaitIdle()
@@ -339,7 +339,7 @@ class FetchTest {
 }
 
 
-/** Waits, in real time, for a poll loop to have run at least [atLeast] times. */
+/** Waits in real time until the poll loop has made at least [atLeast] requests. */
 private suspend fun awaitCalls(calls: AtomicInteger, atLeast: Int) {
     withContext(Dispatchers.Default) {
         withTimeout(5.seconds) {
@@ -348,16 +348,16 @@ private suspend fun awaitCalls(calls: AtomicInteger, atLeast: Int) {
     }
 }
 
-/** A real wait, since a poll loop runs on a real clock and `runTest` does not. */
+/** A real-time wait. The poll loop runs on the real clock, not on `runTest`'s virtual one. */
 private suspend fun realDelay(duration: kotlin.time.Duration) {
     withContext(Dispatchers.Default) { delay(duration) }
 }
 
 /**
- * A page with something of its own to recompose for.
+ * A page with its own state, so a test can trigger a recomposition that doesn't involve the fetched value.
  *
- * A value is only re-read when something recomposes, so a test about staleness needs a reason to
- * recompose that is not the value itself — otherwise it asserts on a pass that never happened.
+ * A value is only read again when something recomposes. Staleness tests need a way to cause that
+ * recomposition independently of the value; otherwise they would be asserting on a pass that never ran.
  */
 private class Page(private val fetch: Fetch<String>) {
     var tick: Int by mutableStateOf(0)
@@ -369,7 +369,7 @@ private class Page(private val fetch: Fetch<String>) {
     }
 }
 
-/** The three states as a page would show them. */
+/** Formats the three [Fetched] states as display text. */
 private fun Fetched<String>.text(): String = when (this) {
     is Fetched.Loading -> "…"
     is Fetched.Failed -> "unavailable"
@@ -377,16 +377,16 @@ private fun Fetched<String>.text(): String = when (this) {
 }
 
 /**
- * Waits for every fetch this scope has started.
+ * Waits for every fetch started on this scope to finish.
  *
- * Joining the scope's children rather than polling: a fetch is an ordinary coroutine, so the test can
- * wait for exactly the thing it is about instead of sleeping and hoping.
+ * Each fetch is an ordinary coroutine, so the test can join the scope's children directly instead of
+ * sleeping for a guessed amount of time.
  */
 private suspend fun CoroutineScope.settle() {
     coroutineContext.job.children.toList().forEach { it.join() }
 }
 
-/** A clock the test moves by hand, so nothing here waits for a TTL in real time. */
+/** A manually advanced clock, so tests don't wait for TTLs to expire in real time. */
 private class TestClock {
     private var nanos = 0L
 

@@ -52,10 +52,10 @@ public class RequestContext(
             .joinToString("&")
 
     /**
-     * Copy with one attribute set, for anything that computes a session's context in pieces.
+     * Returns a copy with one attribute set.
      *
-     * What a test uses to supply a principal, and what an application uses when a value becomes known after
-     * the context was built.
+     * Tests use this to supply a principal. Applications can use it when a value only becomes known after
+     * the context was created.
      */
     public fun <T> with(key: AttributeKey<T>, value: T?): RequestContext =
         RequestContext(path, pathParams, queryParams, headers, attributes + (key to value))

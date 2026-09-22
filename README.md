@@ -1,10 +1,10 @@
 # Jetlin
 
-Interactive web UI written as Kotlin `@Composable` functions that run **on the server**. The browser
-gets HTML plus an 8.6 kB runtime that applies the DOM changes the server sends and reports events
-back.
+Jetlin is a framework for writing interactive web UIs as Kotlin `@Composable` functions that run **on
+the server**. The browser receives HTML and an 8.6 kB runtime. The runtime applies the DOM changes the
+server sends and reports user events back to it.
 
-Inspired by [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and
+The approach is modeled on [Phoenix LiveView](https://github.com/phoenixframework/phoenix_live_view) and
 [Livewire](https://livewire.laravel.com/).
 
 ```kotlin
@@ -36,49 +36,56 @@ fun main() {
 }
 ```
 
-Typing sends one debounced event and receives the instructions to update the error message and the
-button's disabled state. Saving navigates without reloading the page. There is no template language,
-no client-side state, and no REST layer in between — the validation rule and the code that acts on
-it are the same Kotlin, in the same place.
+When the user types in the field, the browser sends one debounced event. The server replies with the
+DOM changes needed to update the error message and the button's `disabled` state. Clicking Save
+navigates without a page reload. There is no template language, no client-side state and no REST API
+in between: the validation rule and the code that uses it are the same Kotlin code in the same file.
 
 ## How it works
 
-A composition runs on the server for as long as the session lasts.
+Each session has a composition that runs on the server for as long as the session lasts. An update
+works like this:
 
-1. An event arrives naming a node and an event type. The server calls the handler lambda it holds
-   for that pair.
-2. State changes. Compose knows which composables read which state, so it knows which are now stale.
-3. Only those composables re-run.
-4. As the runtime edits its node tree, each insert, remove, move and attribute or text write is
-   recorded. Jetlin's node tree is a virtual DOM, so those recorded edits are the wire protocol.
+1. The browser sends an event that names a node and an event type. The server calls the handler lambda
+   it holds for that node and event.
+2. The handler changes some state. Compose tracks which composables read which state, so it knows which
+   ones are now out of date.
+3. Only those composables run again.
+4. While the runtime updates its node tree, Jetlin records each insert, remove, move, attribute change
+   and text change. The node tree is a virtual DOM, so these recorded changes are exactly what gets sent
+   to the browser.
 
-Nothing compares two versions of the page — the runtime tracked the reads, so it already knows what
-changed. Reordering a keyed list moves the existing nodes rather than rebuilding them.
+Jetlin never compares an old and a new version of the page. The runtime already knows what changed,
+because it tracked which state each composable read. Reordering a keyed list moves the existing DOM
+nodes instead of recreating them.
 
-The same path runs when the browser did nothing at all. A coroutine that writes state invalidates
-the composables that read it, and an update follows:
+Updates don't have to start in the browser. When a coroutine writes state, the composables that read
+it are invalidated and an update is sent the same way:
 
 ```kotlin
 var ticks by remember { mutableStateOf(0) }
 LaunchedEffect(Unit) { while (true) { delay(1000); ticks++ } }
 ```
 
-Because UI state lives on the server, there is no client cache to invalidate and no serialization
-boundary to design — a handler closes over the objects it needs and calls straight into your code.
+Because UI state lives on the server, there is no client-side cache to keep in sync and no
+serialization format to design. A handler can capture the objects it needs and call your code
+directly.
 
-Not everything deserves a round trip, though. The server has no opinion about whether a panel is
-open, so it is not asked:
+Some interactions don't need the server at all. Opening and closing a panel, for example, changes
+nothing the server cares about, so it can be handled entirely in the browser:
 
 ```kotlin
 Button({ clientOnly { toggleClass("open", on = closest("card")) } }) { Text("Details") }
 ```
 
-A closed set of verbs — toggle, add and remove a class, focus, blur — not a script, because
-arbitrary client code would be a second application to keep in step with the first. They travel in
-the markup, so the button works before a socket exists and keeps working while one is down.
+`clientOnly` supports a fixed set of commands: toggling, adding and removing a class, and focusing and
+blurring an element. It doesn't accept arbitrary scripts, because client-side code would be a second
+application that has to be kept consistent with the first. The commands are embedded in the HTML, so
+the button works before the WebSocket connects and keeps working if the connection drops.
 
-And some things a server-side tree simply cannot draw. `ClientComponent` creates the element, names
-an implementation the application registered in its own JavaScript, and stops there:
+Some things can't be drawn from a server-side tree at all, such as a map or a rich-text editor.
+`ClientComponent` creates an element and hands it to a JavaScript implementation that the application
+registered:
 
 ```kotlin
 ClientComponent(
@@ -88,25 +95,25 @@ ClientComponent(
 )
 ```
 
-Props go down, events come up, and the DOM in between is disposable — a reconnect rebuilds it from
-props the server still holds. Which is why the rule is that nothing the user authored lives only in
-there: push it up into a `rememberSaved` field and it survives reconnects and hibernation like
-anything else.
+Props are sent down, events are sent up, and the component's DOM can be thrown away at any time. After
+a reconnect, Jetlin rebuilds the component from the props the server still has. So don't keep anything
+the user created only inside the component: send it to the server and store it in a `rememberSaved`
+field, where it survives reconnects and hibernation.
 
 ### How long state lives
 
-Navigation swaps the view inside a composition that stays up for the whole session, so where a value
-is declared is what decides how long it lasts:
+The composition stays up for the whole session, and navigating replaces the current view inside it.
+How long a value lasts depends on where it is declared:
 
-| Declared in | Lasts until |
+| Declared with | Lasts until |
 |---|---|
-| `remember` in a view | you navigate away from that view |
-| `rememberSaved` in a view | you navigate away — and it is handed back when you return, or when the session wakes |
+| `remember` in a view | the user navigates away from the view |
+| `rememberSaved` in a view | the user navigates away, but it is restored when they come back and when the session wakes from hibernation |
 | `remember` in `app { }` | the session ends |
-| `rememberSaved` in `app { }` | the session ends, surviving hibernation on the way |
+| `rememberSaved` in `app { }` | the session ends, and survives hibernation |
 
-`app { }` is one composable wrapping every view, composed once per session, and the only place whose
-`remember` outlives a page change:
+`app { }` is a composable that wraps every view. It is composed once per session, and it is the only
+place where `remember` survives navigation:
 
 ```kotlin
 jetlin {
@@ -121,42 +128,46 @@ jetlin {
 }
 ```
 
-What the application reads it back with is its own `CompositionLocal`: the framework supplies
-somewhere for state to stand, not opinions about what it is.
+Views read that state through a `CompositionLocal` that the application defines. The framework
+provides a place to keep session-wide state but doesn't prescribe what it looks like.
 
-Chrome belongs there too, for a reason visible in the patches — a nav bar composed inside each view
-is torn out and re-inserted on every move, while one composed above the route recomposes to the same
-markup and emits nothing at all.
+Shared page chrome, such as a navigation bar, also belongs in `app { }`. A nav bar composed inside each
+view is removed and re-inserted on every navigation. A nav bar composed in `app { }` recomposes to the
+same markup and produces no DOM changes.
 
 ## Status
 
-**Early.** The core is built and tested end to end in a browser, with routing, request context,
-live navigation, forms and hibernation on top of it. [`docs/architecture.md`](docs/architecture.md)
-has the full design: the update path, the protocol, sessions, input handling, design decisions, and
-§13 lists everything missing — most importantly that nothing is published to Maven, there are no
-file uploads, and it runs on one node.
-[`docs/db.md`](docs/db.md) is the same for `jetlin-db` — entities, policies, route guards, migrations —
-and its §8 lists what that is missing: a leaked reference is authority, transitive visibility on write is
-not caught, there is no defense in depth, and there are no indexes.
-[`docs/comparison.md`](docs/comparison.md) sets it against Phoenix LiveView, Livewire, Blazor Server
-and others, including where it is behind.
+**Early.** The core is built and has end-to-end browser tests. Routing, request context, navigation
+without reloads, forms and hibernation are built on top of it.
 
-Session state lives on the server, so per-session cost sets how many users a node can carry — and with
-`jetlin-db` the stored records are resident too, out of the same heap:
+- [`docs/architecture.md`](docs/architecture.md) describes the design: the update path, the protocol,
+  sessions, input handling and the reasoning behind the main decisions. §13 lists what is missing. The
+  most important gaps: nothing is published to Maven, there are no file uploads, and it only runs on a
+  single node.
+- [`docs/db.md`](docs/db.md) does the same for `jetlin-db`: entities, policies, route guards and
+  migrations. Its §8 lists what is missing: holding a record reference grants access to it, visibility
+  changes through relations aren't propagated on write, there is no second layer of enforcement in the
+  database, and there are no indexes.
+- [`docs/comparison.md`](docs/comparison.md) compares Jetlin with Phoenix LiveView, Livewire, Blazor
+  Server and others, including where Jetlin falls short.
 
-| | each | 1000 of them |
+Session state is kept in server memory, so the memory cost of each session determines how many users
+one node can handle. With `jetlin-db`, stored records are also kept in memory, in the same heap:
+
+| | Each | Per 1,000 |
 |---|---|---|
-| live session | 136 kB | 133 MB |
-| hibernated session | 364 bytes | 356 kB |
-| stored record, with `jetlin-db` | 1.1 kB | 1 MB |
+| Live session | 136 kB | 133 MB |
+| Hibernated session | 364 bytes | 356 kB |
+| Stored record (`jetlin-db`) | 1.1 kB | 1 MB |
 
-A session costs what its page costs — roughly 1.5 kB per node — so a page that lists a large collection is
-the thing to watch rather than the collection itself.
+A session's memory cost is roughly proportional to the size of its page, at about 1.5 kB per node. A
+page that renders a large collection costs more than one that doesn't; storing a large collection that
+pages don't render in full is comparatively cheap.
 
-A session whose socket has gone stays live briefly — most disconnections are a tunnel or a sleeping
-laptop — then hibernates: whatever was declared `rememberSaved` is stored and the composition is
-destroyed. `remember` is scratch space and is deliberately not kept, which is what holds the saved
-payload down.
+When a session's WebSocket disconnects, the session stays live for a short grace period, because most
+disconnects are brief (a tunnel, a laptop going to sleep). After that, the session hibernates: values
+declared with `rememberSaved` are stored and the composition is destroyed. Values declared with
+`remember` are discarded, which keeps the stored state small.
 
 ```kotlin
 val draft = rememberSavedField("", key = "draft")   // survives; the user typed it
@@ -170,19 +181,26 @@ val expanded = remember { mutableStateOf(false) }   // does not; recomputing cos
 ./gradlew :samples:teams:run         # http://localhost:8081
 ```
 
-A small app: a keyed todo list, a detail page with server-side validation reached by a real
-`<a href>` that navigates without reloading, a clock driven from the server, a panel that opens
-without a round trip, a chart drawn by JavaScript from server-held numbers, a page of markup shapes
-that are awkward to hand back to a browser, and an `/errors` page where you can break a handler and
-then break the whole session and watch the two behave differently. The store is shared across sessions, so
-opening two windows shows edits in one appearing in the other — and "Reset demo data" puts it back, in
-every open window at once. It is a list in memory, not `jetlin-db`: this sample is about the view layer,
-and `samples/teams` is where stored data is the point.
+`samples/demo` is a small app with:
+
+- a keyed todo list
+- a detail page with server-side validation, linked with a real `<a href>` that navigates without a
+  page reload
+- a clock updated from the server
+- a panel that opens without contacting the server
+- a chart drawn by JavaScript from numbers the server holds
+- a page of markup that is tricky to hand back to a browser
+- an `/errors` page where you can make a handler throw, then make the whole session fail, and compare
+  what happens
+
+The todo store is shared by all sessions. If you open two windows, edits in one appear in the other,
+and "Reset demo data" resets every open window at once. The store is an in-memory list rather than
+`jetlin-db`, because this sample is about the view layer. `samples/teams` demonstrates stored data.
 
 ## Testing your own views
 
-`jetlin-testing` runs a view with no browser, no server and no socket, so an application's tests
-describe what a user does and sees rather than how the framework carries it:
+`jetlin-testing` runs a view without a browser, server or WebSocket. Application tests can then
+describe what the user does and sees, without dealing with how the framework delivers it:
 
 ```kotlin
 @Composable
@@ -202,34 +220,34 @@ fun `clearing the title blocks the save`(): Unit = runViewTest(url = "/todo/1") 
 }
 ```
 
-A `testTag` is held on the server's node, not written into the page, so it costs the browser
-nothing — unlike a `data-test` attribute, which ships to every user forever. Browser tests are the
-exception, since Playwright can only select on what is really in the DOM; `jetlin { exposeTestTags
-= true }` writes them out as `data-test` as well, for use outside production.
+A `testTag` is stored on the server-side node and is not written into the HTML, so it costs the
+browser nothing. A `data-test` attribute, by comparison, is sent to every user. Browser tests are the
+exception, since Playwright can only select elements by what is in the DOM. For those, set
+`jetlin { exposeTestTags = true }` to also write test tags as `data-test` attributes. Don't enable it
+in production.
 
-Queries can be confined to part of the page, which is how to say *where* something is rather than
-what it is:
+You can limit a query to part of the page, to identify a node by its location as well as its content:
 
 ```kotlin
 within(onAll(hasTestTag("todo"))[2]) { onNode(hasText("up")).click() }
 ```
 
-Because state lives on the server, a test can also ask questions a client-side one cannot. Which
-nodes an interaction actually changed:
+Because the state lives on the server, a test can check things that a client-side test can't. For
+example, which nodes an interaction changed:
 
 ```kotlin
 val update = recordUpdate {
     within(onAll(hasTestTag("todo"))[0]) { onNode(hasTag("input")).check() }
 }
-// The row that was ticked and the counter that depends on it — and nothing else.
+// Only the row that was checked and the counter that depends on it changed.
 update.assertOnlyWithin(hasTestTag("todo"), hasTestTag("remaining"))
 ```
 
-That catches a defect nothing else can see. Keying a list by a value that changes renders exactly
-the same page and re-sends the whole list on every edit; break `key(todo.id)` in the sample and
-fifteen of its sixteen tests still pass — the one that fails is this one.
+This catches a bug that nothing else detects. If a list is keyed by a value that changes, the page
+looks exactly the same, but every edit re-sends the entire list. If you break `key(todo.id)` in the
+sample, 15 of its 16 tests still pass. The one that fails is this one.
 
-And whether the right state was declared saveable:
+You can also check that the right state was declared as saved:
 
 ```kotlin
 onNode(hasTestTag("draft")).type("half-typed")
@@ -237,14 +255,14 @@ hibernateAndRestore()
 onNode(hasTestTag("draft")).assertValue("half-typed")
 ```
 
-The module depends on no test framework — assertions throw `AssertionError` — so it works with
-whichever runner you already use.
+The module doesn't depend on any test framework. Failed assertions throw `AssertionError`, so it works
+with any test runner.
 
-## Storing things
+## Storing data
 
-`jetlin-db` makes a stored row an ordinary Kotlin object. Reading a field subscribes the composable that
-read it; writing one commits to SQLite and *then* recomposes every session that was reading it, so nothing
-ever renders a value the database refused.
+`jetlin-db` stores records as ordinary Kotlin objects. Reading a field subscribes the composable that
+read it. Writing a field commits the change to SQLite first, and only then recomposes the sessions that
+read it, so no page ever shows a value the database rejected.
 
 ```kotlin
 @Entity
@@ -254,35 +272,37 @@ class Todo(@Owner val owner: User, title: String, done: Boolean = false) : Recor
     var team: Team? by reference()
 
     companion object : Policy<Todo, User> {
-        // Mine, or my team's. A plain Kotlin expression over live objects — no query language.
+        // Readable by the owner and by the owner's team. Plain Kotlin over live objects; no query language.
         override fun canRead(record: Todo, principal: User) =
             record.owner == principal || (record.team != null && record.team == principal.team)
         override fun canWrite(record: Todo, principal: User) = record.owner == principal
     }
 }
 
-// `update` takes the principal as a context parameter: a write with nobody in scope does not compile.
+// `update` takes the principal as a context parameter: a write without one in scope doesn't compile.
 todo.update { done = !done }
 ```
 
-Access control is reactive, which is the part worth seeing. Alice takes a todo off the team:
+Access control is reactive. Suppose Alice unshares a todo from her team:
 
 ```kotlin
 with(alice) { todo.update { team = null } }
 ```
 
-Bob is looking at his list in another session. It iterated a policy-filtered collection, so Alice's write
-invalidates exactly the compositions that read what the policy read, and the record leaves his page. No
-subscription, no broadcast, no invalidation code. The same holds for route guards — revoke someone's admin
-role and they are moved off `/admin/users` while they are sitting on it.
+Bob has his todo list open in another session. His list iterated a policy-filtered collection, so
+Alice's write invalidates the compositions that read the state the policy depends on, and the todo
+disappears from Bob's page. The application needs no subscriptions, broadcasts or invalidation code.
+Route guards work the same way: if someone's admin role is revoked while they are on `/admin/users`,
+they are moved off the page.
 
-[`docs/db.md`](docs/db.md) is the full design, including migrations, the memory cliff, and what is missing.
+[`docs/db.md`](docs/db.md) describes the full design, including migrations, memory limits and what is
+missing.
 
-## Data you do not own
+## Data from other systems
 
-Not everything on a page is yours to store. A value from an HTTP API lives in a `Fetch`, which is snapshot
-state with a coroutine behind it: reading it subscribes the composable, the arrival recomposes every
-session that read it, and composition never blocks.
+Some data on a page comes from systems you don't control. A value from an HTTP API is held in a
+`Fetch`, which is snapshot state updated by a coroutine. Reading it subscribes the composable. When
+the value arrives, every session that read it recomposes. Composition never waits for the request.
 
 ```kotlin
 when (val profile = hub.profile(principal).value) {
@@ -295,68 +315,80 @@ val save = rememberAction { hub.setStatus(principal, draft.value) }
 Button({ disabled(save.state is Run.Running); onClick { save() } }) { Text("Save") }
 ```
 
-Writes to someone else's system are commands rather than assignments, and suspending — which is also what
-stops one being awaited inside `db.transact { }`, since a rollback cannot un-send a request. A stale value
-is refreshed by the next read and keeps serving the old one until the new one lands. `fresh(every = …)`
-keeps one polling while the page is open — reference-counted on the value, so a hundred people watching the
-same thing share one loop, and it stops when the last of them leaves.
-[`docs/architecture.md`](docs/architecture.md) §8 has the rest, and `samples/teams` has a working one.
+Writes to another system are commands, written as `suspend` functions, not property assignments.
+Because they suspend, they can't be called inside `db.transact { }`, which is intentional: rolling back
+a transaction can't undo an HTTP request. When a value is older than its TTL, the next read triggers a
+refresh, and the old value stays on screen until the new one arrives. `fresh(every = …)` keeps a value
+refreshed while a page shows it. The polling is shared by everyone showing the same value, so a hundred
+viewers cause one request per interval, and it stops when the last of them leaves.
+[`docs/architecture.md`](docs/architecture.md) §8 covers the details, and `samples/teams` has a working
+example.
 
-## Test
+## Tests
 
 ```bash
 ./gradlew test                       # unit tests, asserting exact op streams
 ./gradlew check                      # the above, plus the conventions and the migration tooling
 ./gradlew :samples:demo:benchmark    # retained heap, live vs hibernated
-./gradlew :samples:teams:benchmark   # retained heap, resident graph vs sessions
+./gradlew :samples:teams:benchmark   # retained heap per resident record
 
 cd e2e && npm install && npx playwright test    # browser tests (server must be running)
 ```
 
-The framework's own tests assert on exact op lists rather than `contains`, so an update that touches
-more of the page than it needs to fails the build. The sample's tests are written against
-`jetlin-testing` instead, and are the worked example of what an application's tests look like. Browser tests cover first paint with JavaScript blocked, deep
-links rendering server-side, targeted patching, keyed list reordering, server-originated updates,
-typing while the server sends unrelated updates, navigation without a page load, back and forward,
-validation gating a submit, reconnection with state preserved, that the server-rendered DOM is
-kept rather than rebuilt on connect, that a `clientOnly` disclosure still opens with the socket
-deliberately disconnected, and that a client component mounts, takes new props, reports events back
-and is torn down again with its mounts and unmounts balancing, that state in the chrome and a
-view's saved state both come back when the back button does, that a drawing is real SVG whether
-the browser parsed it or the client built it from an op, and that a failing handler costs one
-interaction while a failing view ends the session and the page starts over — unless the page cancels
-the error event and takes over, which it can, and which listening alone does not do. Each one resets the demo's shared
-store first, so they assert exact counts and contents rather than working around whatever the
-previous test left. Hibernating and waking a session is covered at the integration level instead,
-driving a real socket, because a browser reconnects on its own too quickly to sit out a grace
-period.
+The framework's tests compare exact lists of DOM operations rather than checking that a list contains
+something. An update that changes more of the page than necessary therefore fails the build. The
+sample's tests use `jetlin-testing` instead, and show what an application's own tests look like.
+
+The browser tests cover:
+
+- first paint with JavaScript blocked
+- deep links rendered on the server
+- targeted DOM patches and keyed list reordering
+- updates that start on the server
+- typing while the server sends unrelated updates
+- navigation without a page load, and the back and forward buttons
+- validation that blocks a submit
+- reconnecting with state preserved, and keeping the server-rendered DOM on connect instead of
+  rebuilding it
+- a `clientOnly` panel that opens while the WebSocket is deliberately disconnected
+- a client component that mounts, receives new props, sends events and is removed, with mounts and
+  unmounts balanced
+- state in the chrome and a view's saved state both being restored by the back button
+- SVG that renders correctly whether the browser parsed it or the client built it from an operation
+- a failing handler costing one interaction, while a failing view ends the session and reloads the
+  page, unless the page cancels the error event to handle it itself (merely listening for the event
+  doesn't count)
+
+Each browser test resets the demo's shared store first, so tests can assert exact counts and contents
+regardless of what earlier tests did. Hibernation is tested at the integration level with a real
+WebSocket instead, because a browser reconnects too quickly to let the grace period expire.
 
 ## Modules
 
 | Module | Contents |
 |---|---|
-| `jetlin-runtime` | `CompositionHost`, `FramePolicy`, `GlobalSnapshotManager` — running a Compose composition headlessly on the JVM |
+| `jetlin-runtime` | `CompositionHost`, `FramePolicy`, `GlobalSnapshotManager`, `Fetch`, `Action`: running a Compose composition headlessly on the JVM |
 | `jetlin-protocol` | Ops and messages (kotlinx.serialization) |
-| `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, routing, forms, HTML serializer |
-| `jetlin-server-ktor` | HTTP + WebSocket endpoints, session registry |
-| `jetlin-client` | TypeScript browser runtime (`npm run build` → checked-in `jetlin.js`) |
-| `jetlin-testing` | Driving a view headlessly, for testing an application's own UI logic |
+| `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, routing, route guards, forms, HTML serializer |
+| `jetlin-server-ktor` | HTTP and WebSocket endpoints, session registry |
+| `jetlin-client` | TypeScript browser runtime (`npm run build` produces the committed `jetlin.js`) |
+| `jetlin-testing` | Runs views headlessly, for testing an application's own UI logic |
 | `jetlin-db` | Records, cells, the identity map, policies, the gate, snapshot transactions, SQLite |
-| `jetlin-db-ksp` | KSP processor: tables, column objects, drafts, gated accessors, schema snapshot |
+| `jetlin-db-ksp` | KSP processor: tables, column objects, drafts, policy-checked accessors, schema snapshot |
 | `jetlin-db-gradle` | `dbDiff`, `dbMigrate`, `dbVerify` and the migration engine behind them |
-| `samples/demo` | Runnable five-page demo and the memory benchmark |
-| `samples/teams` | Two-login sample: owner-only, team-shared, and an admin-only column |
-| `conventions` | Repo-wide rules the compiler cannot express, checked as tests |
+| `samples/demo` | Runnable five-page demo and the session memory benchmark |
+| `samples/teams` | Two-user sample with owner-only records, team-shared records and an admin-only column |
+| `conventions` | Repository-wide rules the compiler can't check, written as tests |
 
 ## CI
 
-The pipeline lives in [`ci/github-actions.yml`](ci/github-actions.yml) and is **not active yet** —
-move it to `.github/workflows/ci.yml` to enable it. See [`ci/README.md`](ci/README.md) for why it is
-parked there and what it checks.
+The pipeline is defined in [`ci/github-actions.yml`](ci/github-actions.yml) and **is not enabled
+yet**. Move it to `.github/workflows/ci.yml` to enable it. [`ci/README.md`](ci/README.md) explains
+why it is kept there and what it checks.
 
 ## Building the client
 
-The bundled `jetlin.js` is checked in, so the Gradle build needs no npm:
+The bundled `jetlin.js` is committed, so the Gradle build doesn't need npm. To rebuild it:
 
 ```bash
 npm --prefix jetlin-client install && npm --prefix jetlin-client run build

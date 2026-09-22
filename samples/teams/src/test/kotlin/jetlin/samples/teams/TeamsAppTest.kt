@@ -18,11 +18,11 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * The sample as an application: two principals, one database, and what each of them can see.
+ * Tests the sample as an application: two principals, one database, and what each of them can see.
  *
- * Every test here is a statement about access rather than about markup, which is the only kind of statement
- * worth making twice in a framework and an application. A single-principal test cannot fail the interesting
- * way, so almost every one of these has two.
+ * These tests are about access rather than markup. The framework's own tests cover the same properties,
+ * but checking them again at the application level is worthwhile. Most tests use two principals, because
+ * access bugs usually can't show up with only one.
  */
 class TeamsAppTest {
 
@@ -31,8 +31,8 @@ class TeamsAppTest {
         runViewTest {
             signedInAs(db, "bob@example.com")
 
-            // Bob's own, plus the one Alice shared with Acme. Not Alice's unshared one, and nothing of
-            // Carol's, who is on no team.
+            // Bob's own todo, plus the one Alice shared with Acme. Not Alice's unshared todo, and nothing
+            // of Carol's, since she is on no team.
             onNode(hasTestTag("todo") and hasText("Review the sample", substring = true)).assertExists()
             onNode(hasTestTag("todo") and hasText("Write the team sample", substring = true)).assertExists()
             assertNotDisclosed("Rehearse the demo", "Nothing to do with Acme")
@@ -60,13 +60,13 @@ class TeamsAppTest {
                 signedInAs(db, "bob@example.com")
                 onAll(hasTestTag("todo")).assertCount(2)
 
-                // Alice shares it from her own session, somewhere else entirely.
+                // Alice shares the todo from her own, separate session.
                 val arrival = recordUpdate { with(alice) { rehearse.update { team = alice.team } } }
 
                 onAll(hasTestTag("todo")).assertCount(3)
                 onNode(hasTestTag("todo") and hasText("Rehearse the demo", substring = true)).assertExists()
-                // A share arriving from another session redraws the list and nothing else: the chrome
-                // above it recomposes to the same markup and emits nothing.
+                // A share from another session updates the list and nothing else. The chrome recomposes
+                // but produces the same markup, so it emits no ops.
                 arrival.assertUntouched(hasTestTag("principal"), hasTestTag("draft"))
 
                 with(alice) { rehearse.update { team = null } }
@@ -82,7 +82,7 @@ class TeamsAppTest {
         runViewTest {
             signedInAs(db, "bob@example.com")
 
-            // Alice's, shared with Acme: visible, and the checkbox says what the policy would say.
+            // Alice's todo, shared with Acme: visible, with the checkbox disabled as the policy requires.
             within(onNode(hasTestTag("todo") and hasText("Write the team sample", substring = true))) {
                 onNode(hasTestTag("done")).assertDisabled()
                 onAll(hasTestTag("share")).assertCount(0)
@@ -127,7 +127,7 @@ class TeamsAppTest {
             signedInAs(db, "root@example.com")
             onAll(hasTestTag("user")).assertCount(4)
 
-            // Someone else demotes them. Nothing tells this session anything; the guard read `admin`.
+            // Someone else removes their admin role. Nothing notifies this session; the guard read `admin`.
             with(root) { root.update { admin = false } }
             awaitIdle()
 
@@ -171,9 +171,9 @@ class TeamsAppTest {
         runViewTest(url = "/todo/${own.id}") {
             signedInAs(db, "alice@example.com")
 
-            // The control says so...
+            // The control is disabled...
             onNode(hasTestTag("archived")).assertDisabled()
-            // ...and the write is refused even if something sends it anyway.
+            // ...and the write is refused even if the event is sent anyway.
             assertFailsWith<jetlin.db.AccessDenied> { with(alice) { own.update { archived = true } } }
             assertTrue(!own.archived)
         }
@@ -197,7 +197,7 @@ class TeamsAppTest {
     }
 }
 
-/** Signs in as [email] and composes the application's real route table. */
+/** Signs in as [email] and composes the application's actual route table. */
 private suspend fun ViewTest.signedInAs(db: Db, email: String) {
     setAttribute(PrincipalKey, db.user(email))
     setRoutes {
@@ -211,7 +211,7 @@ private suspend fun ViewTest.signedInAs(db: Db, email: String) {
             requires = Principals.signedIn,
         ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
         view("/admin/users", requires = Principals.where { it.admin }) { WithPrincipal { AdminUsersPage(db) } }
-        // No external system in these tests: they are about what is stored and who may see it.
+        // These tests don't use the external system; they are about stored data and who may see it.
         app { route -> Shell(hub = null, content = route) }
     }
 }

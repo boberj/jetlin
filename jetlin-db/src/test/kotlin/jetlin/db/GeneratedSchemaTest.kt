@@ -8,18 +8,19 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * What the processor generated for the entities in this module.
+ * Tests the code the processor generated for this module's entities.
  *
- * The persistence tests already prove the generated tables store and load correctly — they were written
- * against a hand-written schema and run unchanged against this one. What is left to check is the part
- * the round trip cannot see: that a policy can name a column, and that a draft writes the record.
+ * The persistence tests already show that the generated tables store and load correctly. They were
+ * written against a hand-written schema and pass unchanged against the generated one. This file covers
+ * what a round trip can't show: that a policy can refer to a column, and that a draft writes to the
+ * record.
  */
 class GeneratedSchemaTest {
 
     @Test
     fun `a generated column is the object the table flushes`(): Unit {
-        // Identity matters: a policy writes `when (column) { Tasks.archived -> … }`, and a second equal
-        // looking Column would silently never match.
+        // Must be the same instance: a policy uses `when (column) { Tasks.archived -> … }`, and a
+        // different Column object with the same name would never match.
         assertSame(Tasks.title, Tasks.table.column("title"))
         assertSame(Tasks.owner, Tasks.table.column("owner"))
     }
@@ -88,11 +89,11 @@ class GeneratedSchemaTest {
 
     @Test
     fun `a draft exposes the settable columns and nothing else`(): Unit {
-        // `owner` is a constructor property: written once by the insert, with nothing a draft could do
-        // with it. Asserted by construction — this would not compile if a draft had an owner setter.
+        // `owner` is a constructor property, written once on insert, so the draft has no setter for it.
+        // This is checked by the compiler: the code below wouldn't compile if one existed.
         val names = TaskDraft::class.java.methods
             .filter { it.name.startsWith("set") }
-            // An internal setter carries the module name: `setTitle$jetlin_jetlin_db_test`.
+            // An internal setter's JVM name includes the module name, as in `setTitle$jetlin_jetlin_db_test`.
             .map { it.name.removePrefix("set").substringBefore('$').replaceFirstChar(Char::lowercaseChar) }
             .toSet()
 

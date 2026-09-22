@@ -25,10 +25,10 @@ import kotlinx.coroutines.runBlocking
  * number sets the practical ceiling on how many sessions a node can carry. It works by creating
  * many sessions, keeping them all reachable, and comparing heap usage before and after.
  *
- * `PAGE=real` composes the application's own list page rather than the synthetic one below. Worth
- * having as a separate number, because a session's cost is mostly the size of its page rather than
- * anything about being a session: the synthetic page's 113 nodes come out around 130 kB and the todo
- * list's 42 around 65 kB, so roughly 1.5 kB a node either way.
+ * `PAGE=real` measures the application's own todo list page instead of the synthetic page below. The
+ * two numbers show that a session's cost depends mostly on the size of its page: the synthetic page has
+ * 113 nodes and costs about 130 kB, the todo list has 42 nodes and costs about 65 kB, which is roughly
+ * 1.5 kB per node in both cases.
  *
  * Run with: ./gradlew :samples:demo:benchmark
  */

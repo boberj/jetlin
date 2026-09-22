@@ -1,6 +1,6 @@
 package jetlin.db.ksp
 
-/** How a column is stored, mirroring `jetlin.db.ColumnType`. */
+/** A column's storage type. Mirrors `jetlin.db.ColumnType`. */
 internal enum class SqlKind(val sql: String) {
     Integer("INTEGER"),
     Real("REAL"),
@@ -9,28 +9,28 @@ internal enum class SqlKind(val sql: String) {
 }
 
 /**
- * One stored column, as read off an entity declaration.
+ * A stored column, as read from an entity declaration.
  *
- * [settable] is the difference between a delegated property and a constructor property: a cell can be
- * written after construction, which is what lets a draft expose it and what lets the loader restore it
- * outside the constructor call.
+ * [settable] is true for delegated properties and false for constructor properties. A delegated
+ * property is a cell that can be written after construction, so the draft can expose it and the loader
+ * can set it outside the constructor call.
  */
 internal data class ColumnModel(
     val name: String,
     val kind: SqlKind,
-    /** `kotlin.String`, `kotlin.Boolean`, or the qualified name of the record a reference points at. */
+    /** A type such as `kotlin.String` or `kotlin.Boolean`, or the qualified name of a referenced record type. */
     val baseType: String,
     val nullable: Boolean,
     val reference: String?,
     val settable: Boolean,
     val owner: Boolean,
-    /** Whether the primary constructor takes a parameter of this name, so the loader can pass it. */
+    /** Whether the primary constructor has a parameter with this name, which the loader can pass it to. */
     val constructorParameter: Boolean,
 ) {
     val declaredType: String get() = if (nullable) "$baseType?" else baseType
 }
 
-/** A constructor parameter that is not a column: it has to have a default, or nothing can be loaded. */
+/** A constructor parameter that isn't a column. It needs a default value, or the loader can't call the constructor. */
 internal data class ParameterModel(val name: String, val hasDefault: Boolean)
 
 internal data class EntityModel(
@@ -39,16 +39,16 @@ internal data class EntityModel(
     val tableName: String,
     val isInternal: Boolean,
     val hasPolicy: Boolean,
-    /** The qualified principal type from `Policy<T, P>`, when there is a policy to read it from. */
+    /** The qualified principal type `P` from `Policy<T, P>`, or null if there is no policy. */
     val principalType: String?,
-    /** The first type argument of `Policy<T, P>`; a mismatch is a copy-pasted companion. */
+    /** The type `T` from `Policy<T, P>`. If it isn't this entity, the companion was probably copied from another entity. */
     val policySubject: String?,
     val columns: List<ColumnModel>,
     val constructorParameters: List<ParameterModel>,
 ) {
     val qualifiedName: String get() = if (packageName.isEmpty()) simpleName else "$packageName.$simpleName"
 
-    /** `Todo` → `Todos`: the object holding the table and the columns a policy names. */
+    /** The name of the generated object holding the table and its columns, for example `Todo` → `Todos`. */
     val objectName: String get() = plural(simpleName)
 
     val draftName: String get() = "${simpleName}Draft"
@@ -57,20 +57,20 @@ internal data class EntityModel(
 
     val objectQualified: String get() = qualify(objectName)
 
-    /** What `db.todos` is called: the column object's name, lowercased. */
+    /** The name of the collection accessor, such as `db.todos`: [objectName] with a lowercase first letter. */
     val collectionName: String get() = objectName.replaceFirstChar(Char::lowercaseChar)
 
     /**
      * The policy's principal type, which every generated accessor takes as a context parameter.
      *
-     * Never read without a policy: [validate] rejects an entity whose principal type could not be resolved,
-     * because the generated code is unwritable without it.
+     * This is only read for entities with a policy. [validate] rejects an entity whose principal type
+     * can't be resolved, because the generated code can't be written without it.
      */
     val principal: String get() = principalType ?: "jetlin.db.Principal"
 
     val visibility: String get() = if (isInternal) "internal" else "public"
 
-    /** Qualified unless the generated file already sits in this entity's package. */
+    /** The object's name, qualified unless the generated file is in the same package as the entity. */
     fun objectQualified(inPackage: String): String =
         if (inPackage == packageName) objectName else qualify(objectName)
 
@@ -78,11 +78,10 @@ internal data class EntityModel(
 }
 
 /**
- * `Todo` → `todos`, `Status` → `statuses`.
+ * Pluralizes a name with a simple rule: `Todo` → `todos`, `Status` → `statuses`.
  *
- * Deliberately the naive rule and nothing more: a word English does not pluralize this way is a reason
- * to write `@Entity(table = "people")`, not a reason for the processor to carry a dictionary that is
- * wrong in a different way for someone else.
+ * The rule is intentionally basic. For words it gets wrong, use `@Entity(table = "people")`. A
+ * dictionary of irregular plurals would still be wrong for some names, just different ones.
  */
 internal fun plural(name: String): String = when {
     name.endsWith("s", ignoreCase = true) -> "${name}es"
@@ -92,10 +91,10 @@ internal fun plural(name: String): String = when {
 }
 
 /**
- * Everything wrong with one entity, as messages to report against its declaration.
+ * Returns every problem with an entity, as error messages to report on its declaration.
  *
- * Pure, so that the rules are tested directly rather than by compiling a file and reading the
- * compiler's output: a rule that only fails inside a build is a rule nobody checks the wording of.
+ * This is a pure function so the rules and their messages can be unit-tested directly, without
+ * compiling a source file and parsing the compiler output.
  */
 internal fun validate(entity: EntityModel): List<String> = buildList {
     if (!entity.hasPolicy) {
@@ -147,10 +146,10 @@ internal fun validate(entity: EntityModel): List<String> = buildList {
 }
 
 /**
- * Orders entities so that a table is loaded after everything its non-null references point at.
+ * Orders entities so each table is loaded after every table its non-null references point to.
  *
- * References resolve against what is already resident, so load order is part of the schema rather than
- * something the application should have to get right by hand.
+ * References are resolved against records that are already loaded, so the load order has to be right.
+ * Computing it here means the application doesn't have to maintain it by hand.
  */
 internal fun orderForLoad(entities: List<EntityModel>): OrderResult {
     val byName = entities.associateBy { it.qualifiedName }

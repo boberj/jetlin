@@ -21,19 +21,20 @@ public class RoutesBuilder internal constructor() {
     /**
      * Registers [content] at [pattern], e.g. `view("/todo/{id}") { TodoDetailPage() }`.
      *
-     * [requires] is the route's guard, declared exactly as the application declares it, so that a test
-     * drives the real thing: the guard runs inside the composition here too, which is what makes
-     * revocation and hibernation testable without a browser.
+     * [requires] is the route's guard, declared the same way as in the application. As in the real
+     * server, the guard runs inside the composition, so revocation and hibernation can be tested without
+     * a browser.
      */
     public fun view(pattern: String, requires: Guard? = null, content: @Composable () -> Unit) {
         routes += RoutePattern(pattern) to TestRoute(requires, content)
     }
 
     /**
-     * Registers a view for one record the route resolves itself, as `JetlinConfig.view` does.
+     * Registers a view for a single record that the route looks up itself, like the equivalent
+     * `JetlinConfig.view` overload.
      *
-     * The title is asserted with [ViewTest.title], because a title computed from a record the principal may not
-     * read is a disclosure in `<head>` and nothing in the body would reveal it.
+     * Check the title with [ViewTest.title]. A title computed from a record the principal may not read
+     * would leak it through `<head>`, and assertions on the body wouldn't catch that.
      */
     public fun <T : Any> view(
         pattern: String,
@@ -102,5 +103,5 @@ public suspend fun ViewTest.setRoutes(block: RoutesBuilder.() -> Unit) {
     }
 }
 
-/** One registered route: what it requires, and what it composes. */
+/** A registered route: its guard and its content. */
 internal class TestRoute(val guard: Guard?, val content: @Composable () -> Unit)

@@ -6,7 +6,7 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteRecursively
 
-/** A freshly seeded database per test: shared state is the point of the framework and the enemy of a test. */
+/** A newly seeded database for each test, so tests don't share state. */
 @OptIn(ExperimentalPathApi::class)
 internal fun withSample(block: (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-teams-test")

@@ -1,15 +1,15 @@
 package jetlin.db
 
 /**
- * What one transaction has to write to disk.
+ * The changes one transaction needs to write to the database.
  *
- * Dirty tracking falls out of the cells rather than being computed: a write to a [Cell] records the
- * cell it happened to, so there is no persistence context to register objects with and no dirty-check
- * pass comparing the graph against a copy of itself.
+ * Each write to a [Cell] adds that cell here, so changes are tracked as they happen. There is no
+ * persistence context to register objects with, and no pass that compares the graph to an earlier
+ * copy to find what changed.
  *
- * An insert supersedes the updates to the same record — the insert statement carries every column — and
- * a delete supersedes both. A record inserted and deleted inside one transaction is never written at
- * all.
+ * An insert makes updates to the same record unnecessary, because the insert writes every column. A
+ * delete makes both unnecessary. A record inserted and deleted in the same transaction is never
+ * written at all.
  */
 internal class WriteSet {
     private val inserted = LinkedHashSet<Record>()
@@ -33,19 +33,19 @@ internal class WriteSet {
 
     fun delete(record: Record) {
         updated.remove(record)
-        // A record that was only ever inserted in this transaction has never existed on disk, so there
-        // is nothing to delete — dropping the insert is the whole of it.
+        // If the record was inserted in this transaction, it isn't on disk yet. Dropping the pending
+        // insert is enough; there is no row to delete.
         if (!inserted.remove(record)) deleted += record
     }
 }
 
 /**
- * The transaction this thread is inside, if any.
+ * The transaction open on the current thread, if any.
  *
- * A thread-local is the right ambient here precisely because [Db.transact] takes a non-suspending
- * block: the write set lives for exactly one dispatch, so it cannot outlive the coroutine that
- * installed it or leak into another session. A session's dispatcher guarantees one task at a time but
- * not one thread forever, and this relies only on the former.
+ * A thread-local works here because [Db.transact] takes a block that can't suspend. The write set is
+ * set and cleared within one uninterrupted call, so it can't move to another thread with a coroutine
+ * or leak into another session. A session's dispatcher runs one task at a time but doesn't always use
+ * the same thread; this only relies on the first of those.
  */
 internal object Transactions {
     private val active = ThreadLocal<WriteSet?>()

@@ -16,11 +16,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * A guarded route reached by a deep link, which is the entry path that never touches a composition.
+ * Tests guarded routes reached by a deep link, where the guard runs before any composition exists.
  *
- * The in-session and hibernation-wake paths are covered by `GuardTest` in `:jetlin-testing`; all three
- * have to agree, and this is the one that has to agree *over HTTP*: a redirect is a 302 and not a page
- * that redirects itself, and a refused route is a 404 rather than something that admits it exists.
+ * `GuardTest` in `:jetlin-testing` covers in-session navigation and waking from hibernation. All three
+ * paths must agree, and this one has to express the result in HTTP: a redirect is a 302 response, not
+ * a page that redirects itself, and a refused route is a 404 that doesn't reveal the route exists.
  */
 class GuardedRouteTest {
 
@@ -33,7 +33,8 @@ class GuardedRouteTest {
 
         assertEquals(HttpStatusCode.Found, response.status)
         assertEquals("/login?next=/todos", response.headers[HttpHeaders.Location])
-        // Nothing was composed: a page for someone about to be sent elsewhere costs a whole session.
+        // No composition was created. Rendering a page for a request that is about to be redirected
+        // would cost a whole session.
         assertFalse("jl-session" in response.bodyAsText())
     }
 
@@ -101,7 +102,7 @@ private val Principals = Principals(PersonKey, signIn = "/login")
 
 private class Note(val title: String)
 
-/** Note 9 exists but is not this principal's to read, which a gated lookup reports as absent. */
+/** Note 9 exists but this principal may not read it, so the policy-checked lookup returns null. */
 private val readableNotes = mapOf("7" to Note("Seven"))
 
 private fun io.ktor.server.application.Application.guardedApp(principal: Person?) {

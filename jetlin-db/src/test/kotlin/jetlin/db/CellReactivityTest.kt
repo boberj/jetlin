@@ -16,16 +16,16 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /**
- * What a write to a record actually costs on the wire.
+ * Tests which ops a write to a record produces.
  *
- * This is the substrate everything else is built on: if reading a field does not subscribe the
- * composable that read it, nothing about persistence matters. Assertions are exact op lists rather
- * than "contains", so a write that redraws more of the page than the field it changed fails here
- * rather than quietly costing bandwidth in every session.
+ * Everything else in the module depends on this: if reading a field doesn't subscribe the composable
+ * that read it, persistence doesn't help. The tests compare exact op lists instead of using "contains",
+ * so a write that updates more of the page than the changed field fails here instead of wasting
+ * bandwidth in every session.
  *
- * Every write in this file is made from the test thread, outside any composition and outside any
- * snapshot — which is how a background job, a boot-time load or another user's session writes. Those
- * reach the recomposer through `GlobalSnapshotManager`, with nothing subscribing or broadcasting.
+ * Every write in this file comes from the test thread, outside any composition or snapshot. That is how
+ * a background job, a load at startup or another user's session writes. Such writes reach the
+ * recomposer through `GlobalSnapshotManager`, without any subscription or broadcast.
  */
 class CellReactivityTest {
 
@@ -84,9 +84,9 @@ class CellReactivityTest {
         db.add(Task(alice, "first"))
         harness {
             Div {
-                // Keyed by record identity, which is what a view is iterated with: without it the
-                // runtime reuses node slots positionally, so removing a record rewrites the nodes after it
-                // instead of removing one.
+                // Keyed by record, as views are normally iterated. Without the key, the runtime reuses
+                // nodes by position, so removing a record would rewrite every node after it instead of
+                // removing one.
                 db.all(Task::class).forEach { task -> key(task.id) { Span { Text(task.title) } } }
             }
         }.use { h ->
@@ -123,7 +123,7 @@ class CellReactivityTest {
             h.write { project.name = "Renamed" }
             assertEquals(listOf(Op.SetText(3, "Renamed")), h.drain())
 
-            // Repointing the reference itself is just as reactive as writing through it.
+            // Changing which record the reference points to is as reactive as writing through it.
             h.write { task.project = null }
             assertEquals(listOf(Op.SetText(3, "none")), h.drain())
         }
@@ -142,8 +142,8 @@ class CellReactivityTest {
         assertTrue(keep in open)
         assertFalse(hide in open)
 
-        // Not cached: the same view answers differently once the state the filter read changes. This
-        // is what makes policy-filtered collections revoke reactively rather than going stale.
+        // The view doesn't cache: it returns a different result once the state its filter read changes.
+        // This is what makes policy-filtered collections update when access is revoked.
         keep.done = true
         hide.done = false
         assertEquals(listOf(hide), open.toList())

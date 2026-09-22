@@ -6,12 +6,12 @@ import jetlin.db.unsafe
 import kotlin.io.path.createTempDirectory
 
 /**
- * Measures retained heap per resident record, over a table big enough for the figure to mean something.
+ * Measures the retained heap per record held in memory, using a table large enough to give a stable
+ * figure.
  *
- * Residency is what makes every read cheap and every traversal a pointer dereference, and the bill for it
- * is memory — shared with the compositions of everyone connected. This measures the graph half of that
- * bill. The session half belongs to `samples/demo:benchmark`, which has the harness for it and reports a
- * graph figure of its own, so the two can be read together.
+ * Keeping every record in memory makes reads cheap and relations a field access, but it costs memory,
+ * which is shared with the compositions of all connected users. This benchmark measures the records'
+ * share. The per-session share is measured by `samples/demo:benchmark`.
  *
  * Run with: ./gradlew :samples:teams:benchmark
  */
@@ -22,16 +22,16 @@ fun main() {
     val db = openSeeded(directory.resolve("benchmark.db"))
     val alice = checkNotNull(db.authenticate(User::class) { it.email == "alice@example.com" })
 
-    // Warm up: class loading, the JIT and SQLite's own structures are not what is being measured.
+    // Warm up first, so class loading, JIT compilation and SQLite's internal structures aren't counted.
     unsafe("benchmark warm-up") {
         db.transact { repeat(200) { db.insertUnchecked(Todo(alice, "warm up $it")) } }
     }
 
     val before = usedHeap()
     unsafe("benchmark records") {
-        // One transaction for all of them, so the figure is the cost of the objects rather than of
-        // SQLite's per-commit residue. An application inserts one record per user action; what is wanted here
-        // is what residency costs, not what a commit costs.
+        // Insert everything in one transaction, so the result measures the objects and not whatever
+        // SQLite retains per commit. A real application commits once per user action, but the point here
+        // is the cost of keeping records in memory, not the cost of commits.
         db.transact {
             val bulk = db.insertUnchecked(User("Bulk", "bulk@example.com"))
             repeat(recordCount) { index ->
@@ -50,7 +50,7 @@ fun main() {
     println("Should barely move as RECORDS changes. If it does, something is being counted that is not")
     println("the records — SQLite's cache, or garbage the measurement itself made.")
 
-    // Keep the graph reachable until after the measurement, or this measures garbage collection instead.
+    // Keeps the graph reachable until after the measurement; otherwise it could be collected first.
     check(db.resident.recordCount > recordCount)
     db.close()
 }
