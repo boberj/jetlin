@@ -7,10 +7,15 @@ ktor = "3.5.2"
 slf4j = "2.0.16"
 logback = "1.5.16"
 konsist = "0.17.3"
+sqlite = "3.49.1.0"
+ksp = "2.3.12"
 
 [libraries]
-# org.jetbrains.compose.runtime:runtime is a redirect to androidx.compose.runtime:runtime
-compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-runtime" }
+# Depends on androidx.compose.runtime:runtime directly instead of the org.jetbrains.compose.runtime
+# redirect. The redirect pulls in its own `runtime-desktop` artifact in addition to androidx's, and the two
+# jars have the same file name (`runtime-desktop-1.12.0.jar`), which breaks the flat `lib/` directory of an
+# application distribution.
+compose-runtime = { module = "androidx.compose.runtime:runtime", version.ref = "compose-runtime" }
 
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
@@ -24,13 +29,19 @@ ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
+
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+ksp-api = { module = "com.google.devtools.ksp:symbol-processing-api", version.ref = "ksp" }
+
 konsist = { module = "com.lemonappdev:konsist", version.ref = "konsist" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

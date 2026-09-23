@@ -2,6 +2,11 @@ build/
 .gradle/
 *.log
 
+# Local sample databases. Schemas and migrations are committed; database files are not.
+*.db
+*.db-shm
+*.db-wal
+
 node_modules/
 test-results/
 playwright-report/

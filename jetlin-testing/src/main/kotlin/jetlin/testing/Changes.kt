@@ -160,3 +160,32 @@ private fun NodeSpec.ids(): List<NodeId> = when (this) {
     is NodeSpec.Text -> listOf(id)
     is NodeSpec.Element -> listOf(id) + children.flatMap { it.ids() }
 }
+
+/**
+ * Asserts that none of [values] appear anywhere in the rendered page.
+ *
+ * Use this in multi-user applications to check that a page shows nothing belonging to another
+ * principal. Pass values from the other principal's records, such as titles, names or anything they
+ * wrote, and the assertion fails if any of them appear in the markup.
+ *
+ * The check runs against the rendered HTML instead of the node tree. Data can leak through an attribute,
+ * a property or the title as well as through text, and the HTML is what actually reaches the browser.
+ *
+ * ```kotlin
+ * setAttribute(PrincipalKey, bob)
+ * setRoutes(appRoutes)
+ *
+ * assertNotDisclosed("Alice's private note", "Carol's private note")
+ * ```
+ */
+public suspend fun ViewTest.assertNotDisclosed(vararg values: String) {
+    val markup = renderHtml()
+    val found = values.filter { it.isNotEmpty() && it in markup }
+    if (found.isNotEmpty()) {
+        throw AssertionError(
+            "The page discloses data this principal should not see: " +
+                found.joinToString { "\"$it\"" } +
+                "\n\nThe tree was:\n" + debugTree(),
+        )
+    }
+}

@@ -25,18 +25,25 @@ import kotlinx.coroutines.runBlocking
  * number sets the practical ceiling on how many sessions a node can carry. It works by creating
  * many sessions, keeping them all reachable, and comparing heap usage before and after.
  *
+ * `PAGE=real` measures the application's own todo list page instead of the synthetic page below. The
+ * two numbers show that a session's cost depends mostly on the size of its page: the synthetic page has
+ * 113 nodes and costs about 130 kB, the todo list has 42 nodes and costs about 65 kB, which is roughly
+ * 1.5 kB per node in both cases.
+ *
  * Run with: ./gradlew :samples:demo:benchmark
  */
 fun main() = runBlocking {
     val sessionCount = System.getenv("SESSIONS")?.toInt() ?: 1000
+    val real = System.getenv("PAGE") == "real"
+    val page: @Composable () -> Unit = if (real) ({ TodoListPage() }) else ({ BenchmarkView() })
 
     // Warm up the runtime so class loading and JIT are not counted as session cost.
-    repeat(20) { LiveView(content = { _ -> BenchmarkView() }).also { it.start() }.close() }
+    repeat(20) { LiveView(content = { _ -> page() }).also { it.start() }.close() }
 
     val before = usedHeap()
     val views = ArrayList<LiveView>(sessionCount)
     repeat(sessionCount) {
-        val view = LiveView(content = { _ -> BenchmarkView() })
+        val view = LiveView(content = { _ -> page() })
         view.start()
         views += view
     }
@@ -56,6 +63,7 @@ fun main() = runBlocking {
     val hibernated = usedHeap()
     val perHibernated = (hibernated - before) / sessionCount
 
+    println("page:               ${if (real) "the application's todo list" else "synthetic"}")
     println("sessions:           $sessionCount")
     println("nodes per session:  $nodes")
     println("heap before:        ${before / 1024 / 1024} MB")

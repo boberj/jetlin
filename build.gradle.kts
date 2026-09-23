@@ -23,3 +23,16 @@ subprojects {
         }
     }
 }
+
+/**
+ * The root build's lifecycle tasks don't run tasks in included builds, so without these the migration
+ * tooling's tests would never run. With them, `./gradlew build` and `./gradlew check` still cover the
+ * whole repository.
+ */
+for (lifecycle in listOf("build", "check")) {
+    tasks.register(lifecycle) {
+        group = "build"
+        description = "Runs $lifecycle in the included builds as well."
+        dependsOn(gradle.includedBuild("jetlin-db-gradle").task(":$lifecycle"))
+    }
+}

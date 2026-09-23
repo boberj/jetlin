@@ -51,6 +51,15 @@ public class RequestContext(
             .flatMap { (name, values) -> values.map { "$name=$it" } }
             .joinToString("&")
 
+    /**
+     * Returns a copy with one attribute set.
+     *
+     * Tests use this to supply a principal. Applications can use it when a value only becomes known after
+     * the context was created.
+     */
+    public fun <T> with(key: AttributeKey<T>, value: T?): RequestContext =
+        RequestContext(path, pathParams, queryParams, headers, attributes + (key to value))
+
     /** Copy carrying the parameters a route match extracted. Attributes and query are preserved. */
     public fun withPathParams(params: Map<String, String>): RequestContext =
         RequestContext(path, params, queryParams, headers, attributes)

@@ -40,6 +40,18 @@ public class LiveView(
     /** Holds state that survives this composition being torn down; see [rememberSaved]. */
     private val stateRegistry = SaveableStateRegistry(restored)
 
+    private val titleState = mutableStateOf<String?>(null)
+
+    /**
+     * The document title set by the composition, or null if it didn't set one.
+     *
+     * The page renderer reads this after the first composition has settled. The title comes from the
+     * composition instead of the route table because it can depend on the record the route resolved.
+     * `<head>` is rendered before the body, so a title computed from a record the principal may not read
+     * would reveal it even though the body refused to show it.
+     */
+    public val title: String? get() = titleState.value
+
     /**
      * The location this session is currently showing.
      *
@@ -73,6 +85,7 @@ public class LiveView(
                 LocalRequest provides request,
                 LocalSaveableStateRegistry provides stateRegistry,
                 LocalTestTagsExposed provides exposeTestTags,
+                LocalDocumentTitle provides TitleSink { titleState.value = it },
             ) {
                 content(request)
             }

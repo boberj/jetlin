@@ -1,6 +1,7 @@
 package jetlin.server
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -8,6 +9,7 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.request.path
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
@@ -15,15 +17,21 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
+import jetlin.html.Access
 import jetlin.html.AttributeKey
 import jetlin.html.Div
+import jetlin.html.Guard
+import jetlin.html.Guarded
 import jetlin.html.H1
+import jetlin.html.LocalRouteGuards
 import jetlin.html.P
 import jetlin.html.RequestContext
+import jetlin.html.RouteGuards
 import jetlin.html.RouteHost
 import jetlin.html.RoutePattern
 import jetlin.html.rootAttributes
 import jetlin.html.Router
+import jetlin.html.Subject
 import jetlin.html.Text
 import jetlin.protocol.ClientMessage
 import jetlin.protocol.JetlinJson
@@ -136,9 +144,50 @@ public class JetlinConfig {
     /**
      * Registers a view. [path] may contain parameters, e.g. `/todo/{id}`, readable with
      * `pathParam("id")`.
+     *
+     * [requires] is the guard for this route, such as requiring a signed-in user or a role. It is part
+     * of the route table instead of the view body, because by the time a check inside the body runs,
+     * the body has already started rendering. The guard is also evaluated inside the composition, so if
+     * a role is revoked, the user is moved off the page they're currently on.
      */
-    public fun view(path: String, title: String = "Jetlin", content: @Composable () -> Unit) {
-        views += ViewRegistration(RoutePattern(path), title, content)
+    public fun view(
+        path: String,
+        title: String = "Jetlin",
+        requires: Guard? = null,
+        content: @Composable () -> Unit,
+    ) {
+        views += ViewRegistration(RoutePattern(path), title, requires, content)
+    }
+
+    /**
+     * Registers a view for a single record, which the route looks up itself.
+     *
+     * ```kotlin
+     * view(
+     *     "/todo/{id}",
+     *     requires = Principals.signedIn,
+     *     subject = { request -> with(Principals.of(request)!!) { Todos.find(db, Id(request.pathParam("id"))) } },
+     *     title = { todo -> todo.title },
+     * ) { todo -> TodoDetailPage(todo) }
+     * ```
+     *
+     * This overload exists for security, not convenience. [subject] should use the policy-checked
+     * lookup, which returns null for a record this principal may not read. A null subject renders the
+     * not-found page before the body composes, and the title is computed from the subject only after
+     * that, so `<head>` can't reveal a record the body refused to show. Because the view receives the
+     * record instead of the path parameter, it can't accidentally look up an arbitrary id by hand.
+     */
+    public fun <T : Any> view(
+        path: String,
+        subject: (RequestContext) -> T?,
+        title: (T) -> String,
+        requires: Guard? = null,
+        missingTitle: String = "Not found",
+        content: @Composable (T) -> Unit,
+    ) {
+        views += ViewRegistration(RoutePattern(path), missingTitle, requires) {
+            Subject(resolve = subject, title = title, content = content)
+        }
     }
 
     /**
@@ -196,6 +245,7 @@ public class JetlinConfig {
 internal class ViewRegistration(
     val pattern: RoutePattern,
     val title: String,
+    val guard: Guard?,
     val content: @Composable () -> Unit,
 )
 
@@ -210,6 +260,8 @@ internal class ViewRegistration(
 public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
     val config = JetlinConfig().apply(configure)
     val router = Router(config.views.map { it.pattern to it })
+    // The guards for every route, so links can be checked against the same rule as their route.
+    val guards = RouteGuards(config.views.map { it.pattern to it.guard })
     install(WebSockets)
     // One line a minute at most for each: both are reached at request rate, and a warning
     // repeated ten thousand times buries the one somebody needed to read.
@@ -222,7 +274,13 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         disconnectGrace = config.disconnectGrace,
         exposeTestTags = config.exposeTestTags,
         maxSessions = config.maxSessions,
-    ) { current -> RouteHost(router, current, config.appContainer, { NotFound(it) }) { it.content() } }
+    ) { current ->
+        CompositionLocalProvider(LocalRouteGuards provides guards) {
+            RouteHost(router, current, config.appContainer, { NotFound(it) }) { registration ->
+                Guarded(registration.guard) { registration.content() }
+            }
+        }
+    }
 
     routing {
         get("/jetlin/jetlin.js") {
@@ -234,8 +292,17 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
 
         for (registration in config.views) {
             get(registration.pattern.pattern) {
+                val request = call.toRequestContext(config)
+                // Checked before creating a session. A redirect only costs a response header, while
+                // rendering a page for someone who is about to be redirected costs a whole composition.
+                val access = registration.guard?.check(request) ?: Access.Allow
+                if (access is Access.Redirect) {
+                    call.respondRedirect(access.to)
+                    return@get
+                }
+
                 val session = try {
-                    registry.create(call.toRequestContext(config))
+                    registry.create(request)
                 } catch (e: SessionLimitReachedException) {
                     // Refusing is the point: the alternative is memory settling somewhere the heap
                     // cannot hold, which takes everyone's session with it rather than only this one.
@@ -260,8 +327,12 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                     return@get
                 }
                 call.respondText(
-                    renderPage(config, registration.title, session),
+                    // Prefer the title set by the composition, since only the composition knows what the
+                    // route resolved and whether this principal was allowed to see it.
+                    renderPage(config, session.view.title ?: registration.title, session),
                     ContentType.Text.Html,
+                    // A route that refused this principal responds as if the page didn't exist.
+                    if (access == Access.NotFound) HttpStatusCode.NotFound else HttpStatusCode.OK,
                 )
             }
         }
