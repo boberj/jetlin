@@ -571,6 +571,21 @@ internal fun originAllowed(origin: String?, host: String?, allowed: Set<String>)
     return originAuthority.isNotEmpty() && originAuthority == host
 }
 
+/**
+ * Escapes [title] for use as the content of `<title>`.
+ *
+ * The title can come from record data, such as a todo's title in a route for one record, so it's user
+ * input. Unescaped, a title like `</title><script>…` would inject markup into every page render.
+ */
+private fun escapeTitle(title: String): String = buildString(title.length) {
+    for (c in title) when (c) {
+        '&' -> append("&amp;")
+        '<' -> append("&lt;")
+        '>' -> append("&gt;")
+        else -> append(c)
+    }
+}
+
 /** Renders the full HTML page for [session], with the runtime script and the session token. */
 private suspend fun renderPage(config: JetlinConfig, title: String, session: JetlinSession): String {
     val body = session.view.renderHtml()
@@ -580,7 +595,7 @@ private suspend fun renderPage(config: JetlinConfig, title: String, session: Jet
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>$title</title>
+        <title>${escapeTitle(title)}</title>
         ${config.head}
         </head>
         <body>
