@@ -39,7 +39,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class HubTest {
 
     @Test
-    fun `each principal sees their own status, fetched as themselves`() = withHub { hub ->
+    fun `each principal sees their own status, fetched as themselves`(): Unit = withHub { hub ->
         data.setStatus("alice@example.com", "reviewing the sample")
         data.setStatus("bob@example.com", "on holiday")
 
@@ -68,7 +68,7 @@ class HubTest {
     }
 
     @Test
-    fun `the announcement is fetched once and shared`() = withHub { hub ->
+    fun `the announcement is fetched once and shared`(): Unit = withHub { hub ->
         data.announcement = "Deploy freeze on Friday"
 
         withSample { db ->
@@ -91,7 +91,7 @@ class HubTest {
     }
 
     @Test
-    fun `the chrome shows external data on a page that knows nothing about it`() = withHub { hub ->
+    fun `the chrome shows external data on a page that knows nothing about it`(): Unit = withHub { hub ->
         data.announcement = "Deploy freeze on Friday"
 
         withSample { db ->
@@ -106,7 +106,7 @@ class HubTest {
     }
 
     @Test
-    fun `the banner follows the announcement while the page just sits there`() =
+    fun `the banner follows the announcement while the page just sits there`(): Unit =
         withHub(refreshEvery = 40.milliseconds) { hub ->
             data.announcement = "Deploy freeze on Friday"
 
@@ -126,7 +126,7 @@ class HubTest {
         }
 
     @Test
-    fun `saving a status shows the new one`() = withHub { hub ->
+    fun `saving a status shows the new one`(): Unit = withHub { hub ->
         withSample { db ->
             runViewTest(url = "/hub") {
                 signedInToHub(db, hub, "alice@example.com")
@@ -145,7 +145,7 @@ class HubTest {
     }
 
     @Test
-    fun `a refused command shows on the page and leaves the session alive`() = withHub { hub ->
+    fun `a refused command shows on the page and leaves the session alive`(): Unit = withHub { hub ->
         withSample { db ->
             runViewTest(url = "/hub") {
                 signedInToHub(db, hub, "alice@example.com")
