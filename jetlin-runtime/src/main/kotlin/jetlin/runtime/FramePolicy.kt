@@ -6,44 +6,49 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
 /**
- * How aggressively a session is allowed to turn state changes into wire patches.
+ * Controls how often a session turns state changes into patches for the browser.
  *
- * Compose always waits for a frame before recomposing, so the frame clock is the throttle for the
- * whole pipeline: one frame produces at most one patch message.
+ * Compose always waits for a frame before it recomposes, so the frame clock throttles the whole
+ * pipeline. Each frame produces at most one patch message.
  */
 public sealed interface FramePolicy {
     /**
-     * Recompose as soon as there is work. Lowest latency, and the right default for
-     * interaction-driven UI where each frame corresponds to one user event.
+     * Recomposes as soon as there is work.
+     *
+     * This policy has the lowest latency. It's the right default for a UI driven by user
+     * interaction, where each frame corresponds to one user event.
      */
     public data object Immediate : FramePolicy
 
     /**
-     * Recompose at most once per [interval]. Use for sessions fed by high-rate server-side sources
-     * (market data, log tails, telemetry) where a client cannot usefully consume every change.
+     * Recomposes at most once per [interval].
+     *
+     * Use this for sessions fed by a fast server-side source, such as market data, a log tail, or
+     * telemetry, where the browser can't make use of every change.
      */
     public data class Paced(val interval: Duration) : FramePolicy
 
     public companion object {
-        /** Convenience for the common "cap at N frames per second" case. */
+        /** Returns a [Paced] policy that recomposes at most [frames] times per second. */
         public fun fps(frames: Int): FramePolicy = Paced((1000.0 / frames).toLong().milliseconds)
     }
 }
 
+/** Returns the frame clock that enforces this policy. */
 internal fun FramePolicy.toClock(): MonotonicFrameClock = when (this) {
     FramePolicy.Immediate -> PacedFrameClock(0)
     is FramePolicy.Paced -> PacedFrameClock(interval.inWholeNanoseconds)
 }
 
 /**
- * A frame clock that never makes the recomposer wait longer than it has to.
+ * A frame clock that never makes the recomposer wait longer than necessary.
  *
- * With [minIntervalNanos] of 0 this is an immediate clock: `withFrameNanos` runs its callback
- * without suspending, so recomposition follows an apply notification directly. With a positive
- * interval it delays just long enough to keep frames spaced apart, batching everything that
- * happened in between into a single recomposition pass.
+ * When [minIntervalNanos] is `0`, the clock is immediate: `withFrameNanos` runs its callback without
+ * suspending, so recomposition follows an apply notification directly. When the interval is
+ * positive, the clock delays only long enough to keep frames that far apart. Everything that
+ * happens during the delay is batched into one recomposition pass.
  *
- * Confined to one session's dispatcher, so [lastFrameNanos] needs no synchronization.
+ * Only one session's dispatcher uses a given clock, so [lastFrameNanos] needs no synchronization.
  */
 internal class PacedFrameClock(private val minIntervalNanos: Long) : MonotonicFrameClock {
     private var lastFrameNanos = 0L

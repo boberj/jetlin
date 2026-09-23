@@ -8,39 +8,41 @@ import jetlin.runtime.rememberSaved
 import kotlinx.serialization.builtins.serializer
 
 /**
- * One editable value, its validity, and whether the user has interacted with it yet.
+ * One editable value, whether it's valid, and whether the user has edited it yet.
  *
- * The authoritative copy of the value lives here, on the server. The browser holds a rendered
- * reflection of it and reports edits, which is why validation can call into anything — a database,
- * another service — without an API in between.
+ * The authoritative copy of the value lives here, on the server. The browser shows a rendered copy
+ * and reports edits. That's why validation can call anything, such as a database or another
+ * service, without an API in between.
  *
- * [touched] exists so a form does not open covered in errors: a field that has never been edited
- * reports no [error] even when it is invalid, while [isValid] always reflects the real state.
+ * [touched] keeps a form from opening covered in errors. A field that has never been edited reports
+ * no [error], even when it's invalid, while [isValid] always reflects the real state.
  */
 public class Field<T> internal constructor(
     private val state: MutableState<T>,
     private val touchedState: MutableState<Boolean>,
     private val validate: (T) -> String?,
 ) {
+    /** The current value. Setting it doesn't mark the field as touched. To do that, call [edit]. */
     public var value: T
         get() = state.value
         set(newValue) { state.value = newValue }
 
+    /** Whether the user has edited the field since it was created or last [reset]. */
     public val touched: Boolean get() = touchedState.value
 
-    /** Validation message to show, or null while the field is untouched or valid. */
+    /** The validation message to show, or `null` if the field is untouched or valid. */
     public val error: String? get() = if (touched) validate(value) else null
 
-    /** Whether the current value passes validation, regardless of whether it has been touched. */
+    /** Whether the current value passes validation, whether or not the field was touched. */
     public val isValid: Boolean get() = validate(value) == null
 
-    /** Records an edit. Callers using [bind] get this for free. */
+    /** Sets the value and marks the field as touched. [bind] calls this for you. */
     public fun edit(newValue: T) {
         state.value = newValue
         touchedState.value = true
     }
 
-    /** Returns to a pristine state, e.g. after a successful submit. */
+    /** Sets the value and marks the field as untouched, for example after a successful submit. */
     public fun reset(newValue: T) {
         state.value = newValue
         touchedState.value = false
@@ -50,11 +52,12 @@ public class Field<T> internal constructor(
 /**
  * Remembers a form field across recompositions.
  *
- * [validate] returns the message to show, or null when the value is acceptable. It runs on the
- * server on every read of [Field.error], so it may consult whatever it needs.
- *
  * The `Field` wrapper is rebuilt on each pass while its state is remembered, so [validate] is
- * always the lambda from the current composition rather than one captured on the first.
+ * always the lambda from the current composition, not one captured on the first.
+ *
+ * @param initial the value when the field is first composed.
+ * @param validate returns the message to show, or `null` if the value is acceptable. It runs on the
+ *   server on every read of [Field.error] and [Field.isValid], so it can check anything it needs.
  */
 @Composable
 public fun <T> rememberField(initial: T, validate: (T) -> String? = { null }): Field<T> =
@@ -67,9 +70,14 @@ public fun <T> rememberField(initial: T, validate: (T) -> String? = { null }): F
 /**
  * A form field whose value survives the session hibernating.
  *
- * For input worth more than it costs to store — a half-written message, a long form partly filled
- * in — so that a dropped connection or a deploy does not throw the user's typing away. [touched] is
- * deliberately not saved: a restored form should show the text again, not the errors.
+ * Use it for input that's worth more than it costs to store, such as a half-written message or a
+ * long form partly filled in, so a dropped connection or a deployment doesn't throw away what the
+ * user typed. [Field.touched] is deliberately not saved: a restored form should show the text again,
+ * not the errors.
+ *
+ * @param initial the value when nothing was saved.
+ * @param key the key the value is saved under. See [rememberSaved].
+ * @param validate returns the message to show, or `null` if the value is acceptable.
  */
 @Composable
 public fun rememberSavedField(
@@ -83,15 +91,15 @@ public fun rememberSavedField(
 )
 
 /**
- * Binds a text input to [field]: renders the current value and reports edits back.
+ * Binds a text input to [field]. The input shows the field's value and reports edits to it.
  *
- * [debounceMs] is the tradeoff between how quickly validation reacts and how many round trips
- * typing costs; the client holds the keystrokes and sends one event per quiet period.
+ * @param debounceMs how long, in milliseconds, typing must pause before the client sends the value.
+ *   It trades how quickly validation reacts against how many round trips typing costs.
  */
 public fun AttrsScope.bind(field: Field<String>, debounceMs: Int = 150) {
     value(field.value)
     onInput(debounceMs) { field.edit(it) }
 }
 
-/** True when every field passes validation. Convenient as a submit button's enabled test. */
+/** Returns whether every field passes validation. Use it to enable a submit button. */
 public fun allValid(vararg fields: Field<*>): Boolean = fields.all { it.isValid }

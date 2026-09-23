@@ -17,7 +17,7 @@ application {
     mainClass.set("jetlin.samples.demo.MainKt")
 }
 
-/** Retained heap per live session — the ceiling on how many users a node can carry. */
+// Measures the retained heap of each live session, which limits how many users a node can hold.
 tasks.register<JavaExec>("benchmark") {
     group = "verification"
     description = "Measures retained heap per live session."

@@ -6,10 +6,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The rate limit, on a clock that does what it is told.
+ * Tests the rate limit on a clock that the test controls.
  *
- * Worth testing away from a socket: everything interesting about a token bucket is what it does over
- * time, and a test that waits for real seconds to pass is both slow and flaky.
+ * It's worth testing away from a socket. Everything interesting about a token bucket is what it does
+ * over time, and a test that waits for real seconds is both slow and flaky.
  */
 class TokenBucketTest {
 
@@ -33,7 +33,7 @@ class TokenBucketTest {
         val bucket = bucket(rate = 10.0, burst = 5)
         repeat(5) { bucket.tryConsume() }
 
-        advance(0.05) // half a token at ten a second
+        advance(0.05) // half a token, at ten a second
         assertFalse(bucket.tryConsume())
 
         advance(0.05) // now a whole one
@@ -45,8 +45,8 @@ class TokenBucketTest {
         val bucket = bucket(rate = 10.0, burst = 5)
         repeat(5) { bucket.tryConsume() }
 
-        // A minute of silence would be six hundred tokens if they accumulated without limit; the
-        // point of a burst size is that they do not.
+        // A minute of silence would be six hundred tokens if they built up without limit. A burst
+        // size exists so that they don't.
         advance(60.0)
 
         assertEquals(5, generateSequence { bucket.tryConsume() }.takeWhile { it }.count())
@@ -63,10 +63,10 @@ class TokenBucketTest {
             advance(0.01)
             if (bucket.tryConsume()) allowed++
         }
-        // A token either way rather than exactly ten: replenishment accumulates in fractions, and
-        // ten additions of a tenth do not reach one in binary floating point. Being out by a single
-        // token a second is not worth defending against, and a test that pinned it would be pinning
-        // arithmetic rather than behaviour.
+        // Allow a token either way instead of exactly ten. Tokens are replenished in fractions, and
+        // ten additions of a tenth don't reach one in binary floating point. Being off by one token a
+        // second isn't worth defending against, and a test that pinned it would test arithmetic, not
+        // behavior.
         assertTrue(allowed in 9..11, "expected roughly the configured rate, got $allowed")
     }
 
@@ -82,7 +82,7 @@ class TokenBucketTest {
         val bucket = bucket(rate = 10.0, burst = 5)
         repeat(5) { bucket.tryConsume() }
 
-        // System.nanoTime is monotonic in principle and has been known to disagree in practice.
+        // System.nanoTime is monotonic in principle, but has been known to go backward in practice.
         now -= 1_000_000_000
         assertFalse(bucket.tryConsume())
     }

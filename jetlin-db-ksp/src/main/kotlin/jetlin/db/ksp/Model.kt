@@ -1,6 +1,6 @@
 package jetlin.db.ksp
 
-/** A column's storage type. Mirrors `jetlin.db.ColumnType`. */
+/** A column's storage type. It mirrors `jetlin.db.ColumnType`. */
 internal enum class SqlKind(val sql: String) {
     Integer("INTEGER"),
     Real("REAL"),
@@ -11,50 +11,83 @@ internal enum class SqlKind(val sql: String) {
 /**
  * A stored column, as read from an entity declaration.
  *
- * [settable] is true for delegated properties and false for constructor properties. A delegated
- * property is a cell that can be written after construction, so the draft can expose it and the loader
- * can set it outside the constructor call.
+ * @property name the property name, which is also the column name.
+ * @property kind how the column is stored.
+ * @property baseType a type such as `kotlin.String` or `kotlin.Boolean`, or the qualified name of a
+ *   referenced record type.
+ * @property nullable whether the property's type is nullable.
+ * @property reference the qualified name of the referenced record type, or `null` if the column
+ *   isn't a reference.
+ * @property settable whether the property is a delegated `var`. A delegated property is a cell that
+ *   can be written after construction, so the draft can expose it, and the loader can set it outside
+ *   the constructor call. Constructor properties aren't settable.
+ * @property owner whether the property is marked with `@Owner`.
+ * @property constructorParameter whether the primary constructor has a parameter with this name,
+ *   which the loader can pass the value to.
  */
 internal data class ColumnModel(
     val name: String,
     val kind: SqlKind,
-    /** A type such as `kotlin.String` or `kotlin.Boolean`, or the qualified name of a referenced record type. */
     val baseType: String,
     val nullable: Boolean,
     val reference: String?,
     val settable: Boolean,
     val owner: Boolean,
-    /** Whether the primary constructor has a parameter with this name, which the loader can pass it to. */
     val constructorParameter: Boolean,
 ) {
+    /** The property's type as written in Kotlin, including `?` when it's nullable. */
     val declaredType: String get() = if (nullable) "$baseType?" else baseType
 }
 
-/** A constructor parameter that isn't a column. It needs a default value, or the loader can't call the constructor. */
+/**
+ * A parameter of an entity's primary constructor.
+ *
+ * A parameter that isn't a column needs a default value, or the loader can't call the constructor.
+ */
 internal data class ParameterModel(val name: String, val hasDefault: Boolean)
 
+/**
+ * An `@Entity` class, as the processor read it.
+ *
+ * @property packageName the class's package.
+ * @property simpleName the class's name.
+ * @property tableName the table name, from `@Entity(table = …)` or the default rule.
+ * @property isInternal whether the class is `internal`. The generated declarations match it.
+ * @property hasPolicy whether the companion object implements `Policy`.
+ * @property principalType the qualified principal type `P` from `Policy<T, P>`, or `null` if there's
+ *   no policy.
+ * @property policySubject the type `T` from `Policy<T, P>`. If it isn't this entity, the companion
+ *   was probably copied from another entity.
+ * @property columns the stored columns, in declaration order.
+ * @property constructorParameters the primary constructor's parameters, in order.
+ */
 internal data class EntityModel(
     val packageName: String,
     val simpleName: String,
     val tableName: String,
     val isInternal: Boolean,
     val hasPolicy: Boolean,
-    /** The qualified principal type `P` from `Policy<T, P>`, or null if there is no policy. */
     val principalType: String?,
-    /** The type `T` from `Policy<T, P>`. If it isn't this entity, the companion was probably copied from another entity. */
     val policySubject: String?,
     val columns: List<ColumnModel>,
     val constructorParameters: List<ParameterModel>,
 ) {
+    /** The class's qualified name. */
     val qualifiedName: String get() = if (packageName.isEmpty()) simpleName else "$packageName.$simpleName"
 
-    /** The name of the generated object holding the table and its columns, for example `Todo` → `Todos`. */
+    /**
+     * The name of the generated object that holds the table and its columns, for example `Todo` →
+     * `Todos`.
+     */
     val objectName: String get() = plural(simpleName)
 
+    /** The name of the generated draft class, for example `TodoDraft`. */
     val draftName: String get() = "${simpleName}Draft"
 
+    /** The draft class's qualified name. */
     val draftQualified: String get() = qualify(draftName)
 
+    /** The generated object's qualified name. */
     val objectQualified: String get() = qualify(objectName)
 
     /** The name of the collection accessor, such as `db.todos`: [objectName] with a lowercase first letter. */
@@ -63,25 +96,27 @@ internal data class EntityModel(
     /**
      * The policy's principal type, which every generated accessor takes as a context parameter.
      *
-     * This is only read for entities with a policy. [validate] rejects an entity whose principal type
+     * It's read only for entities with a policy. [validate] rejects an entity whose principal type
      * can't be resolved, because the generated code can't be written without it.
      */
     val principal: String get() = principalType ?: "jetlin.db.Principal"
 
+    /** The visibility modifier for the generated declarations. */
     val visibility: String get() = if (isInternal) "internal" else "public"
 
-    /** The object's name, qualified unless the generated file is in the same package as the entity. */
+    /** Returns the object's name, qualified unless [inPackage] is the entity's package. */
     fun objectQualified(inPackage: String): String =
         if (inPackage == packageName) objectName else qualify(objectName)
 
+    /** Returns [name] qualified with the entity's package. */
     private fun qualify(name: String): String = if (packageName.isEmpty()) name else "$packageName.$name"
 }
 
 /**
  * Pluralizes a name with a simple rule: `Todo` → `todos`, `Status` → `statuses`.
  *
- * The rule is intentionally basic. For words it gets wrong, use `@Entity(table = "people")`. A
- * dictionary of irregular plurals would still be wrong for some names, just different ones.
+ * The rule is deliberately basic. For words it gets wrong, use `@Entity(table = "people")`. A
+ * dictionary of irregular plurals would still be wrong for some names, only different ones.
  */
 internal fun plural(name: String): String = when {
     name.endsWith("s", ignoreCase = true) -> "${name}es"
@@ -93,7 +128,7 @@ internal fun plural(name: String): String = when {
 /**
  * Returns every problem with an entity, as error messages to report on its declaration.
  *
- * This is a pure function so the rules and their messages can be unit-tested directly, without
+ * This is a pure function, so the rules and their messages can be unit-tested directly, without
  * compiling a source file and parsing the compiler output.
  */
 internal fun validate(entity: EntityModel): List<String> = buildList {
@@ -148,8 +183,10 @@ internal fun validate(entity: EntityModel): List<String> = buildList {
 /**
  * Orders entities so each table is loaded after every table its non-null references point to.
  *
- * References are resolved against records that are already loaded, so the load order has to be right.
- * Computing it here means the application doesn't have to maintain it by hand.
+ * References are resolved against records that are already loaded, so the load order has to be
+ * right. Computing it here means the application doesn't have to maintain it by hand. A nullable
+ * reference doesn't constrain the order, and neither does a reference to a type that isn't among
+ * [entities].
  */
 internal fun orderForLoad(entities: List<EntityModel>): OrderResult {
     val byName = entities.associateBy { it.qualifiedName }
@@ -175,7 +212,11 @@ internal fun orderForLoad(entities: List<EntityModel>): OrderResult {
     return OrderResult.Ordered(ordered)
 }
 
+/** The result of [orderForLoad]. */
 internal sealed interface OrderResult {
+    /** The entities, in an order in which their tables can be loaded. */
     data class Ordered(val entities: List<EntityModel>) : OrderResult
+
+    /** The names of the entities whose non-null references form a cycle, sorted. */
     data class Cycle(val entities: List<String>) : OrderResult
 }

@@ -5,11 +5,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * Saying it once, and saying how often it would have been said.
+ * Tests logging a message once, with a count of how often it would have been logged.
  *
- * Both limits are reached at request rate, so the naive version buries the one line somebody needed
- * under thousands of copies of itself. What makes the throttled version still useful is the count
- * it carries: the scale is visible without the volume.
+ * Limits are reached at request rate, so a naive log buries the one line someone needed under
+ * thousands of copies of it. The count is what keeps the throttled version useful: it shows the
+ * scale without the volume.
  */
 class LogThrottleTest {
 

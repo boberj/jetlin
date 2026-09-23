@@ -18,13 +18,13 @@ import kotlinx.coroutines.test.runTest
 /**
  * Tests which ops a write to a record produces.
  *
- * Everything else in the module depends on this: if reading a field doesn't subscribe the composable
- * that read it, persistence doesn't help. The tests compare exact op lists instead of using "contains",
- * so a write that updates more of the page than the changed field fails here instead of wasting
- * bandwidth in every session.
+ * Everything else in the module depends on this: if reading a field doesn't subscribe the
+ * composable that read it, storage doesn't help. The tests compare exact op lists instead of
+ * checking what they contain, so a write that updates more of the page than the changed field fails
+ * here, instead of wasting bandwidth in every session.
  *
- * Every write in this file comes from the test thread, outside any composition or snapshot. That is how
- * a background job, a load at startup or another user's session writes. Such writes reach the
+ * Every write in this file comes from the test thread, outside any composition or snapshot. That's
+ * how a background job, a load at startup, or another user's session writes. Such writes reach the
  * recomposer through `GlobalSnapshotManager`, without any subscription or broadcast.
  */
 class CellReactivityTest {
@@ -84,7 +84,7 @@ class CellReactivityTest {
         db.add(Task(alice, "first"))
         harness {
             Div {
-                // Keyed by record, as views are normally iterated. Without the key, the runtime reuses
+                // Key each record, as views are normally iterated. Without the key, the runtime reuses
                 // nodes by position, so removing a record would rewrite every node after it instead of
                 // removing one.
                 db.all(Task::class).forEach { task -> key(task.id) { Span { Text(task.title) } } }
@@ -142,8 +142,8 @@ class CellReactivityTest {
         assertTrue(keep in open)
         assertFalse(hide in open)
 
-        // The view doesn't cache: it returns a different result once the state its filter read changes.
-        // This is what makes policy-filtered collections update when access is revoked.
+        // The view doesn't cache: it returns a different result once the state its filter read
+        // changes. This is what makes policy-filtered collections update when access is revoked.
         keep.done = true
         hide.done = false
         assertEquals(listOf(hide), open.toList())

@@ -6,10 +6,10 @@ class TestNode(var name: String) {
     val children: MutableList<TestNode> = mutableListOf()
 }
 
-/** Minimal applier used to prove the runtime host drives an arbitrary tree. */
+/** A minimal applier, used to show that the runtime host can drive any tree. */
 class TestApplier(root: TestNode) : AbstractApplier<TestNode>(root) {
     override fun insertTopDown(index: Int, instance: TestNode) {
-        // Built bottom-up instead; see HtmlApplier for why that matters on the wire.
+        // Build bottom-up instead. See HtmlApplier for why that matters on the wire.
     }
 
     override fun insertBottomUp(index: Int, instance: TestNode) {

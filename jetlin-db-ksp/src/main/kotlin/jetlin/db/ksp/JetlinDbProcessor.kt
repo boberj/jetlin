@@ -17,6 +17,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Visibility
 
+/** Creates the [JetlinDbProcessor]. KSP finds it through the service loader. */
 public class JetlinDbProcessorProvider : SymbolProcessorProvider {
     override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor =
         JetlinDbProcessor(environment.codeGenerator, environment.logger, environment.options)
@@ -28,14 +29,18 @@ private const val OWNER = "jetlin.db.Owner"
 private const val POLICY = "jetlin.db.Policy"
 
 /**
- * Generates the table, column object and draft type for each `@Entity` class.
+ * Generates the table, column object, and draft type for each `@Entity` class.
  *
- * Hand-written schemas tend to develop two kinds of mismatch over time: a column that doesn't match
- * the property it stores, and a load function that doesn't match the constructor. Generating both
- * from the entity declaration rules these out.
+ * Hand-written schemas tend to drift in two ways: a column stops matching the property it stores,
+ * and a load function stops matching the constructor. Generating both from the entity declaration
+ * rules these out.
  *
- * The processor also fails the build for any entity without a policy. An entity with no access rules
- * is almost always a mistake, and compile time is the cheapest point to catch it.
+ * The processor also fails the build for any entity without a policy. An entity with no access
+ * rules is almost always a mistake, and compile time is the cheapest point to catch it.
+ *
+ * It reads two options: `jetlin.db.schemaPackage`, the package of the generated schema object,
+ * which defaults to the entities' common package, and `jetlin.db.schemaName`, the object's name,
+ * which defaults to `JetlinSchema`.
  */
 internal class JetlinDbProcessor(
     private val codeGenerator: CodeGenerator,
@@ -43,6 +48,7 @@ internal class JetlinDbProcessor(
     private val options: Map<String, String>,
 ) : SymbolProcessor {
 
+    /** Whether this processor already generated its files. It generates them in the first round only. */
     private var generated = false
 
     override fun process(resolver: Resolver): List<KSAnnotated> {
@@ -94,6 +100,7 @@ internal class JetlinDbProcessor(
         return emptyList()
     }
 
+    /** Reads [declaration] into a model, or reports an error and returns `null`. */
     private fun model(declaration: KSClassDeclaration): EntityModel? {
         val name = declaration.simpleName.asString()
         if (declaration.classKind != ClassKind.CLASS || !extendsRecord(declaration)) {
@@ -106,9 +113,9 @@ internal class JetlinDbProcessor(
             logger.error("@Entity $name has no primary constructor, so a stored row cannot be rebuilt.", declaration)
             return null
         }
-        // Collect all parameter names, not just the ones declared as properties. With the usual
-        // `var title by column(title)` pattern, `title` is a plain parameter, and the loader passes the
-        // stored value through it.
+        // Collect all parameter names, not only the ones declared as properties. With the usual
+        // `var title by column(title)` pattern, `title` is a plain parameter, and the loader passes
+        // the stored value through it.
         val constructorParameters = constructor.parameters.mapNotNull { it.name?.asString() }.toSet()
         val constructorProperties = constructor.parameters
             .filter { it.isVal || it.isVar }
@@ -148,6 +155,12 @@ internal class JetlinDbProcessor(
         )
     }
 
+    /**
+     * Reads [property] into a column model.
+     *
+     * @return the column, or `null` if the property isn't stored or can't be. For a property that
+     *   can't be stored, this reports an error or a warning.
+     */
     private fun column(
         entity: KSClassDeclaration,
         property: KSPropertyDeclaration,
@@ -162,9 +175,9 @@ internal class JetlinDbProcessor(
         if (property.isPrivate()) return null
 
         if (!delegated && !isConstructorProperty) {
-            // Computed properties are derived, so skipping them is expected. A property with a backing
-            // field is more likely a column declared the wrong way, so warn instead of silently not
-            // storing it.
+            // Computed properties are derived, so skipping them is expected. A property with a
+            // backing field is more likely a column declared the wrong way, so warn instead of not
+            // storing it without a word.
             if (property.hasBackingField) {
                 logger.warn(
                     "${entity.simpleName.asString()}.$name is not stored: only delegated properties " +
@@ -219,12 +232,13 @@ internal class JetlinDbProcessor(
         )
     }
 
-    /** The qualified name of the referenced record type, or null if [type] is not a record. */
+    /** Returns the qualified name of the referenced record type, or `null` if [type] isn't a record. */
     private fun referenceTarget(type: KSType): String? {
         val declaration = type.declaration as? KSClassDeclaration ?: return null
         return if (extendsRecord(declaration)) declaration.qualifiedName?.asString() else null
     }
 
+    /** Returns whether [declaration] is `jetlin.db.Record` or extends it. */
     private fun extendsRecord(declaration: KSClassDeclaration): Boolean {
         if (declaration.qualifiedName?.asString() == RECORD) return true
         return declaration.superTypes.any { reference ->
@@ -233,7 +247,7 @@ internal class JetlinDbProcessor(
         }
     }
 
-    /** Finds the companion's `Policy<T, P>` supertype, searching through inherited interfaces. */
+    /** Finds the companion's `Policy<T, P>` supertype, searching inherited interfaces too. */
     private fun findPolicy(declaration: KSClassDeclaration): KSType? {
         for (reference in declaration.superTypes) {
             val type = reference.resolve()
@@ -244,6 +258,7 @@ internal class JetlinDbProcessor(
         return null
     }
 
+    /** Writes a generated Kotlin source file. */
     private fun write(packageName: String, fileName: String, contents: String, dependencies: Dependencies) {
         codeGenerator.createNewFile(dependencies, packageName, fileName).bufferedWriter().use { writer ->
             writer.write(contents)
@@ -253,9 +268,9 @@ internal class JetlinDbProcessor(
     /**
      * Writes the schema as JSON for the migration tooling.
      *
-     * The file goes into the generated resources output, not the source tree, because a code generator
-     * shouldn't write files that people are expected to review. `dbDiff` and `dbVerify` compare it with
-     * the snapshot checked into the repository.
+     * The file goes into the generated resources output, not the source tree, because a code
+     * generator shouldn't write files that people are expected to review. `dbDiff` and `dbVerify`
+     * compare it with the snapshot checked into the repository.
      */
     private fun writeSnapshot(contents: String, dependencies: Dependencies) {
         codeGenerator.createNewFileByPath(dependencies, "jetlin-db-schema", "json")
@@ -263,6 +278,7 @@ internal class JetlinDbProcessor(
             .use { writer -> writer.write(contents) }
     }
 
+    /** Returns the longest package prefix that all [models] share. */
     private fun commonPackage(models: List<EntityModel>): String {
         val packages = models.map { it.packageName.split('.') }
         val shared = packages.reduce { a, b -> a.zip(b).takeWhile { (x, y) -> x == y }.map { it.first } }
@@ -270,9 +286,11 @@ internal class JetlinDbProcessor(
     }
 }
 
+/** Returns the annotation class's qualified name. */
 private fun com.google.devtools.ksp.symbol.KSAnnotation.qualifiedName(): String? =
     annotationType.resolve().declaration.qualifiedName?.asString()
 
+/** Returns the type's qualified name, or its simple name if it has none. */
 private fun KSType.qualified(): String =
     declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
 

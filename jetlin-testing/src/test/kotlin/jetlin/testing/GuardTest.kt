@@ -16,13 +16,13 @@ import kotlin.test.assertEquals
 /**
  * Tests how a guarded route handles a principal it refuses.
  *
- * A route can be reached in three ways, and they must all give the same result: a deep link,
- * navigation within a session, and a hibernated session waking up. The third is the easiest to get
- * wrong. A woken session resumes on the URL it was on, so the guard has to run again on wake, not only
- * when the route is entered.
+ * There are three ways to reach a route, and all must give the same result: a deep link, navigation
+ * within a session, and a hibernated session waking up. The third is the easiest to get wrong. A
+ * woken session resumes on the URL it was on, so the guard has to run again on wake, not only when
+ * the route is entered.
  *
- * The principal here is a plain object holding snapshot state, not a database record. Storage isn't
- * being tested; eviction works because the guard reads live state.
+ * The principal here is a plain object that holds snapshot state, not a database record. These tests
+ * don't test storage. Moving the user off a page works because the guard reads live state.
  */
 class GuardTest {
 
@@ -66,8 +66,8 @@ class GuardTest {
                 view("/admin/users", requires = Principals.where { it.admin }) { Page("Users") }
             }
 
-            // The URL doesn't change: not found is rendered in place, not as a redirect. A 403 would reveal
-            // that an admin panel exists.
+            // The URL doesn't change: the not-found page is rendered in place, not as a redirect. A 403
+            // would reveal that an admin panel exists.
             assertUrl("/admin/users")
             onNode(hasTag("h1")).assertText("Not found")
             assertEquals("Not found", title(), "the title must not say what the page would have been")
@@ -130,7 +130,7 @@ class GuardTest {
             onNode(hasTag("h1")).assertText("Users")
 
             // The role is revoked while the session is hibernated. On wake, the principal is recomputed
-            // from the new connection instead of being restored from an outdated snapshot.
+            // from the new connection instead of restored from an outdated snapshot.
             setAttribute(PersonKey, Person("Root", admin = false))
             hibernateAndRestore()
 
@@ -209,8 +209,8 @@ class GuardTest {
                 view("/") { Page("Home") }
                 view(
                     "/note/{id}",
-                    // Missing because this principal may not read it. That deliberately looks the same as
-                    // "no such note", so someone probing ids can't tell whether the note exists.
+                    // Missing because this principal can't read it. That deliberately looks the same
+                    // as "no such note," so someone probing IDs can't tell whether the note exists.
                     subject = { request -> notes[request.pathParams["id"]] },
                     title = { note -> note.title },
                 ) { note -> Page(note.title) }
@@ -221,7 +221,7 @@ class GuardTest {
         }
 }
 
-/** A principal holding snapshot state. A guard needs nothing more. */
+/** A principal that holds snapshot state. A guard needs nothing more. */
 private class Person(val name: String, admin: Boolean = false) {
     var admin: Boolean by mutableStateOf(admin)
 

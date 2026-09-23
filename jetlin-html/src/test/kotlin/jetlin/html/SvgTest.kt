@@ -12,12 +12,12 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 /**
- * That a drawing arrives as a drawing, on both paths into the browser.
+ * Tests that a drawing arrives as a drawing, on both paths into the browser.
  *
- * The failure this guards against makes no noise: `createElement("circle")` is not an error, it is
- * an `HTMLUnknownElement` of zero size, so a chart that ends up in the wrong language is a blank
- * space and a page that looks fine. Nothing downstream would catch it, which is why the language is
- * asserted here at each of the three points it has to survive — the tree, the markup, and the op.
+ * The failure this guards against makes no noise. `createElement("circle")` isn't an error: it's an
+ * `HTMLUnknownElement` of zero size, so a chart in the wrong language is an empty space on a page
+ * that looks fine. Nothing downstream would catch it, which is why these tests check the language
+ * at each of the three points it has to survive: the tree, the markup, and the op.
  */
 class SvgTest {
 
@@ -55,7 +55,7 @@ class SvgTest {
             assertEquals(
                 listOf(
                     "svg" to Namespace.SVG,
-                    // The element itself is SVG; only what it contains is not.
+                    // The element itself is SVG. Only its contents aren't.
                     "foreignObject" to Namespace.SVG,
                     "p" to Namespace.HTML,
                 ),
@@ -77,8 +77,8 @@ class SvgTest {
         }
     }
 
-    // Nothing is void in foreign content, but everything inside a foreign object is HTML again, so
-    // the <br> has to go back to being written without a closing tag.
+    // Nothing is void in foreign content, but everything inside a foreign object is HTML again,
+    // so the <br> has to be written without a closing tag again.
     @Test
     fun `void elements are an HTML rule and apply again inside a foreign object`(): Unit = assertRenders(
         """<svg data-jl="1"><foreignObject data-jl="2" width="80">""" +
@@ -143,7 +143,7 @@ class SvgTest {
             """{"t":"e","id":1,"tag":"circle","ns":"svg"}""",
             JetlinJson.encodeToString(NodeSpec.serializer(), NodeSpec.Element(id = 1, tag = "circle", namespace = Namespace.SVG)),
         )
-        // The default is not encoded, so an application with no charts in it pays nothing at all.
+        // The default isn't encoded, so an application with no charts pays nothing at all.
         assertEquals(
             """{"t":"e","id":1,"tag":"div"}""",
             JetlinJson.encodeToString(NodeSpec.serializer(), NodeSpec.Element(id = 1, tag = "div")),
@@ -165,7 +165,7 @@ class SvgTest {
     }
 }
 
-/** Every element in the tree, in document order, as tag and the language it belongs to. */
+/** Returns every element in the tree, in document order, as its tag and the language it belongs to. */
 private suspend fun LiveView.languages(): List<Pair<String, Namespace>> = inspect { owner ->
     buildList {
         fun walk(node: ElementNode) {
@@ -180,7 +180,7 @@ private suspend fun LiveView.languages(): List<Pair<String, Namespace>> = inspec
     }
 }
 
-/** Renders [content] once and compares the markup against [expected]. */
+/** Renders [content] once and compares the markup with [expected]. */
 private fun assertRenders(expected: String, content: @Composable () -> Unit): Unit = runBlocking {
     val view = LiveView { _ -> content() }
     view.use {

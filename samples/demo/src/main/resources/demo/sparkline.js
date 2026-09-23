@@ -1,10 +1,11 @@
 // The browser half of the Sparkline client component.
 //
-// Registered by name before the session connects. Jetlin sends props down and this sends events
-// up; what it renders in between is entirely its own, and Jetlin never patches inside it.
-// Counted so a browser test can prove the teardown really happens. A widget that is never told
-// it is going holds on to its listeners and timers, and a page that re-renders leaks a set every
-// time — which is invisible unless something is watching.
+// It's registered by name before the session connects. Jetlin sends props down, and this code sends
+// events up. What it renders in between is its own, and Jetlin never patches inside it.
+
+// Count mounts and unmounts, so a browser test can prove that teardown happens. A widget that's
+// never told it's leaving holds on to its listeners and timers, and a page that re-renders leaks a
+// set every time, which nobody notices unless something is counting.
 window.sparklineMounts = 0;
 window.sparklineUnmounts = 0;
 
@@ -18,14 +19,14 @@ Jetlin.clientComponent("sparkline", {
         bar.className = "bar";
         bar.style.height = `${value * 11}%`;
         bar.dataset.bar = String(index);
-        // Clicking is reported to the server, which owns the numbers and decides what to do.
+        // Report the click to the server, which owns the numbers and decides what to do.
         bar.addEventListener("click", () => push("picked", { index }));
         element.appendChild(bar);
       });
     };
 
     draw(props.points ?? []);
-    // The handle is handed back to update and unmount, so this needs no registry of its own.
+    // Jetlin passes the handle back to update and unmount, so this code needs no registry of its own.
     return { draw };
   },
 
@@ -35,8 +36,8 @@ Jetlin.clientComponent("sparkline", {
 
   unmount(element) {
     window.sparklineUnmounts += 1;
-    // Nothing here holds a timer or a global listener, but the listeners on the bars go with the
-    // children, and saying so is the habit that keeps a real widget from leaking.
+    // Nothing here holds a timer or a global listener, and the bars' listeners go with the
+    // children. Cleaning up anyway is the habit that keeps a real widget from leaking.
     element.replaceChildren();
   },
 });

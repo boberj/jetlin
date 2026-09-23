@@ -10,21 +10,22 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** Names the registered implementation that should render into an element. */
+/** The attribute that names the registered implementation that renders into an element. */
 internal const val COMPONENT_ATTRIBUTE: String = "data-jl-component"
 
-/** Carries the props for that implementation, as JSON. */
+/** The attribute that holds the implementation's props, as JSON. */
 internal const val COMPONENT_PROPS_ATTRIBUTE: String = "data-jl-props"
 
+/** Props for a component that has none. */
 private val EMPTY_PROPS = JsonObject(emptyMap())
 
 /**
- * An element rendered by JavaScript rather than by the composition.
+ * Emits an element that JavaScript renders, instead of the composition.
  *
- * For the things a server-side tree cannot sensibly produce: a map, a chart, a rich-text editor, a
- * date picker — anything with its own rendering and its own lifecycle. The composition creates the
- * element and stops there; what goes inside belongs to an implementation the application registered
- * in its own bundle:
+ * Use it for things a server-side tree can't reasonably produce, such as a map, a chart, a rich-text
+ * editor, or a date picker: anything with its own rendering and its own lifecycle. The composition
+ * creates the element and stops there. What goes inside belongs to an implementation that the
+ * application registered in its own JavaScript bundle:
  *
  * ```kotlin
  * val body = rememberSavedField(note.body, key = "body")
@@ -46,23 +47,29 @@ private val EMPTY_PROPS = JsonObject(emptyMap())
  * });
  * ```
  *
- * **Props go down, events come up, and the DOM in between is disposable.** Nothing is preserved
- * across a reconnect that had to resend the tree: the element is rebuilt and the implementation
- * mounted afresh, with props derived from state the server still holds. That is the same bargain
- * `remember` makes, and it is why this needs no machinery for keeping a subtree alive through a
- * rebuild.
+ * Props go down, events come up, and the DOM in between is disposable. When a reconnect has to
+ * resend the tree, nothing inside the element is kept: the element is rebuilt, and the
+ * implementation is mounted again with props computed from state the server still holds. That's the
+ * same trade-off `remember` makes, and it's why no machinery is needed to keep a subtree alive
+ * through a rebuild.
  *
- * The rule that makes it safe: **nothing the user authored may live only in here.** A map's pan and
- * zoom can be recreated and nobody minds. Text somebody typed cannot, so it is pushed up and held in
- * a `rememberSaved` field — which then survives a reconnect, and hibernation too, through machinery
- * that already exists.
+ * One rule makes this safe: don't keep anything the user created only inside the component. A
+ * map's pan and zoom can be recreated, and nobody minds. Text someone typed can't, so send it to the
+ * server and keep it in a `rememberSaved` field. The existing machinery then keeps it through a
+ * reconnect, and through hibernation too.
  *
- * [name] is looked up in a registry the application populated; it is never evaluated as code. An
- * unregistered name leaves the element empty and warns, rather than failing the page.
+ * The element has no composable children. Its contents belong to the implementation, and Jetlin
+ * neither indexes nor patches them. That also means nothing renders here when JavaScript is turned
+ * off, so anything that must work without JavaScript doesn't belong in a client component.
  *
- * There are no composable children: the element's contents belong to the implementation, and Jetlin
- * neither indexes them nor patches them. That also means nothing renders here with JavaScript
- * disabled, so anything that has to work without it does not belong in one.
+ * @param name the name the implementation was registered under. The client looks it up in the
+ *   application's registry and never evaluates it as code. An unregistered name leaves the element
+ *   empty and logs a warning, instead of failing the page.
+ * @param props the data the implementation renders. When it changes, the implementation's
+ *   `update` runs.
+ * @param tag the element's tag.
+ * @param attrs declares the element's other attributes.
+ * @param onEvent handles an event that the implementation sent, with its name and payload.
  */
 @Composable
 public fun ClientComponent(
@@ -73,15 +80,15 @@ public fun ClientComponent(
     onEvent: (event: String, payload: JsonObject) -> Unit = { _, _ -> },
 ) {
     val owner = LocalHtmlOwner.current
-    // The same rule as any other element: a component inside an Svg { } that asks for a <g> gets an
-    // SVG one, because an HTML <g> would silently be nothing at all.
+    // Follow the same rule as any other element. A component inside Svg { } that asks for a <g>
+    // gets an SVG one, because an HTML <g> would render as nothing, without an error.
     val namespace = LocalNamespace.current
     val scope = AttrsScope(tag, exposeTestTags = LocalTestTagsExposed.current)
     attrs?.invoke(scope)
     scope.attr(COMPONENT_ATTRIBUTE, name)
     scope.attr(COMPONENT_PROPS_ATTRIBUTE, JetlinJson.encodeToString(JsonObject.serializer(), props))
-    // Registered as a handler with no listener spec: pushes are made by the implementation calling
-    // back into the runtime, not by a DOM event, so there is nothing for the browser to listen for.
+    // Register a handler without a listener spec. The implementation sends events by calling the
+    // runtime, not through a DOM event, so there's nothing for the browser to listen for.
     scope.handle(COMPONENT_EVENT) { payload ->
         val data = payload.data ?: return@handle
         val event = data[COMPONENT_EVENT_NAME]?.jsonPrimitive?.content ?: return@handle

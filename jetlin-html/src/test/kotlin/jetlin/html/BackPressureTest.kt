@@ -16,11 +16,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * What a session costs when nobody is reading it.
+ * Tests what a session costs when nobody is reading it.
  *
- * A composition outlives its socket — that is what lets a reconnecting user find their session where
- * they left it — so a session with a running timer keeps producing updates whether or not anyone is
- * listening. These tests pin down that those updates cannot accumulate without limit.
+ * A composition outlives its socket, which is what lets a reconnecting user find their session as
+ * they left it. So a session with a running timer keeps producing updates whether or not anyone is
+ * listening. These tests check that those updates can't pile up without limit.
  */
 class BackPressureTest {
 
@@ -50,7 +50,7 @@ class BackPressureTest {
             view.clientDetached()
             repeat(10) { ticker.advance(view) }
 
-            // A rejoining client is given the tree as it stands, not the edits it missed.
+            // A returning client receives the tree as it is now, not the changes it missed.
             val reset = view.reset()
             assertTrue(
                 reset.children.toString().contains("tick 10"),
@@ -72,14 +72,14 @@ class BackPressureTest {
         view.use {
             view.start()
 
-            // Nothing is collecting yet, so these pile up in the buffer and trip the ceiling.
+            // Nothing is collecting yet, so these pile up in the buffer and pass the limit.
             repeat(20) { ticker.advance(view) }
             assertTrue(view.owner.hasOverflowed, "expected the buffer to overflow")
 
             val collector = launch { view.messages.collect { received += it } }
             try {
                 received.awaitAtLeast(1)
-                // A Patch here would be a lie: the dropped edits are not recoverable.
+                // A Patch here would be wrong, because the dropped changes can't be recovered.
                 val message = assertIs<ServerMessage.Reset>(received.first())
                 assertTrue(message.children.toString().contains("tick 20"), "$message")
             } finally {
@@ -113,11 +113,11 @@ class BackPressureTest {
     }
 }
 
-/** State the view reads, so advancing it forces exactly one text edit. */
+/** State that the view reads, so advancing it forces exactly one text change. */
 private class Ticker {
     var count: Int by mutableStateOf(0)
 
-    /** Writes from outside the composition, the way a background job or shared store would. */
+    /** Writes from outside the composition, as a background job or a shared store would. */
     suspend fun advance(view: LiveView) {
         Snapshot.withMutableSnapshot { count++ }
         view.awaitIdle()

@@ -8,11 +8,11 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.runBlocking
 
 /**
- * That the convenience layer emits the tag it claims to.
+ * Tests that each element composable emits the tag it claims to.
  *
- * Cheap assertions, and worth having anyway: a helper naming the wrong tag produces markup that
- * looks plausible and behaves nothing like it — a `<dailog>` is a `<div>` with a strange name as
- * far as the browser is concerned, and nothing else in the stack would notice.
+ * The assertions are cheap, and worth having anyway. A composable with the wrong tag produces markup
+ * that looks plausible and behaves nothing like it: to the browser, a `<dailog>` is a `<div>` with a
+ * strange name, and nothing else in the stack would notice.
  */
 class ElementsTest {
 
@@ -86,7 +86,7 @@ class ElementsTest {
     }
 }
 
-/** Renders [content] once and compares the markup against [expected]. */
+/** Renders [content] once and compares the markup with [expected]. */
 private fun assertRenders(expected: String, content: @Composable () -> Unit): Unit = runBlocking {
     val view = LiveView { _ -> content() }
     view.use {

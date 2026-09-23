@@ -3,18 +3,19 @@ package jetlin.server
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * How many messages one connection may send, and how far it may run ahead of that.
+ * Limits how many messages one connection may send, with room for bursts.
  *
- * A token bucket rather than a fixed window, because real use is bursty and a window is not: a
- * person filling in a form produces a flurry of events and then nothing for ten seconds, and a limit
- * that cannot absorb the flurry has to be set so high that it stops protecting anything.
+ * It's a token bucket instead of a fixed window, because real use comes in bursts. A person filling
+ * in a form sends a flurry of events, then nothing for ten seconds. A limit that can't absorb the
+ * flurry would have to be set so high that it stopped protecting anything.
  *
- * [ratePerSecond] is the rate tokens are replenished at and so the sustained ceiling; [burst] is how
- * many can be banked, and therefore how large a flurry is allowed through. A value of zero or less
- * for the rate means no limiting at all.
- *
- * Not thread-safe, and does not need to be: one of these belongs to one connection, and a
+ * The class isn't thread-safe, and doesn't need to be. Each connection has its own bucket, and a
  * connection's frames are read in sequence.
+ *
+ * @param ratePerSecond how fast tokens are replenished, which is the sustained limit. A value of `0`
+ *   or less turns limiting off.
+ * @param burst how many tokens can be saved up, which is the largest burst allowed through.
+ * @param nanoTime the clock, in nanoseconds. Tests replace it.
  */
 internal class TokenBucket(
     private val ratePerSecond: Double,
@@ -24,7 +25,7 @@ internal class TokenBucket(
     private var tokens: Double = burst.toDouble()
     private var last: Long = nanoTime()
 
-    /** Takes a token if one is available. False means the caller is going too fast. */
+    /** Takes a token if one is available, and returns `false` if the caller is going too fast. */
     fun tryConsume(): Boolean {
         if (ratePerSecond <= 0) return true
 
@@ -40,15 +41,18 @@ internal class TokenBucket(
 }
 
 /**
- * Lets a message through at most once per interval, and counts what it swallowed.
+ * Lets a log message through at most once per interval, and counts the ones it suppressed.
  *
- * Both limits are reached at request rate, so logging every occurrence would bury the one line
- * somebody needed under thousands of copies of itself — and a log nobody can read is the same as no
- * log. Reporting the suppressed count with each line keeps the scale visible without the volume.
+ * Limits are reached at request rate, so logging every occurrence would bury the one line someone
+ * needed under thousands of copies of it, and a log that nobody can read is no better than no log.
+ * Reporting the suppressed count with each line shows the scale without the volume.
  *
- * Thread-safe because page renders arrive concurrently. Approximate under contention: two threads
- * racing can lose a count or emit a line early, neither of which matters for something whose job is
- * to be noticed.
+ * It's thread-safe, because page renders arrive concurrently. Under contention it's approximate:
+ * two racing threads can lose a count or let a line through early. Neither matters for a message
+ * whose job is to be noticed.
+ *
+ * @param intervalNanos the minimum time between two messages, in nanoseconds.
+ * @param nanoTime the clock, in nanoseconds. Tests replace it.
  */
 internal class LogThrottle(
     private val intervalNanos: Long,
@@ -57,7 +61,12 @@ internal class LogThrottle(
     private val last = AtomicLong(nanoTime() - intervalNanos)
     private val suppressed = AtomicLong()
 
-    /** How many were suppressed since the last message, or null if this one should be too. */
+    /**
+     * Records an occurrence and decides whether to log it.
+     *
+     * @return the number of occurrences suppressed since the last message, or `null` if this one
+     *   should be suppressed too.
+     */
     fun attempt(): Long? {
         val now = nanoTime()
         val previous = last.get()

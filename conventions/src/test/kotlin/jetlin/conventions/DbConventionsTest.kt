@@ -10,18 +10,18 @@ import kotlin.test.assertTrue as assertTrueKotlin
 /**
  * Rules that protect `jetlin-db`'s safety properties as the code changes.
  *
- * The compiler can't enforce these, reviewers can easily miss violations, and each can be broken by a
- * change that looks harmless on its own.
+ * The compiler can't enforce these rules, reviewers can easily miss a violation, and a change that
+ * looks harmless on its own can break any of them.
  */
 class DbConventionsTest {
 
     /**
      * Returning a record grants access to it, so a function that returns one must take the principal.
      *
-     * The design relies on checking access when a record is obtained: once application code holds a
-     * record, reading its fields isn't checked. That is only safe if every way of obtaining a record is
-     * checked, so no public function may return a record or a collection of records without a principal
-     * to check against. A single unchecked accessor would undermine the whole model.
+     * The design checks access when code obtains a record. Once application code holds a record,
+     * reading its fields isn't checked. That's safe only if every way of obtaining a record is checked,
+     * so no public function may return a record, or a collection of records, without a principal to
+     * check against. One unchecked accessor would undermine the whole model.
      */
     @Test
     fun `nothing public in jetlin-db hands out a record without a principal`() {
@@ -30,17 +30,17 @@ class DbConventionsTest {
             .filter { it.hasPublicOrDefaultModifier }
             .filter { function ->
                 val returned = function.returnType?.name?.removeSuffix("?") ?: return@filter false
-                // Matches a function's own type parameter bounded by Record, or a View of records. A `T`
-                // declared by the enclosing *class* is intentionally not matched: such an instance was
-                // created by the gate and already carries the principal, which is how `View.add` is
-                // checked without taking one.
+                // Match a function's own type parameter bounded by Record, or a View of records. A `T`
+                // declared by the enclosing class deliberately doesn't match: the gate created that
+                // instance, and it already carries the principal. That's how `View.add` is checked
+                // without taking a principal.
                 val recordParameters = function.typeParameters
                     .filter { "Record" in it.name }
                     .map { it.name.substringBefore(':').trim() }
                 returned in recordParameters || returned.startsWith("View<")
             }
 
-        // Guard against the rule passing because it matched nothing.
+        // Make sure the rule can't pass because it matched nothing.
         assertTrueKotlin(
             handOuts.size >= 4,
             "expected to find jetlin-db's record-returning functions, found ${handOuts.size} — " +
@@ -61,10 +61,10 @@ class DbConventionsTest {
     /**
      * Policies run during recomposition, so they must not suspend or block.
      *
-     * Reading a policy-filtered collection evaluates the policy for each record on every read, during
-     * composition. Results aren't cached, because a cached decision could outlive the state it was based
-     * on and break reactive revocation. A policy that did IO would put a network round trip inside
-     * recomposition, on the session's only thread.
+     * Reading a policy-filtered collection runs the policy for each record on every read, during
+     * composition. Results aren't cached, because a cached decision could outlive the state it was
+     * based on and break reactive revocation. A policy that did I/O would put a network round trip
+     * inside recomposition, on the session's only thread.
      */
     @Test
     fun `policies do not suspend or block`() {
@@ -85,9 +85,10 @@ class DbConventionsTest {
     }
 
     /**
-     * Every entity must have a policy; an entity without access rules is almost always a mistake.
+     * Every entity must have a policy, because an entity without access rules is almost always a
+     * mistake.
      *
-     * The KSP processor already fails the build in this case, and that is the more important check
+     * The KSP processor already fails the build in this case, and that's the more important check,
      * because it covers applications too. This test covers this repository, and documents the rule
      * alongside the other two.
      */
@@ -111,30 +112,36 @@ class DbConventionsTest {
 }
 
 /**
- * Functions allowed to return records without a principal, because no principal exists yet where they
- * are used.
+ * Member functions that may return records without a principal, because no principal exists yet
+ * where they're used.
  *
- * Each one explains this at its definition. Adding an entry should be treated as a significant change in
- * review: every entry is a way around the policy checks and needs an equally strong justification.
- * Top-level functions have no containing type, so they are listed by name only.
+ * Each one explains why at its definition. Treat adding an entry as a significant change in review:
+ * every entry is a way around the policy checks, and needs an equally strong justification.
  */
 private val PRIVILEGED_MEMBERS = setOf(
-    // Loading at startup. The graph being loaded is what principals are later resolved from.
+    // Loading at startup. Principals are later looked up in the graph being loaded.
     "Row.reference",
     "Row.referenceOrNull",
 )
 
+/**
+ * Top-level functions that may return records without a principal. See [PRIVILEGED_MEMBERS].
+ *
+ * They have no containing type, so they're listed by name only.
+ */
 private val PRIVILEGED_TOP_LEVEL = setOf(
-    // Resolving the principal. That can't require a principal, so §4.4 of the plan allows exactly one
+    // Finding the principal. That can't require a principal, so §4.4 of the plan allows exactly one
     // unchecked lookup for it.
     "authenticate",
-    // Seeding, fixtures and backfills. It only works inside `unsafe { }`, which logs a warning with the
-    // reason on every call, so it can't be used unnoticed.
+    // Seeding, fixtures, and backfills. It works only inside `unsafe { }`, which logs a warning with
+    // the reason on every call, so nobody can use it unnoticed.
     "insertUnchecked",
 )
 
+/** Text that suggests a function blocks. A policy whose source contains any of it fails the rule. */
 private val BLOCKING = listOf("runBlocking", "Thread.sleep", ".get()", "readText")
 
+/** The failure message for a public function that returns records without a principal. */
 private val PRINCIPAL_REQUIRED = """
     A public function that returns a record, or a collection of records, must take the principal it is
     handing them to.
@@ -145,6 +152,7 @@ private val PRINCIPAL_REQUIRED = """
     it belongs next to `unsafe`, named so that it can be found.
 """.trimIndent()
 
+/** The failure message for a policy that suspends or blocks. */
 private val POLICIES_ARE_PURE = """
     A policy is evaluated per record, per read, inside a composition, and its result is deliberately not
     cached — so it must be a cheap, pure expression over live state.
@@ -153,6 +161,7 @@ private val POLICIES_ARE_PURE = """
     resident already, which is the whole reason the graph is kept in memory.
 """.trimIndent()
 
+/** The failure message for an entity without a policy. */
 private val POLICY_REQUIRED = """
     An @Entity needs a companion object implementing Policy, because nothing else decides who may read
     or write it:

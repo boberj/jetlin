@@ -38,7 +38,7 @@ class PolicyTest {
         assertTrue(Task.canRead(task, alice))
         assertFalse(Task.canRead(task, bob))
 
-        // Column-level rule: only an admin may archive, regardless of who owns the record.
+        // The column-level rule: only an admin can archive, whoever owns the record.
         assertFalse(Task.canWrite(task, Tasks.archived, alice))
         assertTrue(Task.canWrite(task, Tasks.archived, root))
         assertTrue(Task.canWrite(task, Tasks.title, alice))
@@ -145,13 +145,13 @@ class PolicyTest {
             with(alice) {
                 task.update {
                     title = "allowed"
-                    archived = true // Admin only.
+                    archived = true // Only an admin can set this.
                 }
             }
         }
 
-        // The whole transaction is rolled back, including the permitted write. A partially applied
-        // update is exactly what this design is meant to prevent.
+        // The whole transaction is rolled back, including the allowed write. A partly applied update
+        // is exactly what this design prevents.
         assertEquals("Read the plan", task.title)
         assertFalse(task.archived)
     }
@@ -174,7 +174,7 @@ class PolicyTest {
         val mine = with(alice) { db.tasks.add(Task(alice, "mine")) }
         assertEquals(listOf(mine), with(alice) { db.tasks.toList() })
 
-        // Creating a record owned by someone else is refused by the same rule that hides it from you.
+        // The same rule that hides a record from you refuses creating a record owned by someone else.
         assertFailsWith<AccessDenied> { with(bob) { db.tasks.add(Task(alice, "theirs")) } }
         assertFailsWith<AccessDenied> { with(bob) { mine.delete() } }
 
@@ -204,7 +204,7 @@ class PolicyTest {
             val project = db.store(Project(alice, "Inbox", shared = true))
             with(alice) { db.store(Task(alice, "shared").also { it.project = project }) }
 
-            // Bob's session, reading a collection filtered by what Bob may see.
+            // Bob's session, reading a collection filtered by what Bob can see.
             harness {
                 Div {
                     with(bob) {
@@ -217,7 +217,7 @@ class PolicyTest {
                 with(alice) { project.update { shared = false } }
                 h.settle()
 
-                // There is no invalidation code. The policy read `project.shared`, so writing it
+                // There's no invalidation code. The policy read `project.shared`, so writing it
                 // invalidated the compositions whose filter had read it, and no others.
                 assertEquals(listOf(Op.Remove(parent = 1, index = 0, count = 1)), h.drain())
             }
@@ -231,8 +231,8 @@ class PolicyTest {
 
         with(root) { task.update { archived = true } }
 
-        // An admin removes their own admin role. The policy reads `principal.admin`, which is a cell, so
-        // the next write is refused without any explicit notification.
+        // An admin removes their own admin role. The policy reads `principal.admin`, which is a cell,
+        // so the next write is refused without any explicit notification.
         with(root) { root.update { admin = false } }
 
         assertFailsWith<AccessDenied> { with(root) { task.update { archived = false } } }
@@ -304,8 +304,8 @@ class PolicyTest {
 
     @Test
     fun `every generated mutation requires a principal to call`(): Unit {
-        // `update` can't be called without a principal because the principal is a context parameter.
-        // That guarantee exists only at compile time, so this test checks the compiled bytecode.
+        // `update` can't be called without a principal, because the principal is a context
+        // parameter. That guarantee exists only at compile time, so this test checks the bytecode.
         val update = Class.forName("jetlin.db.TaskTableKt").methods.single { it.name.startsWith("update") }
 
         // In the JVM signature, a context parameter comes before the extension receiver.
@@ -317,7 +317,7 @@ class PolicyTest {
     }
 }
 
-/** The text of the first `<span>`, for checking what the session shows. */
+/** Returns the text of the first `<span>`, for checking what the session shows. */
 private suspend fun Harness.textOfFirstSpan(): String = html().substringAfter("<span").substringAfter('>')
     .substringBefore("</span>")
 
@@ -338,7 +338,7 @@ private fun withDb(block: (Db) -> Unit) {
     }
 }
 
-/** The same as above, for tests that run a live session. */
+/** Like the function above, for tests that run a live session. */
 @OptIn(ExperimentalPathApi::class)
 private suspend fun withLiveDb(block: suspend (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-db")

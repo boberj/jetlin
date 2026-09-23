@@ -21,22 +21,24 @@ import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 
 /**
- * A sample with two users, showing the framework's access control in an application.
+ * Starts a sample with several users that shows the framework's access control in an application.
  *
- * Open it in two windows, sign in as Alice in one and Bob in the other, then share one of Alice's todos
- * with the team. It appears in Bob's window as soon as it is shared and disappears when it is unshared.
- * There is no polling, subscription or invalidation code: the write that stores the change is also
- * what recomposes the sessions that can see the record.
+ * Open it in two windows, sign in as Alice in one and Bob in the other, and share one of Alice's
+ * todos with the team. It appears in Bob's window as soon as it's shared, and disappears when it's
+ * unshared. There's no polling, subscription, or invalidation code: the write that stores the change
+ * is also what recomposes the sessions that can see the record.
  *
- * Signing in just sets a cookie containing an email address. That is not real authentication, and it
+ * Signing in sets a cookie that contains an email address. That isn't real authentication, and it
  * isn't meant to be. The sample is about what each principal can see and what happens when that
  * changes, not about how users prove who they are.
+ *
+ * The server listens on the port in the `PORT` environment variable, or on port 8081.
  */
 fun main() {
     val db = openSeeded()
     val port = System.getenv("PORT")?.toInt() ?: 8081
-    // The "external system" is a stub served by this same process on the same port. The sample is about
-    // how an application handles data it doesn't own, so a real third-party service would add nothing.
+    // The external system is a stub that this process serves on the same port. The sample is about how
+    // an application handles data it doesn't own, so a real third-party service would add nothing.
     val hub = Hub("http://127.0.0.1:$port")
 
     embeddedServer(Netty, port = port) {
@@ -59,19 +61,15 @@ fun main() {
             exposeTestTags = true
             head = STYLES
 
-            /**
-             * Supplies the session's principal.
-             *
-             * This runs for the initial HTTP request, and again when a WebSocket wakes a hibernated
-             * session. The principal is therefore recomputed from the new connection instead of being
-             * restored from a snapshot that may be out of date. If a role was revoked while a laptop was
-             * asleep, the change takes effect when the laptop wakes.
-             */
+            // Supply the session's principal. This runs for the initial HTTP request, and again when a
+            // WebSocket wakes a hibernated session. So the principal is recomputed from the new
+            // connection instead of restored from a snapshot that might be out of date. If a role was
+            // revoked while a laptop was asleep, the change takes effect when the laptop wakes.
             attributes { call -> mapOf(PrincipalKey to db.signedInUser(call)) }
 
             onError = { throwable ->
-                // An AccessDenied here means application code attempted something a policy refuses,
-                // either because of a bug or an attack. In both cases nothing was written.
+                // An AccessDenied here means application code tried something that a policy refuses,
+                // because of a bug or an attack. Either way, nothing was written.
                 println("[teams] ${throwable::class.simpleName}: ${throwable.message}")
             }
 
@@ -79,9 +77,10 @@ fun main() {
 
             view("/login", title = "Sign in · Teams") { SignInPage() }
 
-            // Context parameters are lexically scoped and aren't passed through a `@Composable () -> Unit`,
-            // so `WithPrincipal` puts the principal back in scope at the root of each page (see §4.4 of the
-            // design plan). Everything inside it has a principal in scope.
+            // Context parameters are lexically scoped, and they aren't passed through a
+            // `@Composable () -> Unit`. So WithPrincipal puts the principal back in scope at the
+            // root of each page, and everything inside it has a principal in scope. See §4.4 of the
+            // design plan.
             view("/", title = "Todos · Teams", requires = Principals.signedIn) {
                 WithPrincipal { TodoListPage(db) }
             }
@@ -90,15 +89,16 @@ fun main() {
                 WithPrincipal { NotesPage(db) }
             }
 
-            // Shows data from the external system. There is no gate, policy or transaction involved: a
-            // fetched value is ordinary snapshot state, so its arrival recomposes whatever read it.
+            // This page shows data from the external system. No gate, policy, or transaction is
+            // involved: a fetched value is ordinary snapshot state, so its arrival recomposes
+            // whatever read it.
             view("/hub", title = "Hub · Teams", requires = Principals.signedIn) {
                 WithPrincipal { HubPage(hub) }
             }
 
-            // An entity-bound route. It resolves the todo through the policy-checked lookup, so a todo this
-            // principal may not read shows as not found. The title is computed from the resolved todo, so
-            // `<head>` can't reveal a record the body refused to show.
+            // A route for one record. It looks up the todo with the policy-checked lookup, so a
+            // todo that this principal can't read shows as not found. The title is computed from
+            // the todo it found, so <head> can't reveal a record that the body refused to show.
             view(
                 "/todo/{id}",
                 subject = { request -> db.todoFor(request) },
@@ -115,7 +115,10 @@ fun main() {
     }.start(wait = true)
 }
 
-/** The attribute key holding the principal, as this application's `User` type. Jetlin only sees the key. */
+/**
+ * The attribute key that holds the principal, as this application's `User` type. Jetlin sees only
+ * the key.
+ */
 val PrincipalKey: AttributeKey<User?> = AttributeKey("principal")
 
 /** Typed guards for the principal, such as `Principals.signedIn` and `Principals.where { it.admin }`. */
@@ -124,14 +127,20 @@ val Principals: Principals<User> = Principals(PrincipalKey, signIn = "/login")
 /** The cookie this sample uses as a stand-in for authentication. It verifies nothing. */
 const val SESSION_COOKIE: String = "teams_email"
 
-/** A seeded account, as listed on the sign-in page. */
+/**
+ * A seeded account, as the sign-in page lists it.
+ *
+ * @property email the email address to sign in with.
+ * @property label the name to show.
+ * @property note a short description, such as the account's team.
+ */
 class Account(val email: String, val label: String, val note: String? = null)
 
 /**
  * The accounts that [openSeeded] creates.
  *
- * The sign-in page lists these from a constant instead of querying the database. It has no principal,
- * so a query would need a way around the policy checks.
+ * The sign-in page lists these from a constant instead of querying the database. It has no
+ * principal, so a query would need a way around the policy checks.
  */
 val SEEDED_ACCOUNTS: List<Account> = listOf(
     Account("alice@example.com", "Alice", "Acme"),
@@ -143,15 +152,20 @@ val SEEDED_ACCOUNTS: List<Account> = listOf(
 /**
  * Looks up the signed-in user from the session cookie.
  *
- * This uses `authenticate`, the framework's one unchecked lookup. It is needed here because there is
- * no principal yet to check the lookup against.
+ * This uses `authenticate`, the framework's one unchecked lookup. It needs it because there's no
+ * principal yet to check the lookup against.
+ *
+ * @return the user, or `null` if nobody is signed in or no user has the cookie's email address.
  */
 internal fun Db.signedInUser(call: ApplicationCall): User? {
     val email = call.request.cookies[SESSION_COOKIE] ?: return null
     return authenticate(User::class) { user -> user.email == email }
 }
 
-/** The `/todo/{id}` route's lookup. Returns null for a todo this principal may not read. */
+/**
+ * Looks up the todo for the `/todo/{id}` route. Returns `null` for a todo that this principal can't
+ * read.
+ */
 internal fun Db.todoFor(request: RequestContext): Todo? {
     val principal = Principals.of(request) ?: return null
     val id = request.pathParams["id"]?.toLongOrNull() ?: return null
@@ -161,15 +175,19 @@ internal fun Db.todoFor(request: RequestContext): Todo? {
 /**
  * Creates a new database seeded with two teammates, a user with no team, and an admin.
  *
- * The database goes in a temporary directory so the sample always starts from the same state. A real
- * application would open a persistent file that `./gradlew dbMigrate` has been run against.
+ * By default, the database goes in a temporary directory, so the sample always starts from the
+ * same state. A real application would open a persistent file that `./gradlew dbMigrate` has
+ * migrated.
+ *
+ * @param file the database file. If it already has records, nothing is seeded.
  */
 internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve("teams.db")): Db {
     val db = Db.open(file, JetlinSchema.tables)
     if (db.resident.recordCount > 0) return db
 
-    // Seeding needs `unsafe` (which logs) because there is no principal yet: no one can be allowed to
-    // create the first user of an empty database. Everything after this goes through the policy checks.
+    // Seeding needs `unsafe`, which logs, because there's no principal yet: nobody can be allowed to
+    // create the first user of an empty database. Everything after this goes through the policy
+    // checks.
     unsafe("seeding the sample database") {
         db.transact {
             val acme = db.insertUnchecked(Team("Acme"))
@@ -192,11 +210,11 @@ internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve
 /**
  * Makes the session's principal available as a context parameter to [content].
  *
- * Context parameters are lexically scoped and are not passed through a `@Composable () -> Unit`, so the
- * principal stored in the session has to be brought back into scope explicitly. Call this once at the
- * root of each page.
+ * Context parameters are lexically scoped, and they aren't passed through a
+ * `@Composable () -> Unit`, so the principal stored in the session has to be brought back into scope
+ * explicitly. Call this once at the root of each page.
  *
- * If there is no principal, nothing is rendered. In practice that doesn't happen: pages that need a
+ * If there's no principal, nothing is rendered. In practice that doesn't happen: pages that need a
  * principal declare `requires = Principals.signedIn`, so the guard has already redirected.
  */
 @Composable

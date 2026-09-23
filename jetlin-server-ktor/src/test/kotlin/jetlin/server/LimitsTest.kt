@@ -23,12 +23,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The two ceilings, over a real server.
+ * Tests the two limits over a real server.
  *
- * Both exist for the same reason: without them a stream of requests from one source grows memory or
- * takes a share of the machine until neither is left for anybody else. Both are deliberately
- * degradations rather than defences — a refused page render and a dropped event are a bad day for
- * whoever hit the limit, and a normal one for everybody else.
+ * Both exist for the same reason. Without them, a stream of requests from one source grows memory,
+ * or takes a share of the machine, until nothing is left for anybody else. Both deliberately degrade
+ * service instead of defending against attacks. A refused page render and a dropped event are a bad
+ * day for whoever hit the limit, and a normal one for everybody else.
  */
 class LimitsTest {
 
@@ -48,7 +48,7 @@ class LimitsTest {
 
         val refused = client.get("/")
         assertEquals(HttpStatusCode.ServiceUnavailable, refused.status)
-        // Told when to come back, rather than left to guess.
+        // The client is told when to come back, instead of being left to guess.
         assertEquals("5", refused.headers[HttpHeaders.RetryAfter])
         assertTrue(refused.bodyAsText().contains("try again"), refused.bodyAsText())
     }
@@ -67,8 +67,8 @@ class LimitsTest {
         // The one slot is taken, and new visitors are turned away.
         assertEquals(HttpStatusCode.ServiceUnavailable, client.get("/").status)
 
-        // Somebody who already had a session is not: turning them away to make room for new
-        // visitors would be the wrong trade, and they are not the ones creating the pressure.
+        // Someone who already had a session isn't. Turning them away to make room for new visitors
+        // would be the wrong trade, and they aren't the ones creating the pressure.
         client.webSocket("/jetlin") {
             hello(token)
             awaitMessage<ServerMessage.Reset>()
@@ -79,8 +79,8 @@ class LimitsTest {
     fun `a connection sending too fast is throttled and told once`(): Unit = testApplication {
         application {
             jetlin {
-                // One event a second, no burst beyond the first: enough to let the hello through
-                // and stop everything after it.
+                // One event a second, with no burst beyond the first: enough to let the hello
+                // through, and stop everything after it.
                 eventsPerSecond = 1.0
                 eventBurst = 1
                 view("/") {
@@ -124,7 +124,7 @@ class LimitsTest {
         val client = createClient { install(WebSockets) }
         val token = client.tokenFromPage()
 
-        client.get("/") // refused: the one slot is taken
+        client.get("/") // refused, because the one slot is taken
 
         client.webSocket("/jetlin") {
             hello(token)
@@ -133,8 +133,8 @@ class LimitsTest {
             awaitMessage<ServerMessage.Error>()
         }
 
-        // Silence would be the real failure here: a limit doing its job invisibly means the
-        // application it is protecting people from never gets fixed.
+        // Silence would be the real failure here. If a limit does its job invisibly, the application
+        // it protects people from never gets fixed.
         log.use {
             assertTrue(
                 log.contains("At the session limit of 1"),
@@ -144,7 +144,7 @@ class LimitsTest {
                 log.contains("Throttling session"),
                 "expected the throttle to be logged, got: ${log.lines}",
             )
-            // And the tally on the way out, which is what says how bad it was.
+            // And the total on the way out, which says how bad it was.
             waitUntil { log.contains("events for exceeding") }
         }
     }
@@ -171,11 +171,11 @@ class LimitsTest {
             hello(token)
             awaitMessage<ServerMessage.Reset>()
 
-            // Filling in a form is bursty. A limit that could not absorb this would have to be set
-            // so high it stopped protecting anything.
+            // Filling in a form comes in bursts. A limit that couldn't absorb this would have to be
+            // set so high that it stopped protecting anything.
             repeat(30) { send(ClientMessage.Event(node = 2, event = "click", seq = it + 1L)) }
 
-            // Every one arrived: the count reaches thirty rather than stopping at a limit.
+            // Every event arrived: the count reaches thirty instead of stopping at a limit.
             var last = ""
             while (!last.contains("count 30")) {
                 last = awaitMessage<ServerMessage.Patch>().ops.toString()

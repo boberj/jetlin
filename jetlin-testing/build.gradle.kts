@@ -4,11 +4,11 @@ plugins {
 }
 
 dependencies {
-    // Callers write @Composable content against these, so they are part of this module's surface.
+    // Callers write @Composable content against these, so they're part of this module's API.
     api(project(":jetlin-html"))
 
-    // Deliberately no test-framework dependency: assertions here throw AssertionError directly, so
-    // this works under JUnit 4, JUnit 5 or anything else the consuming project already runs.
+    // There's deliberately no test framework dependency. Assertions here throw AssertionError
+    // directly, so this module works with JUnit 4, JUnit 5, or whatever the project already uses.
     testImplementation(libs.kotlin.test)
     testImplementation(libs.coroutines.test)
 }

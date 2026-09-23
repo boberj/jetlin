@@ -23,8 +23,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # Includes :conventions:test, which fails the build if any test method would be silently
-      # dropped by JUnit for returning a value instead of Unit.
+      # This includes :conventions:test, which fails the build if JUnit would skip a test method,
+      # without any warning, because it returns a value instead of Unit.
       - name: Build and test
         run: ./gradlew build
 
@@ -32,7 +32,7 @@ jobs:
         if: failure()
         with:
           name: test-results
-          # Two levels deep as well, so the sample's application tests are included.
+          # Match two levels deep too, so the samples' test reports are included.
           path: "**/build/reports/tests/test"
 
   client:
@@ -55,8 +55,8 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      # jetlin.js is checked in so that consumers of the Gradle build never need npm. That only
-      # works if it is kept in step with the TypeScript it was built from.
+      # jetlin.js is checked in, so users of the Gradle build never need npm. That works only if it's
+      # kept in step with the TypeScript it's built from.
       - name: Rebuild and compare
         run: |
           npm run build

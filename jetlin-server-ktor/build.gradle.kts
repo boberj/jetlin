@@ -1,8 +1,8 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.compose)
-    // SessionSnapshot is @Serializable. Without this the annotation compiles but generates nothing,
-    // so any store that has to write the envelope somewhere would fail to find a serializer.
+    // SessionSnapshot is @Serializable. Without this plugin, the annotation compiles but generates
+    // nothing, so a store that has to write the snapshot somewhere would fail to find a serializer.
     alias(libs.plugins.kotlin.serialization)
 }
 
@@ -17,8 +17,8 @@ dependencies {
     testImplementation(libs.ktor.server.netty)
     testImplementation(libs.ktor.client.cio)
     testImplementation(libs.ktor.client.websockets)
-    // A real logging backend, so tests can assert that reaching a limit is actually reported.
-    // Without one slf4j binds a no-op and the warnings go nowhere, which is also what a
-    // regression removing them would look like.
+    // A real logging backend, so tests can assert that reaching a limit is reported. Without one,
+    // SLF4J binds a no-op logger and the warnings go nowhere, which is also what a regression that
+    // removed them would look like.
     testImplementation(libs.logback.classic)
 }

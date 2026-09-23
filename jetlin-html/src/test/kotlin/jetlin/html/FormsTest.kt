@@ -12,6 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
+/** Tests form fields: validation, the touched state, binding, and saving across hibernation. */
 class FormsTest {
 
     @Test
@@ -23,7 +24,7 @@ class FormsTest {
         }
         view.use {
             view.start()
-            // A form should not open covered in red.
+            // A form shouldn't open covered in red.
             assertNull(field.error)
             assertFalse(field.isValid)
         }
@@ -73,8 +74,8 @@ class FormsTest {
             view.start()
             val html = view.renderHtml()
             assertTrue(html.contains("""value="hello""""), html)
-            // The debounce has to reach the client, or every keystroke is a round trip. The spec
-            // travels as JSON inside an attribute, so it is attribute-escaped on the way out.
+            // The debounce has to reach the client, or every keystroke is a round trip. The spec travels
+            // as JSON inside an attribute, so it's attribute-escaped on the way out.
             assertTrue(html.contains("""&quot;debounceMs&quot;:250"""), html)
         }
     }
@@ -111,7 +112,7 @@ class FormsTest {
 private fun field(initial: String, validate: (String) -> String?): Field<String> =
     Field(mutableStateOf(initial), mutableStateOf(false), validate)
 
-/** Routes an input event through the session, the way the transport would. */
+/** Sends an input event through the session, as the transport would. */
 private suspend fun LiveView.typeInto(node: Int, value: String) {
     dispatch(
         ClientMessage.Event(

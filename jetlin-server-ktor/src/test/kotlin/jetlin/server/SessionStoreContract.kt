@@ -16,14 +16,15 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
 
 /**
- * What any [SessionStore] has to do, written down so a second implementation has something to
- * conform to rather than a first implementation to imitate.
+ * Tests what any [SessionStore] has to do.
  *
- * Subclass and supply a store; every implementation runs the same tests.
+ * It's written down so that a second implementation has a contract to meet, instead of a first
+ * implementation to imitate. To test an implementation, subclass this and supply a store. Every
+ * implementation runs the same tests.
  */
 abstract class SessionStoreContract {
 
-    /** Builds an empty store whose snapshots expire after [ttl]. */
+    /** Returns an empty store whose snapshots expire after [ttl]. */
     abstract fun createStore(ttl: Duration): SessionStore
 
     private fun store(ttl: Duration = 30.minutes): SessionStore = createStore(ttl)
@@ -86,12 +87,12 @@ abstract class SessionStoreContract {
     }
 
     /**
-     * The property the interface exists for.
+     * Tests the property the interface exists for.
      *
-     * Waking a session is a transfer of ownership: two sockets can quote one token at the same time,
-     * and if both were handed the snapshot both would build a composition from it, leaving one live,
-     * attached, and invisible to the reaper meant to collect it. Implementing `take` as a read
-     * followed by a delete fails this test, which is the point of having it.
+     * Waking a session transfers ownership. Two sockets can send one token at the same time, and if
+     * both got the snapshot, both would build a composition from it, leaving one live, attached, and
+     * invisible to the reaper that should collect it. Implementing `take` as a read followed by a
+     * delete fails this test, which is why it exists.
      */
     @Test
     fun `concurrent takes hand the snapshot to exactly one caller`(): Unit = runBlocking {
@@ -110,8 +111,8 @@ abstract class SessionStoreContract {
     }
 
     /**
-     * Any store that is not this process's memory has to serialize the envelope, so the shape has
-     * to survive a round trip whether or not the implementation under test performs one.
+     * Any store outside this process's memory has to serialize the snapshot, so the snapshot has to
+     * survive a round trip, whether or not the implementation under test performs one.
      */
     @Test
     fun `a snapshot survives a serialization round trip`(): Unit = runBlocking {
@@ -128,6 +129,7 @@ abstract class SessionStoreContract {
     }
 }
 
+/** Runs the [SessionStoreContract] against [InMemorySessionStore]. */
 class InMemorySessionStoreTest : SessionStoreContract() {
     override fun createStore(ttl: Duration): SessionStore = InMemorySessionStore(ttl)
 }

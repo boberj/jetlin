@@ -20,9 +20,9 @@ import kotlin.test.assertTrue
 /**
  * Tests the sample as an application: two principals, one database, and what each of them can see.
  *
- * These tests are about access rather than markup. The framework's own tests cover the same properties,
- * but checking them again at the application level is worthwhile. Most tests use two principals, because
- * access bugs usually can't show up with only one.
+ * These tests are about access, not markup. The framework's own tests cover the same properties, but
+ * checking them again at the application level is worthwhile. Most tests use two principals,
+ * because access bugs usually can't show up with only one.
  */
 class TeamsAppTest {
 
@@ -31,8 +31,8 @@ class TeamsAppTest {
         runViewTest {
             signedInAs(db, "bob@example.com")
 
-            // Bob's own todo, plus the one Alice shared with Acme. Not Alice's unshared todo, and nothing
-            // of Carol's, since she is on no team.
+            // Bob's own todo, and the one Alice shared with Acme. Not Alice's unshared todo, and
+            // nothing of Carol's, because she's on no team.
             onNode(hasTestTag("todo") and hasText("Review the sample", substring = true)).assertExists()
             onNode(hasTestTag("todo") and hasText("Write the team sample", substring = true)).assertExists()
             assertNotDisclosed("Rehearse the demo", "Nothing to do with Acme")
@@ -65,8 +65,8 @@ class TeamsAppTest {
 
                 onAll(hasTestTag("todo")).assertCount(3)
                 onNode(hasTestTag("todo") and hasText("Rehearse the demo", substring = true)).assertExists()
-                // A share from another session updates the list and nothing else. The chrome recomposes
-                // but produces the same markup, so it emits no ops.
+                // A share from another session updates the list and nothing else. The chrome
+                // recomposes, but it produces the same markup, so it emits no ops.
                 arrival.assertUntouched(hasTestTag("principal"), hasTestTag("draft"))
 
                 with(alice) { rehearse.update { team = null } }
@@ -82,7 +82,8 @@ class TeamsAppTest {
         runViewTest {
             signedInAs(db, "bob@example.com")
 
-            // Alice's todo, shared with Acme: visible, with the checkbox disabled as the policy requires.
+            // Alice's todo, shared with Acme: visible, with the checkbox disabled, as the policy
+            // requires.
             within(onNode(hasTestTag("todo") and hasText("Write the team sample", substring = true))) {
                 onNode(hasTestTag("done")).assertDisabled()
                 onAll(hasTestTag("share")).assertCount(0)
@@ -127,7 +128,8 @@ class TeamsAppTest {
             signedInAs(db, "root@example.com")
             onAll(hasTestTag("user")).assertCount(4)
 
-            // Someone else removes their admin role. Nothing notifies this session; the guard read `admin`.
+            // Someone else removes their admin role. Nothing notifies this session. The guard read
+            // `admin`.
             with(root) { root.update { admin = false } }
             awaitIdle()
 
@@ -197,7 +199,7 @@ class TeamsAppTest {
     }
 }
 
-/** Signs in as [email] and composes the application's actual route table. */
+/** Signs in as [email] and composes the application's real route table. */
 private suspend fun ViewTest.signedInAs(db: Db, email: String) {
     setAttribute(PrincipalKey, db.user(email))
     setRoutes {
@@ -211,7 +213,7 @@ private suspend fun ViewTest.signedInAs(db: Db, email: String) {
             requires = Principals.signedIn,
         ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
         view("/admin/users", requires = Principals.where { it.admin }) { WithPrincipal { AdminUsersPage(db) } }
-        // These tests don't use the external system; they are about stored data and who may see it.
+        // These tests don't use the external system. They're about stored data and who can see it.
         app { route -> Shell(hub = null, content = route) }
     }
 }

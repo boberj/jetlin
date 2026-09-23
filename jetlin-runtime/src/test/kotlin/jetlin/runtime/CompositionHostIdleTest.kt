@@ -21,16 +21,17 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 
 /**
- * What [CompositionHost.awaitApplied] and [CompositionHost.awaitIdle] promise, and what they must not
- * do on the way.
+ * Tests what [CompositionHost.awaitApplied] and [CompositionHost.awaitIdle] promise, and what they
+ * must not do along the way.
  *
- * Two ways to get this wrong, and both are tested. Ending a wait early sends a patch or lets a test
- * assert before the tree has caught up — so each test that waits checks the tree afterwards, rather
- * than only that the wait returned. Never ending it deadlocks a session — so every wait here runs
- * under a timeout that turns a hang into a failure naming what hung.
+ * There are two ways to get this wrong, and the tests cover both. Ending a wait early sends a patch,
+ * or lets a test assert, before the tree has caught up, so each test that waits checks the tree
+ * afterward, not only that the wait returned. Never ending a wait deadlocks a session, so every wait
+ * here runs under a timeout that turns a hang into a failure that names what hung.
  *
- * runBlocking rather than runTest throughout: the host runs on real dispatchers and real timers, and
- * virtual time would skip exactly the throttles and delays these tests exist to wait through.
+ * The tests use `runBlocking` instead of `runTest`. The host runs on real dispatchers and real
+ * timers, and virtual time would skip exactly the throttles and delays these tests need to wait
+ * through.
  */
 class CompositionHostIdleTest {
 
@@ -40,12 +41,13 @@ class CompositionHostIdleTest {
         var count by mutableIntStateOf(0)
         CompositionHost(TestApplier(root), FramePolicy.Paced(300.milliseconds)).use { host ->
             host.setContent { Leaf("count $count") }
-            host.transact { count = 1 } // spends the frame budget, so the next one has to wait
+            host.transact { count = 1 } // uses up the frame budget, so the next frame has to wait
 
             within("a change held back by the frame throttle") { host.transact { count = 2 } }
 
-            // Recomposition is held in the recomposer while the throttle runs down, and a wait that
-            // only looked for queued tasks would find none and return here, before it happened.
+            // Recomposition waits in the recomposer while the throttle runs down. A wait that
+            // looked only for queued tasks would find none and return here, before the
+            // recomposition happened.
             assertEquals("root(count 2)", root.render())
         }
     }
@@ -59,8 +61,8 @@ class CompositionHostIdleTest {
             host.setContent {
                 Leaf(label)
                 if (loading) {
-                    // Written outside any snapshot, from an effect: invisible to the recomposer until
-                    // the write is published, then a recomposition of its own.
+                    // Written outside any snapshot, from an effect. The recomposer can't see it
+                    // until the write is published, and then it causes a recomposition of its own.
                     LaunchedEffect(Unit) { label = "loaded" }
                 }
             }
@@ -86,8 +88,8 @@ class CompositionHostIdleTest {
                     }
                 }
             }
-            // A clock read by the page, as a real one would be. Suspended in delay() it has no queued
-            // work, so the session settles between ticks instead of never.
+            // A clock that the page reads, as a real one would be. While it's suspended in delay()
+            // it has no queued work, so the session settles between ticks instead of never.
             repeat(5) { within("a session with a ticking clock") { host.awaitIdle() } }
         }
     }
@@ -99,7 +101,8 @@ class CompositionHostIdleTest {
         CompositionHost(TestApplier(root)).use { host ->
             host.setContent {
                 Leaf(label)
-                // Suspends constantly and never waits: always queued work on the effects lane.
+                // It suspends constantly and never waits, so there's always queued work on the
+                // effects lane.
                 LaunchedEffect(Unit) { while (true) yield() }
             }
 
@@ -121,7 +124,8 @@ class CompositionHostIdleTest {
             }
             runCatching { host.transact { boom = true } }
 
-            // The work that killed it will never be done; a wait for it has to end, and say why.
+            // The work that killed the composition will never be done. A wait for it has to end,
+            // and say why.
             within("a wait on a dead composition") {
                 assertFailsWith<IllegalStateException> { host.awaitApplied() }
                 assertFailsWith<IllegalStateException> { host.awaitIdle() }
@@ -130,10 +134,10 @@ class CompositionHostIdleTest {
     }
 
     /**
-     * An end-to-end guard: transactions and a concurrent writer, with the tree checked after every
+     * An end-to-end check: transactions and a concurrent writer, with the tree checked after every
      * wait.
      *
-     * It is not what establishes that a wait cannot end early. The race that matters sits between two
+     * This isn't what proves that a wait can't end early. The race that matters sits between two
      * adjacent reads, and this test passed three runs out of three against a version of the check with
      * those reads in the unsafe order. [SessionActivityTest] covers that race by forcing it.
      */
@@ -146,14 +150,14 @@ class CompositionHostIdleTest {
         CompositionHost(TestApplier(root)).use { host ->
             host.setContent { Leaf("mine $mine noise-seen ${noise >= 0}") }
 
-            // Another session's traffic, as far as this one can tell: state it reads, written
-            // continuously from a thread it does not own, arriving through the global snapshot and
-            // waking its recomposer at moments it has no control over.
+            // As far as this session can tell, this is another session's traffic: state it reads,
+            // written continuously from a thread it doesn't own, arriving through the global
+            // snapshot, and waking its recomposer at moments it can't control.
             //
-            // Parked briefly between writes. Without any gap a writer can keep the recomposer busy for
-            // good, and then no wait for "nothing pending" can end — correctly, and the old wait for
-            // Idle had the same property — which would be a test of starvation rather than of the
-            // early return this one is looking for.
+            // The writer pauses briefly between writes. Without any gap, a writer can keep the
+            // recomposer busy for good, and then no wait for "nothing pending" can end. That's
+            // correct, and the old wait for Idle behaved the same, but it would test starvation
+            // instead of the early return this test is looking for.
             val writer = thread(isDaemon = true) {
                 while (!stop.get()) {
                     androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot { noise++ }
@@ -163,8 +167,8 @@ class CompositionHostIdleTest {
             try {
                 repeat(500) { i ->
                     within("transaction $i under concurrent writes") { host.transact { mine = i } }
-                    // Read on the session's own thread straight after the wait, while the writer
-                    // keeps the recomposer busy. An early return shows up as the previous value.
+                    // Read on the session's own thread right after the wait, while the writer keeps the
+                    // recomposer busy. An early return shows up as the previous value.
                     val rendered = host.confined { root.render() }
                     assertEquals("root(mine $i noise-seen true)", rendered, "after transaction $i")
                 }
@@ -175,7 +179,7 @@ class CompositionHostIdleTest {
         }
     }
 
-    /** Runs [block], failing with [what] rather than hanging if it never returns. */
+    /** Runs [block], and fails with [what] instead of hanging if it never returns. */
     private suspend fun <T> within(what: String, block: suspend () -> T): T =
         try {
             withTimeout(10.seconds) { block() }

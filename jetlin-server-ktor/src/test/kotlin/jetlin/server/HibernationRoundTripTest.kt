@@ -24,11 +24,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 
 /**
- * A session going all the way down and coming back, over a real socket.
+ * Tests a session going all the way down and coming back, over a real socket.
  *
- * The unit tests cover capture and restore in isolation; this covers the part only the transport
- * knows — that a socket going away eventually hibernates the session, and that a later socket
- * quoting the same token gets the user's state back rather than a blank page.
+ * The unit tests cover capture and restore separately. This test covers the part only the transport
+ * knows: a socket going away eventually hibernates the session, and a later socket that sends the
+ * same token gets the user's state back instead of a blank page.
  */
 class HibernationRoundTripTest {
 
@@ -64,7 +64,7 @@ class HibernationRoundTripTest {
             awaitMessage<ServerMessage.Patch>()
         }
 
-        // Past the grace period the composition is destroyed and only the snapshot remains.
+        // After the grace period, the composition is destroyed, and only the snapshot remains.
         waitUntil { store.size == 1 }
 
         client.webSocket("/jetlin") {
@@ -98,7 +98,7 @@ class HibernationRoundTripTest {
         delay(grace * 4)
         assertEquals(0, store.size, "a session with no saved state is not worth a store entry")
 
-        // And a client quoting that token is told plainly, so it can start over.
+        // And a client that sends that token is told so, so it can start over.
         client.webSocket("/jetlin") {
             hello(token)
             val error = awaitMessage<ServerMessage.Error>()
@@ -129,7 +129,7 @@ class HibernationRoundTripTest {
         }
         waitUntil { store.size == 1 }
 
-        // The user pressed back while disconnected: the address bar wins over the stored location.
+        // The user pressed back while disconnected, so the address bar wins over the stored location.
         client.webSocket("/jetlin") {
             hello(token, url = "/elsewhere")
             val reset = awaitMessage<ServerMessage.Reset>()
@@ -155,7 +155,7 @@ internal suspend fun io.ktor.websocket.WebSocketSession.send(message: ClientMess
     send(Frame.Text(JetlinJson.encodeToString(ClientMessage.serializer(), message)))
 }
 
-/** Reads frames until one of the requested type arrives, so unrelated traffic cannot fail a test. */
+/** Reads frames until one of the requested type arrives, so unrelated traffic can't fail a test. */
 internal suspend inline fun <reified T : ServerMessage> io.ktor.websocket.WebSocketSession.awaitMessage(): T =
     withTimeout(5_000) {
         while (true) {

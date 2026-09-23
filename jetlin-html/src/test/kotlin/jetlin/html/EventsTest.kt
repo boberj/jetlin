@@ -11,11 +11,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 /**
- * What an element listens for, and what happens when two declarations want the same event.
+ * Tests what an element listens for, and what happens when two declarations want the same event.
  *
- * Listeners are keyed by event name from here to the browser's table, so a second handler for one
- * event has nowhere to go. These pin down that it is refused where it was written rather than
- * quietly winning or quietly losing.
+ * Listeners are keyed by event name all the way to the browser's table, so a second handler for one
+ * event has nowhere to go. These tests check that it's refused where it's written, instead of
+ * winning or losing without any error.
  */
 class EventsTest {
 
@@ -71,20 +71,23 @@ class EventsTest {
         view.use {
             view.start()
             view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1, payload = EventPayload()))
-            // Both parties had a claim on this click: the caller wanted to hear about it, and the
-            // link still has to move the session.
+            // Both parties need this click: the caller wanted to hear about it, and the link still
+            // has to move the session.
             assertEquals(1, clicks)
             assertEquals("/next", view.currentUrl)
         }
     }
 }
 
-/** Sends a committed value the way a `<select>` would, through the transport's own message type. */
+/** Sends a committed value as a `<select>` would, through the transport's own message type. */
 private suspend fun LiveView.change(node: Int, value: String) {
     dispatch(ClientMessage.Event(node = node, event = "change", seq = 1, payload = EventPayload(value = value)))
 }
 
-/** Composes [content] and asserts it was refused, with a message mentioning each of [fragments]. */
+/**
+ * Composes [content] and asserts that it was refused, with a message that mentions each of
+ * [fragments].
+ */
 private fun assertRejects(vararg fragments: String, content: @Composable () -> Unit): Unit = runBlocking {
     val failure = runCatching {
         val view = LiveView { _ -> content() }

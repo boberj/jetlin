@@ -12,13 +12,15 @@ import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
 
 /**
- * A record id tagged with the type of record it identifies.
+ * A record ID tagged with the type of record it identifies.
  *
- * The type parameter prevents passing an `Id<Project>` to a lookup over todos. [Record.id] is a plain
- * `Long` because typing it as `Id<Self>` would require every entity to be generic in itself
- * (`class Todo : Record<Todo>()`), and that type parameter would then appear in every signature that
- * mentions a record, including the policy interface. The type is added back at the lookup, which is
- * the only place it is needed.
+ * The type parameter keeps you from passing an `Id<Project>` to a lookup over todos. [Record.id] is
+ * a plain `Long`, because typing it as `Id<Self>` would make every entity generic in itself, as in
+ * `class Todo : Record<Todo>()`, and that type parameter would appear in every signature that
+ * mentions a record, including the policy interface. The type is added back at the lookup, the only
+ * place that needs it.
+ *
+ * @property value the ID.
  */
 @JvmInline
 public value class Id<T : Record>(public val value: Long) {
@@ -26,12 +28,12 @@ public value class Id<T : Record>(public val value: Long) {
 }
 
 /**
- * Base class for a persistent entity.
+ * The base class for a stored entity.
  *
- * A record is an ordinary Kotlin object that is also stored in the database. Its mutable fields are
- * [Cell]s, which are named snapshot state. Reading a field in a composable subscribes that composable,
- * and writing the field recomposes every session in the process that read it. No subscription code is
- * needed.
+ * A record is an ordinary Kotlin object that's also stored in the database. Its mutable fields are
+ * [Cell]s, which are named snapshot state. Reading a field in a composable subscribes that
+ * composable, and writing the field recomposes every session in the process that read it, with no
+ * subscription code.
  *
  * ```kotlin
  * class Todo(val owner: User, title: String) : Record() {
@@ -43,98 +45,101 @@ public value class Id<T : Record>(public val value: Long) {
  *
  * ## Identity
  *
- * Each row corresponds to exactly one object. The identity map holds one instance per (type, id), and
- * every lookup returns that instance, so equality is reference equality. [equals] and [hashCode] are
- * `final` so subclasses can't override them: field-based equality, which a `data class` entity would
- * have, would break the identity map. [id] is assigned when the record is constructed, not when it is
- * inserted, so a new record can be used as a `key` before it is stored.
+ * Each row corresponds to exactly one object. The identity map holds one instance for each type
+ * and ID, and every lookup returns that instance, so equality is reference equality. [equals] and
+ * [hashCode] are `final` so subclasses can't override them. Field-based equality, which a
+ * `data class` entity would have, would break the identity map. [id] is assigned when the record is
+ * constructed, not when it's inserted, so a new record can be used as a `key` before it's stored.
  *
- * The same rule is why a record must not be put in `rememberSaved`. Session state is stored as JSON,
- * and deserializing a record would create a second object for a row that already has one in the
- * identity map. The copy would not be equal to the original, would not recompose readers when it
- * changed, and would never have passed an access check. Save the [id] instead and look the record up
- * again. The lookup is policy-checked, so a resumed session that has lost access to the record gets
- * null.
+ * For the same reason, don't put a record in `rememberSaved`. Session state is stored as JSON, and
+ * deserializing a record would create a second object for a row that already has one in the
+ * identity map. The copy wouldn't equal the original, wouldn't recompose readers when it changed,
+ * and would never have passed an access check. Save the [id] instead, and look the record up again.
+ * The lookup is policy-checked, so a resumed session that has lost access to the record gets `null`.
  */
 public abstract class Record {
 
+    /** The ID, which the loader can replace. See [adoptStoredId]. */
     private var assignedId: Long = Ids.next(this::class)
 
     /**
-     * The record's id, unique among records of the same concrete class.
+     * The record's ID, unique among records of the same concrete class.
      *
-     * Allocated at construction from a per-class, process-wide sequence. [Ids] explains why that is
-     * safe.
+     * It's allocated at construction from a sequence for each class, shared by the whole process.
+     * [Ids] explains why that's safe.
      */
     public val id: Long get() = assignedId
 
     /**
-     * The database this record is stored in, or null if it hasn't been stored.
+     * The database this record is stored in, or `null` if it isn't stored.
      *
      * This field has two uses. `todo.update { }` and `todo.delete()` use it to find the database to
-     * open a transaction on, so the caller doesn't have to pass it. And a null value means "not stored
-     * yet", which is what the write hook checks. There used to be a separate `stored` flag, but it was
-     * always equal to `database != null`.
+     * open a transaction on, so the caller doesn't have to pass it. And `null` means "not stored yet,"
+     * which is what [recordWrite] checks.
      */
     internal var database: Db? = null
 
     /**
-     * The principals that obtained this record through the gate, and the stack trace of the first
-     * acquisition.
+     * The principals that obtained this record through the gate.
      *
-     * Only populated while [LeakDetector] is enabled. It is a set because a shared record is
-     * legitimately obtained by several principals. What the detector reports is a read by a principal
-     * that never obtained the record.
+     * It's filled in only while [LeakDetector] is on. It's a set because several principals can
+     * legitimately obtain a shared record. The detector reports a read by a principal that never
+     * obtained the record.
      */
     private var acquiredBy: MutableSet<Principal>? = null
+
+    /** The stack trace of the first acquisition, which becomes the cause of [LeakDetected]. */
     private var acquiredAt: Throwable? = null
 
     /**
-     * Replaces the constructor-assigned id with the id stored in the database.
+     * Replaces the ID assigned at construction with the ID stored in the database.
      *
-     * Only the loader calls this, and only before the record is added to the identity map. Once
-     * anything else can see a record, its id never changes.
+     * Only the loader and [insertUnchecked] call this, before the record is added to the identity
+     * map. Once anything else can see a record, its ID never changes.
      */
     internal fun adoptStoredId(stored: Long) {
         assignedId = stored
     }
 
+    /** The cells that [register] added, by name. */
     private val mutableCells = LinkedHashMap<String, Cell<*>>()
 
     /**
      * This record's cells by name, in declaration order.
      *
-     * The flush does not use this map. It goes through the table's columns instead, so that immutable
-     * constructor properties are stored as well. This map is used to detect a subclass declaring a
-     * column name twice, and by tests and debugging to inspect a record's fields.
+     * The commit doesn't use this map. It goes through the table's columns instead, so that
+     * immutable constructor properties are stored too. This map detects a subclass that declares a
+     * column name twice, and tests and debugging use it to inspect a record's fields.
      */
     internal val cells: Map<String, Cell<*>> get() = mutableCells
 
     /**
-     * Declares a persistent field holding a plain value.
+     * Declares a stored field that holds a plain value.
      *
-     * [initial] is usually the constructor parameter with the same name, as in
-     * `var title by column(title)`. A column can't be declared as a constructor `var` because the
-     * delegate has to own the state for reads to be tracked.
+     * A column can't be declared as a constructor `var`, because the delegate has to own the state
+     * for reads to be tracked.
+     *
+     * @param initial the initial value. It's usually the constructor parameter with the same name, as
+     *   in `var title by column(title)`.
      */
     protected fun <V> column(initial: V): CellProvider<V> = CellProvider(initial)
 
     /**
-     * Declares a persistent, initially null reference to another record.
+     * Declares a stored reference to another record, which starts as `null`.
      *
-     * Stored as a foreign key and resolved to an object reference at load time, so following a
+     * It's stored as a foreign key and resolved to an object reference at load time, so following a
      * reference in application code is a field access, not a query.
      */
     protected fun <T : Record> reference(): CellProvider<T?> = CellProvider(null)
 
-    /** Declares a persistent, non-null reference to another record. */
+    /** Declares a stored, non-null reference to another record, starting at [initial]. */
     protected fun <T : Record> reference(initial: T): CellProvider<T> = CellProvider(initial)
 
     /**
      * Records that [principal] obtained this record through the gate.
      *
-     * The gate calls this after every successful read check while [LeakDetector] is enabled. The set is
-     * only allocated here, so records cost nothing extra when the detector is off.
+     * The gate calls this after every successful read check while [LeakDetector] is on. The set is
+     * allocated only here, so records cost nothing extra when the detector is off.
      */
     internal fun recordAcquisition(principal: Principal) {
         val principals = acquiredBy ?: Collections.newSetFromMap(IdentityHashMap<Principal, Boolean>())
@@ -147,8 +152,8 @@ public abstract class Record {
     /**
      * Throws [LeakDetected] if the current thread's principal never obtained this record.
      *
-     * Called on every cell read while the detector is enabled. [LeakDetector] describes which leaks
-     * this can and cannot catch.
+     * Every cell read calls this while the detector is on. [LeakDetector] describes which leaks this
+     * can and can't catch.
      */
     internal fun checkRead() {
         val reader = CurrentPrincipal.current ?: return
@@ -165,13 +170,14 @@ public abstract class Record {
     }
 
     /**
-     * Adds [cell] to the current transaction's writes, so the change is committed to SQLite before any
-     * composition can see it.
+     * Adds [cell] to the current transaction's writes, so the change is committed to SQLite before
+     * any composition can see it.
      *
      * If no transaction is open, the write is refused. Allowing it would change the field in memory
      * and on screen but not on disk, and nobody would notice until a restart lost the value. Records
-     * that haven't been stored yet are exempt, since there is nothing on disk for them to disagree
-     * with.
+     * that aren't stored yet are exempt, because there's nothing on disk for them to disagree with.
+     *
+     * @throws IllegalStateException if the record is stored and no transaction is open.
      */
     internal fun recordWrite(cell: Cell<*>) {
         if (database == null) return
@@ -182,6 +188,7 @@ public abstract class Record {
         writes.update(cell)
     }
 
+    /** Adds [cell] to this record's cells, or throws if the name is taken. */
     internal fun <V> register(cell: Cell<V>): Cell<V> {
         require(mutableCells.put(cell.name, cell) == null) {
             "${this::class.simpleName} declares two columns named '${cell.name}'"
@@ -189,6 +196,7 @@ public abstract class Record {
         return cell
     }
 
+    /** Returns whether [other] is this same object. See "Identity" above. */
     final override fun equals(other: Any?): Boolean = this === other
 
     final override fun hashCode(): Int = System.identityHashCode(this)
@@ -197,10 +205,10 @@ public abstract class Record {
 }
 
 /**
- * A single named field of a record's mutable state.
+ * One named field of a record's mutable state.
  *
- * A cell is snapshot state plus two things persistence needs and `mutableStateOf` doesn't have: a
- * name and an owning record. It has no knowledge of SQL, connections or tables, so the same type
+ * A cell is snapshot state plus two things that storage needs and `mutableStateOf` doesn't have: a
+ * name and an owning record. It knows nothing about SQL, connections, or tables, so the same type
  * would work for a value fetched from an external API.
  */
 public class Cell<V> internal constructor(
@@ -212,8 +220,10 @@ public class Cell<V> internal constructor(
 ) : ReadWriteProperty<Record, V> {
 
     /**
-     * The current value. Reading it subscribes the calling composition, and writing it invalidates
-     * every composition that read it.
+     * The current value.
+     *
+     * Reading it subscribes the calling composable, and writing it invalidates every composable that
+     * read it. Writing a stored record's cell outside a transaction throws [IllegalStateException].
      */
     public var value: V
         get() {
@@ -237,10 +247,11 @@ public class Cell<V> internal constructor(
 /**
  * Creates the [Cell] for `by column(x)` and registers it on the declaring record.
  *
- * This extra step exists only to get the property name. `column()` itself has no way of knowing
- * which property it is assigned to; `provideDelegate` receives the property and can read its name.
+ * This extra step exists only to get the property name. `column()` can't know which property it's
+ * assigned to, but `provideDelegate` receives the property and can read its name.
  */
 public class CellProvider<V> internal constructor(private val initial: V) {
+    /** Creates the cell for [property] and registers it on [thisRef]. */
     public operator fun provideDelegate(thisRef: Record, property: KProperty<*>): Cell<V> =
         thisRef.register(Cell(thisRef, property.name, mutableStateOf(initial, LastWriteWins())))
 }
@@ -248,15 +259,15 @@ public class CellProvider<V> internal constructor(private val initial: V) {
 /**
  * When two sessions write the same cell, keeps the value from the snapshot that applied last.
  *
- * Without a merge policy, concurrent writes to one cell conflict and the second `apply()` throws. By
- * then its transaction has already been committed, because commits happen before the snapshot is
- * applied. Last-write-wins is the only policy that keeps memory consistent with the database:
- * transactions are serialized, so the snapshot that applies last also committed last, and its value
- * is the one on disk.
+ * Without a merge policy, concurrent writes to one cell conflict, and the second `apply()` throws.
+ * By then, its transaction is already committed, because commits happen before the snapshot is
+ * applied. Last-write-wins is the only policy that keeps memory consistent with the database.
+ * Transactions run one at a time, so the snapshot that applies last also committed last, and its
+ * value is the one on disk.
  *
- * Reporting the conflict instead would make a handler fail because someone else touched the same
+ * Reporting the conflict instead would make a handler fail because someone else changed the same
  * record, after the database had already changed. If an application ever needs something like a
- * counter that adds instead of overwriting, a per-column merge policy would be the way to add it.
+ * counter that adds instead of overwriting, a merge policy for each column would be the way to do it.
  */
 private class LastWriteWins<V> : SnapshotMutationPolicy<V> {
     override fun equivalent(a: V, b: V): Boolean = a == b
@@ -265,26 +276,31 @@ private class LastWriteWins<V> : SnapshotMutationPolicy<V> {
 }
 
 /**
- * Allocates record ids.
+ * Allocates record IDs.
  *
- * There is one sequence per class for the whole process, not one per database. That works because a
- * process has exclusive ownership of its database file: there is one resident graph, and another
- * process writing the file is treated as an error to detect. Loading moves each sequence past the
- * highest id on disk, so ids allocated after a restart can't collide with stored ones.
+ * There's one sequence per class for the whole process, not one per database. That works because a
+ * process owns its database file exclusively: there's one in-memory graph, and another process
+ * writing the file is an error that [Db] detects. Loading moves each sequence past the highest ID on
+ * disk, so IDs allocated after a restart can't collide with stored ones.
  *
- * Tests that open several databases in one process share the sequences, so ids have gaps. Nothing
- * relies on ids being contiguous.
+ * Tests that open several databases in one process share the sequences, so IDs have gaps. Nothing
+ * relies on IDs being contiguous.
  */
 internal object Ids {
     private val sequences = ConcurrentHashMap<KClass<*>, AtomicLong>()
 
+    /** Returns the next ID for [type]. */
     fun next(type: KClass<*>): Long = sequenceFor(type).incrementAndGet()
 
-    /** Makes sure every id allocated from now on is greater than [id]. Called for each row loaded at boot. */
+    /**
+     * Makes sure that every ID allocated from now on is greater than [id]. Loading calls it for
+     * each row.
+     */
     fun advanceTo(type: KClass<*>, id: Long) {
         sequenceFor(type).updateAndGet { current -> maxOf(current, id) }
     }
 
+    /** Returns [type]'s sequence, creating it at `0` if needed. */
     private fun sequenceFor(type: KClass<*>): AtomicLong =
         sequences.computeIfAbsent(type) { AtomicLong(0) }
 }

@@ -3,12 +3,12 @@ package jetlin.db
 /**
  * A live, filtered list of records.
  *
- * A view doesn't store records. Every operation reads the identity map again, which is why
- * `db.todos` can be used directly in a composable. Iterating it subscribes the composition to the
- * underlying list and to everything the filter read. When a record is added, removed, or becomes
- * visible or invisible, only the compositions that depend on it recompose.
+ * A view doesn't store records. Every operation reads the identity map again, which is why you can
+ * use `db.todos` directly in a composable. Iterating it subscribes the composable to the underlying
+ * list and to everything the filter read. When a record is added, removed, or becomes visible or
+ * invisible, only the compositions that depend on it recompose.
  *
- * Queries use the standard library: `filter`, `sortedBy`, `groupBy`, `count` and so on. There is no
+ * Queries use the standard library, such as `filter`, `sortedBy`, `groupBy`, and `count`. There's no
  * query DSL. At the scale this framework is designed for, a linear scan of in-memory objects is
  * cheaper than parsing a query, and it can't get out of sync with the schema.
  *
@@ -22,10 +22,13 @@ public class View<T : Record> internal constructor(
 ) : List<T> {
 
     /**
-     * Stores [record] if this principal may create it.
+     * Stores [record] if this view's principal can create it.
      *
-     * This only works on a view of a whole table. On a derived view, such as `project.tasks`, it's not
-     * clear what the record should be added to, so it throws instead of guessing.
+     * This works only on a view of a whole table. On a derived view, such as `project.tasks`, it isn't
+     * clear what to add the record to, so it throws instead of guessing.
+     *
+     * @throws AccessDenied if the principal can't create [record].
+     * @throws IllegalStateException if this is a derived view.
      */
     public fun add(record: T): T {
         val gate = gate ?: error(
@@ -35,6 +38,7 @@ public class View<T : Record> internal constructor(
         return gate.add(record)
     }
 
+    /** Returns the visible records now. */
     private fun resolved(): List<T> = records.filter(visible)
 
     override val size: Int get() = records.count(visible)
@@ -55,6 +59,7 @@ public class View<T : Record> internal constructor(
 
     override fun lastIndexOf(element: T): Int = resolved().lastIndexOf(element)
 
+    /** Returns whether [element] is this same visible record. Records compare by identity. */
     override fun contains(element: T): Boolean = records.any { it === element && visible(it) }
 
     override fun containsAll(elements: Collection<T>): Boolean = elements.all { contains(it) }

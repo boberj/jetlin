@@ -11,12 +11,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /**
- * [SessionActivity.quietWhile], which everything about knowing when a session is done rests on.
+ * Tests [SessionActivity.quietWhile], which every wait for a session depends on.
  *
- * Its whole job is to refuse to believe a condition that was read while the session was doing
- * something. The race it guards against is two adjacent reads apart, far too narrow to provoke
- * reliably by load, so these tests do not try: they make a task run at exactly the wrong moment, from
- * inside the condition itself.
+ * Its whole job is to refuse to trust a condition that was read while the session was doing
+ * something. The race it guards against is two adjacent reads wide, far too narrow to provoke
+ * reliably with load, so these tests don't try. Instead, they make a task run at exactly the wrong
+ * moment, from inside the condition itself.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionActivityTest {
@@ -34,10 +34,9 @@ class SessionActivityTest {
     @Test
     fun `a task that runs to completion while the condition is read spoils the check`(): Unit = runBlocking {
         val believed = activity.quietWhile(SessionActivity.Lane.Recompose) {
-            // Dispatched after the count was first read, finished before it is read again: the count
-            // is back where it started, and only the dispatch sequence can tell that something ran —
-            // something that, in a real session, could have taken work out of the recomposer between
-            // the two reads.
+            // Dispatched after the count was first read, and finished before it's read again. The count
+            // is back where it started, and only the dispatch sequence shows that something ran. In a
+            // real session, that task could have removed work from the recomposer between the two reads.
             runBlocking { withContext(recompose) { } }
             true
         }
@@ -61,9 +60,9 @@ class SessionActivityTest {
         val release = CompletableDeferred<Unit>()
         val effect = launch(effects) { release.await() }
         try {
-            // A patch does not wait for an effect that is busy doing its own thing...
+            // A patch doesn't wait for an effect that's busy with its own work...
             assertTrue(activity.quietWhile(SessionActivity.Lane.Recompose) { true })
-            // ...but a session with an effect still running has not settled.
+            // ...but a session with an effect still running hasn't settled.
             assertFalse(activity.quietWhile(lane = null) { true })
         } finally {
             release.complete(Unit)

@@ -1,17 +1,17 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * End-to-end checks for the parts that unit tests cannot reach: that the client applies ops to a
- * real DOM correctly, that updates originating on the server arrive without being asked for, that
- * an update never overwrites what the user is currently typing, and that navigation moves between
- * views without reloading the page.
+ * End-to-end tests for what unit tests can't reach: the client applies ops to a real DOM
+ * correctly, updates that start on the server arrive without being asked for, an update never
+ * overwrites what the user is typing, and navigation moves between views without reloading the
+ * page.
  */
 
 /**
- * The demo's todo store is process-wide — that is the point of it, since two browser windows
- * showing each other's edits is one of the things worth demonstrating. It also means tests share
- * it, so each one starts by putting it back to its seeded state rather than assuming whatever the
- * last test left behind.
+ * The demo's todo store is shared by the whole process. That's deliberate, because two browser
+ * windows showing each other's edits is one of the things the demo shows. It also means the tests
+ * share it, so each test starts by resetting it to its seeded state, instead of assuming whatever
+ * the previous test left behind.
  */
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -29,7 +29,7 @@ test("first paint is server-rendered HTML, before any script runs", async ({ pag
 test("a deep link renders its own view server-side", async ({ page }) => {
   await page.route("**/jetlin.js", (route) => route.abort());
   await page.goto("/todo/2");
-  // The path parameter resolved on the server, with no JavaScript involved at all.
+  // The server resolved the path parameter, with no JavaScript involved at all.
   await expect(page.locator("[data-test=title]")).toHaveValue("Run the tests");
 });
 
@@ -42,12 +42,12 @@ test("checking a box updates state on the server and patches the DOM", async ({ 
 });
 
 test("the patch only touches the node that changed", async ({ page }) => {
-  // Wait for a server-pushed tick before tagging anything: it can only arrive once the socket is
-  // live and its opening message has been dealt with, so the DOM being tagged is settled.
+  // Wait for a server-pushed tick before tagging anything. It can arrive only once the socket is
+  // live and its opening message has been handled, so the DOM being tagged has settled.
   await expect(page.locator("[data-test=ticks]")).toHaveText("1", { timeout: 8000 });
 
-  // Tag the surrounding DOM. The markers live only on the JavaScript objects, so they survive only
-  // if the update leaves those exact nodes in place instead of replacing them.
+  // Tag the surrounding DOM. The markers exist only on the JavaScript objects, so they survive
+  // only if the update leaves those exact nodes in place instead of replacing them.
   await page.evaluate(() => {
     document.querySelectorAll("[data-test=todo]").forEach((li, i) => {
       (li as HTMLElement).dataset.marker = `m${i}`;
@@ -68,7 +68,7 @@ test("adding, reordering and removing keyed list items", async ({ page }) => {
   await page.locator("[data-test=add]").click();
   await expect(page.locator("[data-test=todo]")).toHaveCount(4);
   await expect(page.locator(".todo-text").last()).toHaveText("Third thing");
-  // Cleared by the server, which means the round-trip completed.
+  // The server cleared it, which means the round trip completed.
   await expect(page.locator("[data-test=draft]")).toHaveValue("");
 
   await page.locator("li", { hasText: "Third thing" }).getByText("up").click();
@@ -105,7 +105,7 @@ test("a server push does not clobber text the user is typing", async ({ page }) 
 });
 
 test("navigation swaps the view without reloading the page", async ({ page }) => {
-  // Survives a client-side navigation; would be wiped by a real page load.
+  // It survives a client-side navigation. A real page load would clear it.
   await page.evaluate(() => ((window as unknown as { sentinel?: string }).sentinel = "alive"));
 
   await page.locator(".todo-text").first().click();
@@ -160,7 +160,7 @@ test("session state survives a dropped connection", async ({ page }) => {
   await page.evaluate(() => (window as unknown as { jetlin: { disconnect(): void } }).jetlin.disconnect());
   await expect(page.locator("body")).toHaveClass(/jl-disconnected/);
 
-  // The client reconnects with the same token; the server still holds the composition, so the
+  // The client reconnects with the same token. The server still holds the composition, so the
   // half-finished draft is still there.
   await expect(page.locator("body")).not.toHaveClass(/jl-disconnected/, { timeout: 15_000 });
   await expect(page.locator("[data-test=draft]")).toHaveValue("Typed before the drop");
@@ -170,11 +170,11 @@ test("session state survives a dropped connection", async ({ page }) => {
 });
 
 /**
- * Client-only behaviour: what the browser is trusted to do on its own.
+ * Client-only behavior: what the browser is trusted to do on its own.
  *
- * The point of these is the absence of a round trip, which is hard to assert directly — so they
- * assert something stronger instead: the same interaction working with no server on the other end
- * of the socket at all.
+ * The point is that there's no round trip, which is hard to assert directly. So these tests assert
+ * something stronger: the same interaction works with no server on the other end of the socket at
+ * all.
  */
 
 test("a disclosure opens without involving the server", async ({ page }) => {
@@ -190,7 +190,7 @@ test("a disclosure opens without involving the server", async ({ page }) => {
 
 test("it still works with the socket disconnected", async ({ page }) => {
   await page.goto("/about");
-  // Wait for the connection so that disconnecting means something.
+  // Wait for the connection, so that disconnecting means something.
   await expect(page.locator("body")).not.toHaveClass(/jl-disconnected/);
 
   await page.evaluate(() => (window as unknown as { jetlin: { disconnect(): void } }).jetlin.disconnect());
@@ -202,8 +202,8 @@ test("it still works with the socket disconnected", async ({ page }) => {
 });
 
 test("it works before any script has connected, from the server-rendered markup", async ({ page }) => {
-  // The commands travel in data-jl-on, which is in the HTML, so the button is live as soon as the
-  // runtime parses the page rather than once a socket is established.
+  // The commands travel in data-jl-on, which is in the HTML, so the button works as soon as the
+  // runtime parses the page, not only once a socket is established.
   await page.goto("/about");
   await page.locator("[data-test=disclosure-toggle]").click();
   await expect(page.locator("[data-test=disclosure-panel]")).toBeVisible();
@@ -212,8 +212,8 @@ test("it works before any script has connected, from the server-rendered markup"
 /**
  * Failures, seen from the browser.
  *
- * Two exceptions that reach the transport identically and mean completely different things. What
- * these check is that the difference survives all the way to the page.
+ * Two exceptions reach the transport the same way and mean completely different things. These
+ * tests check that the difference survives all the way to the page.
  */
 
 test("a handler that throws costs one interaction and nothing else", async ({ page }) => {
@@ -224,13 +224,13 @@ test("a handler that throws costs one interaction and nothing else", async ({ pa
 
   await page.locator("[data-test=fail-handler]").click();
 
-  // The application is told, through the jetlin:error event, and shows what it likes.
+  // The application is told through the jetlin:error event, and shows what it likes.
   await expect(page.locator("[data-test=toast]")).toBeVisible();
   await expect(page.locator("[data-test=toast]")).toContainText("could not be completed");
   // Nothing about the exception itself crosses the wire.
   await expect(page.locator("[data-test=toast]")).not.toContainText("always going to");
 
-  // And the session is untouched: the count is where it was, and clicking still works.
+  // And the session is intact: the count is where it was, and clicking still works.
   await expect(page.locator("[data-test=clicks]")).toHaveText("1");
   await page.locator("[data-test=still-works]").click();
   await expect(page.locator("[data-test=clicks]")).toHaveText("2");
@@ -245,8 +245,8 @@ test("a view that throws ends the session and the page starts over", async ({ pa
 
   await page.locator("[data-test=fail-view]").click();
 
-  // The client is told this one is unrecoverable and reloads into a fresh session, which is
-  // visible as the counter going back to zero on a page that works again.
+  // The client is told that this one can't be recovered, and reloads into a new session. That
+  // shows up as the counter going back to zero on a page that works again.
   await expect(page.locator("[data-test=clicks]")).toHaveText("0", { timeout: 10_000 });
   await page.locator("[data-test=still-works]").click();
   await expect(page.locator("[data-test=clicks]")).toHaveText("1");
@@ -260,10 +260,10 @@ test("a page can take over a fatal error instead of being reloaded", async ({ pa
 
   await page.locator("[data-test=fail-view]").click();
 
-  // preventDefault on the fatal event: no reload, and the page says what it is now.
+  // preventDefault() on the fatal event: no reload, and the page says what state it's in.
   await expect(page.locator("[data-test=dead-banner]")).toBeVisible();
   await expect(page.locator("body")).toHaveClass(/jl-dead/);
-  // The count survives, which is the proof the page was not reloaded.
+  // The count survives, which proves the page wasn't reloaded.
   await expect(page.locator("[data-test=clicks]")).toHaveText("1");
 
   // And it really is dead: nothing on it can change again, whatever is clicked.
@@ -278,8 +278,8 @@ test("a page can take over a fatal error instead of being reloaded", async ({ pa
 });
 
 test("listening alone does not suppress the reload", async ({ page }) => {
-  // The demo listens on every page but only cancels when the url says to, which is exactly the
-  // distinction being checked: an application forwarding errors to telemetry still gets recovery.
+  // The demo listens on every page but cancels only when the URL says to, which is exactly the
+  // distinction under test: an application that forwards errors to telemetry still gets recovery.
   await page.goto("/errors");
 
   await page.locator("[data-test=still-works]").click();
@@ -292,16 +292,17 @@ test("listening alone does not suppress the reload", async ({ page }) => {
 });
 
 /**
- * Client components: an element the composition creates and then stops owning.
+ * Client components: an element that the composition creates and then stops owning.
  *
- * The server sends props down and receives events up; what is drawn in between is the browser's.
- * These cover both directions and the teardown, which is the part that leaks if it is wrong.
+ * The server sends props down and receives events up, and what's drawn in between belongs to the
+ * browser. These tests cover both directions and the teardown, which is the part that leaks if it's
+ * wrong.
  */
 
 test("a client component renders what the server cannot", async ({ page }) => {
   await page.goto("/about");
 
-  // Bars exist only because JavaScript drew them; the served markup is an empty element.
+  // Bars exist only because JavaScript drew them. The served markup is an empty element.
   await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
   await expect(page.locator("[data-test=sparkline-values]")).toHaveText("3,7,4,9,6");
 });
@@ -322,8 +323,8 @@ test("an event from the component reaches the server, which decides what it mean
   await page.goto("/about");
   await expect(page.locator("[data-test=sparkline-values]")).toHaveText("3,7,4,9,6");
 
-  // The component only reports which bar was clicked. Changing the number is the server's doing,
-  // and it comes back down as new props.
+  // The component only reports which bar was clicked. The server changes the number, and it
+  // comes back down as new props.
   await page.locator("[data-test=sparkline] .bar").first().click();
 
   await expect(page.locator("[data-test=sparkline-values]")).toHaveText("4,7,4,9,6");
@@ -339,18 +340,18 @@ test("a component is torn down when the server removes it", async ({ page }) => 
   await page.goto("/about");
   await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
 
-  // Navigating away drops the whole view, which must take the component with it rather than
+  // Navigating away drops the whole view, which must take the component with it, instead of
   // leaving it attached to a detached element.
   await page.locator("nav a", { hasText: "Todos" }).click();
   await expect(page).toHaveURL("/");
   await expect(page.locator("[data-test=sparkline]")).toHaveCount(0);
 
-  // And back again, mounted fresh from props the server still holds.
+  // And back again, mounted anew from props the server still holds.
   await page.locator("nav a", { hasText: "About" }).click();
   await expect(page.locator("[data-test=sparkline] .bar")).toHaveCount(5);
 
-  // Mounted twice, torn down once, and the second one is still live: the counts balance, which is
-  // what "no leak" actually means here.
+  // Mounted twice and torn down once, and the second mount is still live. The counts balance,
+  // which is what "no leak" means here.
   const counts = await page.evaluate(() => ({
     mounts: (window as unknown as { sparklineMounts: number }).sparklineMounts,
     unmounts: (window as unknown as { sparklineUnmounts: number }).sparklineUnmounts,
@@ -360,20 +361,20 @@ test("a component is torn down when the server removes it", async ({ page }) => 
 });
 
 /**
- * Adoption: keeping the server-rendered markup instead of being sent the tree a second time.
+ * Adoption: keeping the server-rendered markup instead of receiving the tree a second time.
  *
- * The DOM the browser parsed and painted is the thing under test, so these check node identity
- * rather than content — anything asserting only on text would pass just as happily against a page
- * that had been thrown away and rebuilt.
+ * The DOM that the browser parsed and painted is what's under test, so these tests check node
+ * identity instead of content. An assertion only on text would pass just as well against a page
+ * that was thrown away and rebuilt.
  */
 
 test("the server-rendered DOM is kept rather than rebuilt", async ({ page }) => {
   await page.goto("/");
 
-  // Marked immediately, before the socket has had time to deliver anything. A reset would replace
-  // every node and take the markers with it; adoption leaves these exact objects in place.
-  // Tagged and counted in one pass, so a rebuild landing between two calls cannot be mistaken for
-  // a page that never had any nodes to tag.
+  // Mark the nodes immediately, before the socket has had time to deliver anything. A reset would
+  // replace every node and take the markers with it, and adoption leaves these exact objects in
+  // place. Tag and count in one pass, so a rebuild that lands between two calls can't be mistaken
+  // for a page that never had any nodes to tag.
   const before = await page.evaluate(() => {
     const nodes = document.querySelectorAll("#jetlin-root *");
     nodes.forEach((node, index) => ((node as HTMLElement).dataset.survivor = String(index)));
@@ -381,8 +382,8 @@ test("the server-rendered DOM is kept rather than rebuilt", async ({ page }) => 
   });
   expect(before).toBeGreaterThan(10);
 
-  // A server-pushed tick can only arrive after the connection is established and its opening
-  // message applied, so this is proof the socket is live rather than a guess at timing.
+  // A server-pushed tick can arrive only after the connection is established and its opening
+  // message applied, so this proves the socket is live, instead of guessing at timing.
   await expect(page.locator("[data-test=ticks]")).toHaveText("1", { timeout: 8000 });
 
   const after = await page.evaluate(() => document.querySelectorAll("[data-survivor]").length);
@@ -392,8 +393,8 @@ test("the server-rendered DOM is kept rather than rebuilt", async ({ page }) => 
 test("changes made before the socket connected are caught up", async ({ page }) => {
   await page.goto("/");
   // The clock starts ticking when the page is rendered, not when the socket opens, so the markup
-  // the browser holds is already behind by the time it connects. Adoption keeps that markup, which
-  // only works if the difference arrives as an ordinary patch.
+  // the browser holds is already behind when it connects. Adoption keeps that markup, which works
+  // only if the difference arrives as an ordinary patch.
   await expect(page.locator("[data-test=ticks]")).toHaveText("2", { timeout: 8000 });
 });
 
@@ -412,7 +413,7 @@ test("adoption is silent when it succeeds", async ({ page }) => {
 test("awkward markup shapes update the right node after adoption", async ({ page }) => {
   await page.goto("/shapes");
 
-  // Two text nodes the HTML parser would happily have merged into one.
+  // Two text nodes that the HTML parser would have merged into one.
   const adjacent = page.locator("[data-test=adjacent]");
   await expect(adjacent).toHaveText("alphabeta");
   await page.locator("[data-test=edit-first]").click();
@@ -426,10 +427,10 @@ test("awkward markup shapes update the right node after adoption", async ({ page
   await page.locator("[data-test=fill]").click();
   await expect(empty).toHaveText("[filled]");
 
-  // Text either side of an element, where a miscounted index would put the update in the wrong place.
+  // Text on either side of an element, where a miscounted index would put the update in the wrong place.
   await expect(page.locator("[data-test=interleaved]")).toHaveText("before ALPHA after");
 
-  // Markup the composition does not own: replaced wholesale, never walked into.
+  // Markup the composition doesn't own: replaced whole, never walked into.
   const raw = page.locator("[data-test=raw]");
   await expect(raw.locator("b")).toHaveText("bold");
   await page.locator("[data-test=swap-raw]").click();
@@ -442,8 +443,8 @@ test("markup that cannot be adopted falls back to a full render", async ({ page 
     if (message.type() === "warning") warnings.push(message.text());
   });
 
-  // Strip a marker on the way through, the way a rewriting proxy might. The client should notice
-  // that the markup and the ids it was given disagree, and ask for the tree instead of guessing.
+  // Remove a marker on the way through, as a rewriting proxy might. The client should notice that
+  // the markup and the IDs it was given disagree, and ask for the tree instead of guessing.
   await page.route(
     (url) => url.pathname === "/shapes",
     async (route) => {
@@ -456,18 +457,18 @@ test("markup that cannot be adopted falls back to a full render", async ({ page 
   await page.goto("/shapes");
 
   expect(warnings.some((w) => w.includes("could not adopt"))).toBe(true);
-  // And the page is fully working, because a full render is exactly what used to happen.
+  // And the page works fully, because a full render is what the client falls back to.
   await expect(page.locator("[data-test=adjacent]")).toHaveText("alphabeta");
   await page.locator("[data-test=edit-first]").click();
   await expect(page.locator("[data-test=adjacent]")).toHaveText("ALPHAbeta");
 });
 
 /**
- * SVG: the other language a browser parses, and the one where a mistake makes no noise.
+ * SVG: the other language that a browser parses, and the one where a mistake makes no noise.
  *
- * `createElement("circle")` is not an error. It is an HTMLUnknownElement — no warning, no pixels,
- * a chart-shaped hole. So these check the namespace itself as well as what ends up on screen, on
- * both paths a node can arrive by: parsed from the markup the server served, and built by the
+ * `createElement("circle")` isn't an error. It's an HTMLUnknownElement: no warning, no pixels, just
+ * a chart-shaped hole. So these tests check the namespace itself as well as what ends up on screen,
+ * on both paths a node can arrive by: parsed from the markup the server served, and built by the
  * client from an insert op.
  */
 
@@ -479,7 +480,7 @@ test("the drawing is in the served markup, before any script runs", async ({ pag
   await page.goto("/shapes");
 
   await expect(page.locator("[data-test=chart] circle")).toHaveCount(5);
-  // The parser changed language on <svg> by itself, and back again inside <foreignObject>.
+  // The parser switched language at <svg> by itself, and back again inside <foreignObject>.
   const languages = await page.evaluate(() =>
     Array.from(document.querySelectorAll("[data-test=chart] *")).map((n) => n.namespaceURI),
   );
@@ -501,8 +502,8 @@ test("a drawing the client took up is real SVG and takes up space", async ({ pag
   expect(box!.width).toBeGreaterThan(100);
   expect(box!.height).toBeGreaterThan(20);
 
-  // Attribute case survived the serializer and the parser. "viewbox" is a different attribute, and
-  // reading it back through the SVG DOM proves the browser understood this one.
+  // The attribute's case survived the serializer and the parser. "viewbox" is a different
+  // attribute, and reading it back through the SVG DOM proves that the browser understood this one.
   const scaled = await page.evaluate(
     () => (document.querySelector("[data-test=chart]") as SVGSVGElement).viewBox.baseVal.width,
   );
@@ -514,7 +515,7 @@ test("choosing a series redraws the line without rebuilding it", async ({ page }
   const line = page.locator("[data-test=chart-line]");
   const before = await line.getAttribute("points");
 
-  // Marked on the element itself: a rebuilt drawing would take the marker with it.
+  // Mark the element itself. A rebuilt drawing would take the marker with it.
   await page.evaluate(() => {
     (document.querySelector("[data-test=chart-line]") as SVGElement).dataset.marker = "kept";
   });
@@ -539,7 +540,7 @@ test("a shape the client builds is created in the SVG language too", async ({ pa
   await page.locator("[data-test=chart-add]").click();
   await expect(points).toHaveCount(6);
 
-  // The one without the marker never went near the HTML parser: the client made it from an op.
+  // The one without the marker never went near the HTML parser. The client made it from an op.
   const built = await page.evaluate(() =>
     Array.from(document.querySelectorAll("[data-test=chart] circle"))
       .filter((circle) => !(circle as SVGElement).dataset.served)
@@ -564,20 +565,20 @@ test("a foreign object hands the browser back to HTML mid-drawing", async ({ pag
 /**
  * State that outlives a navigation.
  *
- * Three lifetimes have to be distinguishable, and the browser is where the difference shows: state
+ * Three lifetimes have to be distinguishable, and the browser is where the difference shows. State
  * in the chrome lasts as long as the session, a view's saved state comes back when the view does,
- * and a view's remembered state does not. The back button is the case a headless test cannot make,
- * because it is the browser's own history driving the session rather than the session driving it.
+ * and a view's remembered state doesn't. A headless test can't cover the back button, because the
+ * browser's own history drives the session, instead of the session driving it.
  */
 
 test("state in the chrome survives navigating away and back", async ({ page }) => {
   await page.locator("[data-test=filter]").fill("architecture");
-  // The list narrowing is the server confirming it has the filter, not just the input holding text.
+  // The list narrowing shows that the server has the filter, not only that the input holds text.
   await expect(page.locator("[data-test=todo]")).toHaveCount(1);
 
   await page.locator("[data-test=todo] .todo-text").first().click();
   await expect(page).toHaveURL(/\/todo\/\d+$/);
-  // Composed above the route, so it is still there on a page that knows nothing about it.
+  // The filter is composed above the route, so it's still there on a page that knows nothing about it.
   await expect(page.locator("[data-test=filter]")).toHaveValue("architecture");
 
   await page.goBack();
@@ -588,7 +589,7 @@ test("state in the chrome survives navigating away and back", async ({ page }) =
 
 test("a half-typed todo comes back when its page does", async ({ page }) => {
   await page.locator("[data-test=draft]").fill("half-typed todo");
-  // Add turns enabled once the server has a valid draft, so this waits for the round trip.
+  // Add becomes enabled once the server has a valid draft, so this waits for the round trip.
   await expect(page.locator("[data-test=add]")).toBeEnabled();
 
   await page.locator('a[href="/about"]').click();
@@ -597,6 +598,6 @@ test("a half-typed todo comes back when its page does", async ({ page }) => {
 
   await page.goBack();
   await expect(page).toHaveURL("/");
-  // The view was torn down and rebuilt; what it declared saveable was handed back to it.
+  // The view was torn down and rebuilt, and what it declared as saved was handed back to it.
   await expect(page.locator("[data-test=draft]")).toHaveValue("half-typed todo");
 });

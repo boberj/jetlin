@@ -18,16 +18,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** A row with an identity of its own, so its key survives its text changing. */
+/** A row with its own identity, so its key survives a change to its text. */
 private class ScopedRow(val id: Int, text: String) {
     var text: String by mutableStateOf(text)
 }
 
 /**
- * Confining a query to part of the page.
+ * Tests confining a query to part of the page.
  *
- * Without this, "the up button in the third row" has to be written as an index across every button
- * on the page — which is both fragile and says nothing about what was meant.
+ * Without scopes, "the up button in the third row" has to be written as an index across every button
+ * on the page, which is fragile and says nothing about what was meant.
  */
 class ScopeTest {
 
@@ -46,11 +46,11 @@ class ScopeTest {
     fun `the same matcher outside the scope would have been ambiguous`(): Unit = runViewTest {
         setContent { Rows() }
 
-        // Every row has an edit button, so this cannot resolve on its own.
+        // Every row has an edit button, so this can't be resolved on its own.
         val error = assertFailsWith<AssertionError> { onNode(hasText("edit")).fetch() }
         assertTrue(error.message.orEmpty().contains("found 3"), error.message)
 
-        // Scoped, it is unambiguous.
+        // Within the row, it's unambiguous.
         within(onAll(hasTestTag("row"))[0]) {
             assertEquals("button", onNode(hasText("edit")).fetch().tag)
         }
@@ -101,8 +101,8 @@ class ScopeTest {
         val secondRow = onAll(hasTestTag("row"))[1]
 
         within(secondRow) { onNode(hasText("edit")).click() }
-        // The row was rebuilt by that click only if keying is wrong; either way the handle must still
-        // address whatever is now in that position.
+        // That click rebuilt the row only if keying is wrong. Either way, the selection must still
+        // find whatever is at that position now.
         within(secondRow) { onNode(hasClass("label")).assertText("TWO") }
     }
 
@@ -139,8 +139,8 @@ class ScopeTest {
             within(onAll(hasTestTag("row"))[0]) { onNode(hasText("add")).click() }
         }
 
-        // Adding a row also rewrites the banner and the list, neither of which is inside the row
-        // that was clicked.
+        // Adding a row also changes the banner and the list, and neither is inside the row that was
+        // clicked.
         val error = assertFailsWith<AssertionError> { update.assertOnlyWithin(hasTestTag("row")) }
         assertTrue(error.message.orEmpty().contains("<span>"), error.message)
     }

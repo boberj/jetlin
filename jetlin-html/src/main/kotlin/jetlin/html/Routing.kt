@@ -8,19 +8,27 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import jetlin.runtime.rememberSaveableStateHolder
 
 /**
- * A path pattern with named parameters, e.g. `/todo/{id}`.
+ * A path pattern with named parameters, such as `/todo/{id}`.
  *
- * Matching happens server-side rather than in the HTTP routing tree, because navigation initiated
- * inside a live session never reaches the HTTP layer at all — it changes composition state.
+ * Jetlin matches patterns itself instead of using the HTTP routing tree, because navigation inside a
+ * live session never reaches the HTTP layer. It only changes composition state.
+ *
+ * @property pattern the pattern. A segment in braces, such as `{id}`, is a parameter that matches
+ *   any one segment.
  */
 public class RoutePattern(public val pattern: String) {
 
     private val segments: List<String> = pattern.trim('/').split('/').filter { it.isNotEmpty() }
 
-    /** Number of literal segments, used to prefer `/todo/new` over `/todo/{id}`. */
+    /** The number of literal segments. [Router] uses it to prefer `/todo/new` over `/todo/{id}`. */
     internal val specificity: Int = segments.count { !it.isParameter() }
 
-    /** Parameter bindings if [path] matches, or null. An empty map is a match with no parameters. */
+    /**
+     * Matches [path] against this pattern.
+     *
+     * @return the parameter values by name, or `null` if [path] doesn't match. An empty map means a
+     *   match with no parameters.
+     */
     public fun match(path: String): Map<String, String>? {
         val parts = path.trim('/').split('/').filter { it.isNotEmpty() }
         if (parts.size != segments.size) return null
@@ -40,26 +48,41 @@ public class RoutePattern(public val pattern: String) {
     override fun toString(): String = pattern
 }
 
+/** Whether this pattern segment is a parameter, such as `{id}`. */
 private fun String.isParameter(): Boolean = startsWith('{') && endsWith('}')
 
 /**
  * Resolves a path to one of [routes].
  *
- * Generic over the payload so that the view layer does not need to know what a "view" is; the server
- * module supplies its own registration type.
+ * The router is generic over what each route holds, so the view layer doesn't need to know what a
+ * view is. The server module supplies its own registration type.
+ *
+ * @param routes each route's pattern and value.
  */
 public class Router<T>(routes: List<Pair<RoutePattern, T>>) {
 
-    // Literal segments win over parameters, so /todo/new is not swallowed by /todo/{id} regardless
-    // of the order the application declared them in.
+    // Literal segments win over parameters, so /todo/{id} doesn't swallow /todo/new, whatever order
+    // the application declared them in.
     private val routes: List<Pair<RoutePattern, T>> = routes.sortedByDescending { it.first.specificity }
 
+    /**
+     * A route that matched a path.
+     *
+     * @property pattern the pattern that matched.
+     * @property value what the route holds.
+     * @property pathParams the parameter values from the path, by name.
+     */
     public class Match<T>(
         public val pattern: RoutePattern,
         public val value: T,
         public val pathParams: Map<String, String>,
     )
 
+    /**
+     * Finds the route for [path]. Routes with more literal segments are tried first.
+     *
+     * @return the match, or `null` if no route matches.
+     */
     public fun resolve(path: String): Match<T>? {
         for ((pattern, value) in routes) {
             val params = pattern.match(path)
@@ -70,23 +93,30 @@ public class Router<T>(routes: List<Pair<RoutePattern, T>>) {
 }
 
 /**
- * Composes [container] once for the session, and the view for the current location inside it.
+ * Composes [container] once for the session, with the view for the current location inside it.
  *
- * The composition outlives every navigation — only the state naming the location changes — so what
- * is composed here, above the route, is the one place an application can keep something across a
- * page change. A `remember` in [container] survives navigating; a `remember` in a view does not,
- * because [key] on the matched pattern rebuilds the view rather than reusing it. That rule is
- * deliberate: moving between two different routes must not carry one view's state into the other,
- * while moving between two instances of one route — `/todo/1` to `/todo/2` — keeps the view and
- * re-runs it with new parameters.
+ * The composition outlives every navigation, because only the state that names the location
+ * changes. So [container], above the route, is the one place where an application can keep
+ * something across a page change. A `remember` in [container] survives navigation. A `remember` in a
+ * view doesn't, because [key] on the matched pattern rebuilds the view instead of reusing it. That's
+ * deliberate. Moving between two different routes must not carry one view's state into the other,
+ * while moving between two locations of one route, such as `/todo/1` to `/todo/2`, keeps the view
+ * and runs it again with new parameters.
  *
- * Views get their saved state back when they are returned to, via [rememberSaveableStateHolder].
- * Its key is the matched pattern, the same thing [key] uses, so that a view's registry lives exactly
- * as long as the view does; keying the two differently would compose retained state against a fresh
- * registry.
+ * Views get their saved state back when the user returns to them, through
+ * [rememberSaveableStateHolder]. The holder is keyed on the matched pattern, the same key that [key]
+ * uses, so a view's registry lives exactly as long as the view. With different keys, restored state
+ * would be composed against an empty registry.
  *
- * Both the server and the test harness route through here, so that what a test drives is what an
- * application runs.
+ * Both the server and the test harness route through this function, so a test drives exactly what
+ * an application runs.
+ *
+ * @param router the route table.
+ * @param request the current request.
+ * @param container the composable that wraps every view, or `null` for none. It receives the
+ *   current view as `route`.
+ * @param onMiss what to show when no route matches. It's composed inside [container].
+ * @param content composes the matched route's value.
  */
 @Composable
 public fun <T> RouteHost(
@@ -101,7 +131,8 @@ public fun <T> RouteHost(
     val route: @Composable () -> Unit = {
         val match = router.resolve(request.path)
         if (match == null) {
-            // Inside the container: a page that does not exist is still a page of this application.
+            // Compose it inside the container, because a page that doesn't exist is still a page of
+            // this application.
             onMiss(request.path)
         } else {
             CompositionLocalProvider(LocalRequest provides request.withPathParams(match.pathParams)) {
@@ -118,17 +149,18 @@ public fun <T> RouteHost(
 /**
  * Moves the session to another location without a page load.
  *
- * The composition stays alive: only the state naming the current route changes, so the runtime
- * swaps the matched view and emits the resulting DOM edits. The browser is told separately to
+ * The composition stays alive. Only the state that names the current route changes, so the runtime
+ * replaces the matched view and records the resulting DOM changes. The browser is told separately to
  * update its address bar.
  */
 public interface Navigator {
-    /** Navigates and adds a browser history entry. */
+    /** Navigates to [url] and adds a browser history entry. */
     public fun push(url: String)
 
-    /** Navigates and replaces the current history entry. */
+    /** Navigates to [url] and replaces the current browser history entry. */
     public fun replace(url: String)
 }
 
+/** The session's [Navigator]. [LiveView] provides it. */
 public val LocalNavigator: ProvidableCompositionLocal<Navigator> =
     staticCompositionLocalOf { error("No Navigator in composition; content must be hosted by a LiveView") }

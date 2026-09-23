@@ -17,19 +17,22 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * The demo's own pages, tested as an application rather than as a framework.
+ * Tests the demo's own pages as an application, not as a framework.
  *
- * Nothing here reaches into a composition: no node ids, no hoisted `Field` references, no HTML
- * strings. Each test describes something a user does and something they would then see, which is
- * the whole reason `jetlin-testing` exists.
+ * Nothing here reaches into a composition: no node IDs, no hoisted `Field` references, and no HTML
+ * strings. Each test describes something a user does and something they then see, which is the
+ * reason `jetlin-testing` exists.
  *
- * These overlap deliberately with `e2e/live.spec.ts`. The browser suite proves the client applies
- * what the server sends; these prove the server decides the right thing in the first place, and run
- * in milliseconds without a browser or a socket.
+ * These tests deliberately overlap with `e2e/live.spec.ts`. The browser suite proves that the client
+ * applies what the server sends. These prove that the server decides the right thing in the first
+ * place, and they run in milliseconds, without a browser or a socket.
  */
 class TodoAppTest {
 
-    /** The store is process-wide, so every test starts by putting it back to its seeded state. */
+    /**
+     * The store is shared by the whole process, so every test starts by resetting it to its seeded
+     * state.
+     */
     @BeforeTest
     fun seed() {
         TodoStore.reset()
@@ -52,7 +55,7 @@ class TodoAppTest {
 
         onAll(hasTestTag("todo")).assertCount(4)
         onNode(hasClass("todo-text") and hasText("Third thing")).assertExists()
-        // Cleared by the server, which is how the round trip shows up from the client's side.
+        // The server cleared it, which is how the round trip shows up from the client's side.
         onNode(hasTestTag("draft")).assertValue("")
     }
 
@@ -60,7 +63,7 @@ class TodoAppTest {
     fun `an empty draft blocks the add button`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
-        // Untouched and invalid: the form should not open covered in red.
+        // Untouched and invalid: the form shouldn't open covered in red.
         onNode(hasTestTag("draft-error")).assertDoesNotExist()
         onNode(hasTestTag("add")).assertDisabled()
 
@@ -82,9 +85,9 @@ class TodoAppTest {
         onNode(hasClass("todo-text") and hasText("Read the architecture doc")).assertMatches(hasClass("done"))
         onNode(hasTestTag("remaining")).assertTextContains("2 left")
 
-        // Exactly two places moved: the row that was ticked, and the counter that depends on it. The
-        // list itself and the other two rows were left where they were. This is the assertion the
-        // browser suite can only approximate, by tagging DOM nodes and checking the tags survived.
+        // Exactly two places changed: the row that was checked, and the counter that depends on it.
+        // The list itself and the other two rows stayed as they were. The browser suite can only
+        // approximate this assertion, by tagging DOM nodes and checking that the tags survived.
         update.assertOnlyWithin(hasTestTag("todo"), hasTestTag("remaining"))
     }
 
@@ -113,8 +116,8 @@ class TodoAppTest {
 
     @Test
     fun `resetting restores the seeded list`(): Unit = runViewTest {
-        // Reset lives in the chrome rather than the page, so the test composes the chrome. In the
-        // served application that wrapping is done once by `app { }` instead of per view.
+        // Reset is in the chrome, not the page, so the test composes the chrome. In the served
+        // application, `app { }` wraps every view in it once, instead of each view doing it.
         setContent { Shell { TodoListPage() } }
 
         onNode(hasTestTag("draft")).type("Something extra")
@@ -152,9 +155,7 @@ class TodoAppTest {
     }
 }
 
-/**
- * The detail page, reached by a route, so the path parameter has to be supplied.
- */
+/** Tests the detail page, which is reached by a route, so the test has to supply the path parameter. */
 class TodoDetailTest {
 
     @BeforeTest
@@ -200,8 +201,8 @@ class TodoDetailTest {
     @Test
     fun `saving writes the store and navigates back to the list`(): Unit =
         runViewTest(url = "/todo/1") {
-            // Routed rather than pinned: the save navigates, so the test has to follow it the way
-            // the application does.
+            // Use the routes instead of one fixed view: the save navigates, so the test has to
+            // follow it the way the application does.
             setRoutes {
                 view("/") { TodoListPage() }
                 view("/todo/{id}") { TodoDetailPage() }
@@ -212,7 +213,7 @@ class TodoDetailTest {
 
             assertUrl("/")
             assertEquals("Renamed on the server", TodoStore.find(1)?.title)
-            // The list view is what is composed now, showing the edit that was just saved.
+            // The list view is composed now, and it shows the edit that was just saved.
             onNode(hasClass("todo-text") and hasText("Renamed on the server")).assertExists()
         }
 
@@ -241,8 +242,8 @@ class TodoDetailTest {
             onAll(hasClass("todo-text"))[0].click()
             assertUrl("/todo/1")
 
-            // What the browser sends when the user presses back: the address bar has already moved,
-            // and the server follows.
+            // What the browser sends when the user presses back: the address bar has already
+            // changed, and the server follows.
             navigate("/")
 
             assertUrl("/")

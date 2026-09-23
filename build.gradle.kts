@@ -8,8 +8,8 @@ subprojects {
     plugins.withId("org.jetbrains.kotlin.jvm") {
         extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension>("kotlin") {
             jvmToolchain(24)
-            // Library modules are consumed by other people's code, so visibility and return types
-            // have to be stated rather than inferred. Samples are applications and exempt.
+            // Other people's code uses the library modules, so visibility and return types have to
+            // be stated instead of inferred. Samples are applications, so they're exempt.
             if (project.name.startsWith("jetlin-")) {
                 explicitApi()
             }
@@ -25,9 +25,9 @@ subprojects {
 }
 
 /**
- * The root build's lifecycle tasks don't run tasks in included builds, so without these the migration
- * tooling's tests would never run. With them, `./gradlew build` and `./gradlew check` still cover the
- * whole repository.
+ * The root build's lifecycle tasks don't run tasks in included builds, so without these, the
+ * migration tooling's tests would never run. With them, `./gradlew build` and `./gradlew check` cover
+ * the whole repository.
  */
 for (lifecycle in listOf("build", "check")) {
     tasks.register(lifecycle) {

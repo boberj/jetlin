@@ -12,10 +12,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * Following a session as it moves between views.
+ * Tests following a session as it moves between views.
  *
- * Navigation is the case a single pinned view cannot cover: the location changes, and whether the
- * right view is composed at the other end is application behaviour worth asserting on.
+ * A single view set with `setContent` can't cover navigation. The location changes, and whether the
+ * right view is composed at the other end is application behavior worth asserting on.
  */
 class RoutesTest {
 
@@ -49,7 +49,7 @@ class RoutesTest {
             view("/item/{id}") { DetailPage() }
         }
 
-        // The user pressed back: the address bar has already moved and the server follows.
+        // The user pressed back. The address bar has already changed, and the server follows.
         navigate("/")
 
         assertUrl("/")
@@ -59,8 +59,8 @@ class RoutesTest {
     @Test
     fun `a single view resolves its own path parameters from its route`(): Unit =
         runViewTest(url = "/item/42") {
-            // No router needed for a view that does not navigate: the pattern is enough to say what
-            // the segments of the url mean, and the 42 is written once rather than twice.
+            // A view that doesn't navigate needs no router. The pattern is enough to say what the URL's
+            // segments mean, and the 42 is written once instead of twice.
             setContent(route = "/item/{id}") { DetailPage() }
 
             onNode(hasTag("h1")).assertText("Item 42")

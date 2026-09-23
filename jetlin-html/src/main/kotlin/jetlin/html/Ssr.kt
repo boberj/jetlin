@@ -9,59 +9,64 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 
 /**
- * HTML elements that must not be given a closing tag.
+ * The HTML elements that must not have a closing tag.
  *
- * An HTML rule, and only an HTML one. Inside an `<svg>` the parser is in foreign content, where
- * nothing is void and every element has to be closed — `<path d="…">` left open would swallow its
- * siblings as children. Nothing in SVG happens to share a name with this list today, so this is a
- * guard rather than a fix, but it is the kind that costs one comparison and saves an afternoon.
+ * This rule applies only to HTML. Inside an `<svg>`, the parser is in foreign content, where no
+ * element is void and every element must be closed: an unclosed `<path d="…">` would swallow its
+ * siblings as children. No SVG element shares a name with this list today, so checking the
+ * namespace guards against a future problem instead of fixing a current one. It costs one
+ * comparison.
  */
 private val VOID_ELEMENTS = setOf(
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "source", "track", "wbr",
 )
 
+/** Serializes an element's listener specs into its `data-jl-on` attribute. */
 private val LISTENER_MAP_SERIALIZER = MapSerializer(String.serializer(), ListenerSpec.serializer())
 
 /**
- * Sits between two text children so the browser keeps them apart.
+ * Separates two adjacent text children, so the browser keeps them apart.
  *
- * `Div { Text("a"); Text("b") }` serializes as `ab`, which an HTML parser turns into a single text
- * node — leaving the client one node short of what the server thinks it has, and every later child
- * index off by one.
+ * Without it, `Div { Text("a"); Text("b") }` serializes as `ab`, which an HTML parser turns into one
+ * text node. The client would then have one node fewer than the server, and every later child
+ * index would be off by one.
  */
 private const val TEXT_SEPARATOR = "<!--|-->"
 
-/** Stands in for a text child with no content, which would otherwise leave no node to adopt. */
+/**
+ * Stands in for an empty text child. Without it, the parser would create no node for the client to
+ * adopt.
+ */
 private const val EMPTY_TEXT = "<!--0-->"
 
 /**
  * Serializes the current tree to HTML for the initial page load.
  *
- * First paint is real HTML, so the page is indexable and readable before any JavaScript runs.
- * Elements carry their server node id in `data-jl` and their listener specs in `data-jl-on`, which
- * lets the client bind to the markup it was given.
+ * The first paint is real HTML, so the page can be indexed and read before any JavaScript runs.
+ * Each element carries its server node ID in `data-jl` and its listener specs in `data-jl-on`, so
+ * the client can bind to the markup it was given.
  *
- * The composition that produced this HTML stays alive and is handed to the WebSocket when it
- * connects, so a page is composed once rather than once per request.
+ * The composition that produced this HTML stays alive, and the WebSocket takes it over when it
+ * connects. So a page is composed once, not once per request.
  *
- * An SVG subtree needs neither `xmlns` nor a marker of its own: a parser switches into foreign
- * content when it meets `<svg>` and back out at `</svg>`, assigning the namespaces itself. Only the
- * client building nodes from ops has to be told, and it is told in [jetlin.protocol.NodeSpec].
- * Attribute names are written exactly as the composition gave them, which is what `viewBox` and
- * `preserveAspectRatio` need — the parser lowercases every attribute and then puts the case back
- * for the ones SVG defines.
+ * An SVG subtree needs no `xmlns` and no marker of its own. The parser switches into foreign
+ * content at `<svg>` and back out at `</svg>`, and assigns the namespaces itself. Only the client,
+ * when it builds nodes from ops, needs to be told, and [jetlin.protocol.NodeSpec] tells it.
+ * Attribute names are written exactly as the composition gave them, which `viewBox` and
+ * `preserveAspectRatio` need: the parser lowercases every attribute name, then restores the case of
+ * the ones SVG defines.
  */
 public fun renderToHtml(owner: HtmlOwner): String = buildString {
     appendChildren(owner.root.children)
 }
 
 /**
- * Attributes for the element the rendered HTML is placed inside.
+ * Returns the attributes of the element that contains the rendered HTML.
  *
- * The container is a node like any other — it is the root of the server's tree — but the markup for
- * it is written by the page shell rather than by [renderToHtml], so its identity and any text
- * markers for children it holds directly have to be handed over separately.
+ * The container is a node like any other, because it's the root of the server's tree. But the page
+ * shell writes its markup, not [renderToHtml], so its identity and the text markers for its direct
+ * children have to be passed along separately.
  */
 public fun rootAttributes(owner: HtmlOwner): String = buildString {
     append(" data-jl=\"").append(ROOT_ID).append('"')
@@ -69,10 +74,10 @@ public fun rootAttributes(owner: HtmlOwner): String = buildString {
 }
 
 /**
- * Writes children, keeping text nodes distinguishable once an HTML parser has been through them.
+ * Writes [children] so that each text node stays separate after an HTML parser reads them.
  *
- * The client rebuilds its index of the tree by walking this markup, and its whole correctness rests
- * on agreeing with the server about which node is at which index.
+ * The client rebuilds its index of the tree by walking this markup. Everything it does depends on
+ * agreeing with the server about which node is at which index.
  */
 private fun StringBuilder.appendChildren(children: List<HtmlNode>) {
     var previousWasText = false
@@ -81,7 +86,7 @@ private fun StringBuilder.appendChildren(children: List<HtmlNode>) {
             is TextNode -> {
                 if (child.text.isEmpty()) {
                     append(EMPTY_TEXT)
-                    // The comment is itself a boundary, so the next text child needs no separator.
+                    // The comment is a boundary, so the next text child needs no separator.
                     previousWasText = false
                 } else {
                     if (previousWasText) append(TEXT_SEPARATOR)
@@ -99,10 +104,10 @@ private fun StringBuilder.appendChildren(children: List<HtmlNode>) {
 }
 
 /**
- * `index:id` for each text child, so the client can name nodes that carry no attributes of their own.
+ * Returns `index:id` for each text child, so the client can identify nodes that have no attributes.
  *
- * Null when there are none, and for an element whose content is raw HTML — those children belong to
- * whoever wrote the markup, not to the composition.
+ * Returns `null` when there are no text children, and for an element whose content is raw HTML,
+ * because those children belong to whoever wrote the markup, not to the composition.
  */
 private fun textMarkers(node: ElementNode): String? {
     if (node.hasUnsafeInnerHtml) return null
@@ -113,11 +118,12 @@ private fun textMarkers(node: ElementNode): String? {
     return markers.ifEmpty { null }
 }
 
+/** Writes [node] and its subtree as HTML. */
 private fun StringBuilder.appendElement(node: ElementNode) {
     append('<').append(node.tag)
     append(" data-jl=\"").append(node.id).append('"')
     textMarkers(node)?.let { append(" data-jl-t=\"").append(it).append('"') }
-    // Tells the client the children below are markup someone supplied, not nodes it should index.
+    // Tell the client that the children are supplied markup, not nodes to index.
     if (node.hasUnsafeInnerHtml) append(" data-jl-raw")
 
     for ((name, value) in node.attributes) {
@@ -125,8 +131,8 @@ private fun StringBuilder.appendElement(node: ElementNode) {
         if (value.isNotEmpty()) append("=\"").append(escapeAttribute(value)).append('"')
     }
 
-    // On first paint there is no DOM yet, so properties have to be expressed as the attributes
-    // that seed them. Once the client is connected they travel as Op.SetProp instead.
+    // Before the first paint there's no DOM, so write properties as the attributes that set their
+    // initial values. Once the client connects, properties travel as Op.SetProp instead.
     for ((name, value) in node.properties) {
         if (name == INNER_HTML) continue
         when (value) {
@@ -143,8 +149,8 @@ private fun StringBuilder.appendElement(node: ElementNode) {
     append('>')
     if (node.namespace == Namespace.HTML && node.tag in VOID_ELEMENTS) return
 
-    // innerHTML is the one place a caller can bypass escaping, so it is written out verbatim and
-    // takes the place of children entirely. The applier rejects an element that has both.
+    // innerHTML is the one place where a caller can bypass escaping, so write it verbatim, in place
+    // of any children. The applier rejects an element that has both.
     val raw = node.properties[INNER_HTML]
     if (raw is PropValue.Str) {
         append(raw.v)
@@ -154,6 +160,7 @@ private fun StringBuilder.appendElement(node: ElementNode) {
     append("</").append(node.tag).append('>')
 }
 
+/** Escapes [value] for use as element content. */
 private fun escapeText(value: String): String = buildString(value.length) {
     for (c in value) when (c) {
         '&' -> append("&amp;")
@@ -163,6 +170,7 @@ private fun escapeText(value: String): String = buildString(value.length) {
     }
 }
 
+/** Escapes [value] for use inside a double-quoted attribute value. */
 private fun escapeAttribute(value: String): String = buildString(value.length) {
     for (c in value) when (c) {
         '&' -> append("&amp;")

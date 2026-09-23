@@ -6,11 +6,11 @@ import ch.qos.logback.core.read.ListAppender
 import org.slf4j.LoggerFactory
 
 /**
- * Everything the server logged while a test ran.
+ * Collects everything the server logged while a test ran.
  *
- * Asserting on log output is usually a bad idea, and worth it here for one reason: these particular
- * lines *are* the feature. A limit that quietly does its job teaches nobody anything, and the
- * application it is protecting people from never gets fixed. Silence is the regression.
+ * Asserting on log output is usually a bad idea, but it's worth it here, because these particular
+ * lines are the feature. A limit that does its job silently teaches nobody anything, and the
+ * application it protects people from never gets fixed. Silence is the regression.
  */
 internal class LogCapture private constructor(
     private val logger: Logger,

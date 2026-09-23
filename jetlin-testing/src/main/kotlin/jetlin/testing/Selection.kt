@@ -17,28 +17,37 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
 /**
- * A handle on one node matching a query.
+ * A selection of the one node that matches a query.
  *
- * Resolved freshly on every operation rather than once when it was created, so a handle taken
- * before an interaction still refers to whatever matches now. That matters because a recomposition
- * can replace the node entirely: asserting against the object found earlier would be asserting
- * against something the composition has already discarded.
+ * The query runs again on every operation, not once when the selection is created, so a selection
+ * made before an interaction still refers to whatever matches now. That matters because a
+ * recomposition can replace the node entirely, and asserting on the node found earlier would mean
+ * asserting on something the composition has already discarded.
+ *
+ * Every assertion throws [AssertionError] when it fails, and returns this selection when it passes,
+ * so you can chain them.
  */
 public class NodeSelection internal constructor(
     internal val test: ViewTest,
     private val matcher: NodeMatcher,
     private val index: Int? = null,
-    /** The subtree this query is confined to, captured from the enclosing [within] block. */
+    /** The subtree that this query is confined to, taken from the enclosing [ViewTest.within] block. */
     private val scope: NodeSelection? = null,
 ) {
     private val description: String =
         if (index == null) matcher.description else "${matcher.description} at index $index"
 
-    /** The matching element, failing if the query does not pick out exactly one. */
+    /**
+     * Returns the matching element.
+     *
+     * @throws AssertionError if the query doesn't match exactly one element.
+     */
     public suspend fun fetch(): ElementNode = test.inspect { owner -> resolveIn(owner) }
 
+    /** Asserts that exactly one node matches. */
     public suspend fun assertExists(): NodeSelection = apply { fetch() }
 
+    /** Asserts that no node matches. */
     public suspend fun assertDoesNotExist(): NodeSelection = apply {
         test.inspect { owner ->
             val found = owner.find(matcher, from = scope?.resolveIn(owner) ?: owner.root)
@@ -48,16 +57,18 @@ public class NodeSelection internal constructor(
         }
     }
 
-    /** All the text this node renders, including the text of everything inside it. */
+    /** Returns all the text this node renders, including the text of everything inside it. */
     public suspend fun text(): String = fetch().textContent()
 
-    /** The input's current value, read from the DOM property that `value` and `bind` write. */
+    /** Returns the input's current value, from the DOM property that `value` and `bind` set. */
     public suspend fun value(): String? = (fetch().property("value") as? PropValue.Str)?.v
 
+    /** Asserts that the node's [text] is exactly [expected]. */
     public suspend fun assertText(expected: String): NodeSelection = apply {
         assertSame("Text of $description", expected, text())
     }
 
+    /** Asserts that the node's [text] contains [expected]. */
     public suspend fun assertTextContains(expected: String): NodeSelection = apply {
         val actual = text()
         if (!actual.contains(expected)) {
@@ -65,21 +76,25 @@ public class NodeSelection internal constructor(
         }
     }
 
+    /** Asserts that the input's [value] is exactly [expected]. */
     public suspend fun assertValue(expected: String): NodeSelection = apply {
         assertSame("Value of $description", expected, value())
     }
 
+    /** Asserts that the checkbox or radio button is checked, or cleared if [expected] is `false`. */
     public suspend fun assertChecked(expected: Boolean = true): NodeSelection = assertMatches(isChecked(expected))
 
+    /** Asserts that the node has the `disabled` attribute. */
     public suspend fun assertDisabled(): NodeSelection = assertMatches(isDisabled())
 
+    /** Asserts that the node doesn't have the `disabled` attribute. */
     public suspend fun assertEnabled(): NodeSelection = assertMatches(isEnabled())
 
     /**
-     * Asserts exactly which commands the browser will run for [event], and in what order.
+     * Asserts exactly which commands the browser runs for [event], and in what order.
      *
-     * What a headless test can say about client-only behaviour: that it was declared, and declared
-     * correctly. Whether the class actually toggles is a question for a browser.
+     * That's what a headless test can check about client-only behavior: that it was declared, and
+     * declared correctly. Whether the class really toggles is a question for a browser test.
      */
     public suspend fun assertClientCommands(
         event: String = "click",
@@ -89,22 +104,30 @@ public class NodeSelection internal constructor(
         assertSame("Client commands for '$event' on $description", expected.toList(), actual)
     }
 
-    /** The props the server last sent to this client component. */
+    /**
+     * Returns the props the server last sent to this client component.
+     *
+     * @throws AssertionError if the node isn't a client component.
+     */
     public suspend fun props(): JsonObject {
         val raw = fetch().attribute("data-jl-props")
             ?: throw AssertionError("The node matching $description is not a client component.")
         return JetlinJson.parseToJsonElement(raw).jsonObject
     }
 
+    /** Asserts that the client component's [props] are exactly [expected]. */
     public suspend fun assertProps(expected: JsonObject): NodeSelection = apply {
         assertSame("Props of $description", expected, props())
     }
 
     /**
-     * Sends an event up from a client component, as its browser implementation would.
+     * Sends an event from a client component to the server, as its browser implementation would.
      *
-     * The half of a component a headless test can drive: not what it renders, but whether the
-     * server does the right thing when it reports something.
+     * This is the half of a component that a headless test can drive. It can't check what the
+     * component renders, but it can check that the server does the right thing with what the
+     * component reports.
+     *
+     * @throws AssertionError if the node isn't a client component.
      */
     public suspend fun pushFromClient(
         event: String,
@@ -144,10 +167,11 @@ public class NodeSelection internal constructor(
     internal suspend fun <T> withNode(block: (ElementNode) -> T): T =
         test.inspect { owner -> block(resolveIn(owner)) }
 
-    /** As [withNode], but also passing the chain of elements from the root down to the node. */
+    /** Like [withNode], but passes the chain of elements from the root down to the node. */
     internal suspend fun <T> withPath(block: (List<ElementNode>) -> T): T =
         test.inspect { owner -> block(owner.pathTo(resolveIn(owner))) }
 
+    /** Finds the node in [owner]'s tree, or fails with the tree printed. */
     internal fun resolveIn(owner: HtmlOwner): ElementNode {
         val found = owner.find(matcher, from = scope?.resolveIn(owner) ?: owner.root)
         if (index != null) {
@@ -170,30 +194,35 @@ public class NodeSelection internal constructor(
         }
     }
 
+    /** Describes the query, for failure messages. */
     internal val describedBy: String get() = description
 }
 
 /**
- * Every node matching a query, in document order.
+ * A selection of every node that matches a query, in document order.
  *
- * Counting is the common case — how many rows the list has — so [assertCount] says what it expected
- * when it fails rather than leaving a bare number comparison behind.
+ * Counting is the common case, such as how many rows a list has, so [assertCount] says what it
+ * expected when it fails, instead of leaving a bare comparison of numbers.
  */
 public class NodeCollection internal constructor(
     private val test: ViewTest,
     private val matcher: NodeMatcher,
     private val scope: NodeSelection? = null,
 ) {
+    /** Returns the matching elements. */
     public suspend fun fetch(): List<ElementNode> = test.inspect { owner -> owner.matches() }
 
+    /** Finds the matching elements in this tree. */
     private fun HtmlOwner.matches(): List<ElementNode> =
         find(matcher, from = scope?.resolveIn(this) ?: root)
 
+    /** Returns the number of matching elements. */
     public suspend fun size(): Int = fetch().size
 
-    /** The text of each match, which is usually what a list assertion is really about. */
+    /** Returns the text of each match, which is usually what a list assertion is about. */
     public suspend fun texts(): List<String> = fetch().map { it.textContent() }
 
+    /** Asserts that exactly [expected] nodes match, and prints the tree if not. */
     public suspend fun assertCount(expected: Int): NodeCollection = apply {
         test.inspect { owner ->
             val nodes = owner.matches()
@@ -206,39 +235,44 @@ public class NodeCollection internal constructor(
         }
     }
 
+    /** Asserts that the matches' [texts] are exactly [expected], in order. */
     public suspend fun assertTexts(vararg expected: String): NodeCollection = apply {
         assertSame("Texts of ${matcher.description}", expected.toList(), texts())
     }
 
     /**
-     * The match at [index], as a handle that can be interacted with.
+     * Returns the match at [index], as a selection you can interact with.
      *
-     * Positional, so it re-resolves against whatever is at that position now. That is right for
-     * "the first row" and wrong for following one particular row across a reorder — match on
-     * something stable when you mean the latter.
+     * The selection is positional, so it resolves to whatever is at that position now. That's right
+     * for "the first row," and wrong for following one particular row across a reorder. To follow a
+     * row, match on something stable.
      */
     public operator fun get(index: Int): NodeSelection = NodeSelection(test, matcher, index, scope)
 
+    /** Returns the first match. See [get]. */
     public fun first(): NodeSelection = get(0)
 }
 
 /**
- * Finds every element matching [matcher], keeping the innermost when matches are nested.
+ * Finds every element under [from] that matches [matcher], keeping only the innermost when
+ * matches are nested.
  *
- * Dropping a match that contains another is what makes text queries usable: in
- * `Li { Link { Text("Buy milk") } }` both the `<li>` and the `<a>` render exactly that text, and
- * the `<a>` is the one a test means. Interactions bubble from there up to whichever ancestor is
- * actually listening, so selecting the inner node does not stop it being clickable.
+ * Dropping a match that contains another match is what makes text queries usable. In
+ * `Li { Link { Text("Buy milk") } }`, both the `<li>` and the `<a>` render exactly that text, and
+ * the test means the `<a>`. Interactions bubble up from there to whichever ancestor is listening, so
+ * selecting the inner node doesn't stop it from being clickable.
  */
 internal fun HtmlOwner.find(matcher: NodeMatcher, from: ElementNode = root): List<ElementNode> =
     from.find(matcher)
 
+/** Finds every descendant of this element that matches [matcher], keeping only the innermost. */
 internal fun ElementNode.find(matcher: NodeMatcher): List<ElementNode> {
     val matches = mutableListOf<ElementNode>()
     collectMatches(this, matcher, matches, includeSelf = false)
     return matches.filter { candidate -> matches.none { it !== candidate && candidate.contains(it) } }
 }
 
+/** Adds every element in [node]'s subtree that matches [matcher] to [into], in document order. */
 private fun collectMatches(
     node: ElementNode,
     matcher: NodeMatcher,
@@ -252,11 +286,11 @@ private fun collectMatches(
 }
 
 /**
- * The chain of elements from the root down to [node], inclusive.
+ * Returns the chain of elements from the root down to [node], inclusive.
  *
- * Interactions need it to bubble: the node a matcher picks out is not necessarily the one carrying
- * the handler. Reconstructed by walking down rather than by following parent pointers, which keeps
- * upward navigation out of `jetlin-html`'s public surface.
+ * Interactions need it to bubble, because the node a matcher selects isn't necessarily the one with
+ * the handler. It's found by walking down from the root instead of following parent pointers, which
+ * keeps upward navigation out of `jetlin-html`'s public API.
  */
 internal fun HtmlOwner.pathTo(node: ElementNode): List<ElementNode> {
     val path = mutableListOf<ElementNode>()
@@ -273,6 +307,7 @@ internal fun HtmlOwner.pathTo(node: ElementNode): List<ElementNode> {
     return path
 }
 
+/** Whether [other] is a descendant of this element. */
 private fun ElementNode.contains(other: ElementNode): Boolean {
     for (child in childNodes) {
         if (child === other) return true
@@ -282,10 +317,10 @@ private fun ElementNode.contains(other: ElementNode): Boolean {
 }
 
 /**
- * Reports a mismatch the way a test framework's own assertion would.
+ * Throws an [AssertionError] if [expected] and [actual] differ, like a test framework's assertion.
  *
- * Written out rather than delegated so that this module needs no test framework of its own, and
- * works unchanged under whichever one the consuming project already runs.
+ * It's written out instead of calling a test framework, so this module needs no test framework of
+ * its own and works with whichever one the project already uses.
  */
 internal fun assertSame(what: String, expected: Any?, actual: Any?) {
     if (expected != actual) {
@@ -293,16 +328,17 @@ internal fun assertSame(what: String, expected: Any?, actual: Any?) {
     }
 }
 
+/** Throws an [AssertionError] with [message] and the whole tree. */
 private fun fail(message: String, owner: HtmlOwner): Nothing =
     throw AssertionError("$message\n\nThe tree was:\n${owner.root.describe()}")
 
-/** An indented rendering of a node and everything under it, for failure messages. */
+/** Returns this node and everything under it as indented text, for failure messages. */
 internal fun HtmlNode.describe(indent: String = ""): String = when (this) {
     is TextNode -> "$indent\"$text\"  #$id\n"
     is ElementNode -> buildString {
         append(indent).append('<').append(tag)
-        // Not an attribute, so it has to be printed explicitly — otherwise the tree dump omits the
-        // one thing a failing query was most likely looking for.
+        // The test tag isn't an attribute, so print it explicitly. Otherwise the tree dump would
+        // leave out the thing a failing query was most likely looking for.
         testTag?.let { append(" testTag=").append(it) }
         for (name in attributeNames) append(' ').append(name).append("=\"").append(attribute(name)).append('"')
         for (name in listOf("value", "checked")) {

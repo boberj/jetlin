@@ -13,12 +13,12 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 /**
- * Behaviour the browser is trusted to perform on its own.
+ * Tests behavior that the browser is trusted to perform on its own.
  *
- * The contract is narrow on purpose: a fixed set of verbs, declared on the element, carried in the
- * listener spec the client already receives. What these pin down is that the declaration survives
- * the trip intact, and — the part that actually saves the round trip — that an element with commands
- * and no handler tells the client not to bother reporting the event.
+ * The contract is deliberately narrow: a fixed set of commands, declared on the element, carried in
+ * the listener spec the client already receives. These tests check that the declaration arrives
+ * intact, and, the part that saves the round trip, that an element with commands and no handler
+ * tells the client not to report the event.
  */
 class ClientOnlyTest {
 
@@ -36,7 +36,7 @@ class ClientOnlyTest {
                 listOf(ClientCommand.ToggleClass("open", ClientTarget.Closest("card"))),
                 spec?.commands,
             )
-            // The whole point: nothing declared a handler, so the event never leaves the browser.
+            // This is the point: nothing declared a handler, so the event never leaves the browser.
             assertFalse(spec!!.notify)
         }
     }
@@ -67,7 +67,7 @@ class ClientOnlyTest {
             val spec = view.inspect {
                 (it.root.childNodes.single() as ElementNode).listenerSpec("click")
             }
-            // Show the spinner immediately; still round-trip for the work itself.
+            // Show the spinner immediately, and still make the round trip for the work itself.
             assertEquals(listOf(ClientCommand.AddClass("busy", ClientTarget.Self)), spec?.commands)
             assertTrue(spec!!.notify)
         }
@@ -80,8 +80,8 @@ class ClientOnlyTest {
         }.use { view ->
             val html = view.also { it.start() }.renderHtml()
 
-            // Carried by data-jl-on, which the client already reads, so a page works before any
-            // patch has arrived.
+            // The commands travel in data-jl-on, which the client already reads, so a page works before
+            // any patch has arrived.
             assertTrue(html.contains("&quot;toggle&quot;"), html)
             assertTrue(html.contains("&quot;notify&quot;:false"), html)
         }
@@ -99,7 +99,7 @@ class ClientOnlyTest {
             Snapshot.withMutableSnapshot { label = "Hide" }
             view.awaitIdle()
 
-            // The listener is unchanged, so only the text moves; a fresh spec on every recomposition
+            // The listener is unchanged, so only the text changes. A new spec on every recomposition
             // would put an Op.Listen on the wire for no reason.
             assertEquals(
                 listOf(jetlin.protocol.Op.SetText(2, "Hide")),

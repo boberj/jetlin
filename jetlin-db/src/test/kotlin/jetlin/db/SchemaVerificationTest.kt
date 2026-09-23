@@ -13,9 +13,9 @@ import kotlin.test.assertFailsWith
 /**
  * Tests opening a database whose schema doesn't match the entities.
  *
- * Without the check, this would fail silently. `CREATE TABLE IF NOT EXISTS` ignores a table that exists
- * with a different structure, so an unapplied migration would only show up as a failed insert during a
- * deploy, or as a column that is never read.
+ * Without the check, this would fail without an error. `CREATE TABLE IF NOT EXISTS` ignores a table
+ * that exists with a different structure, so an unapplied migration would show up only as a failed
+ * insert during a deployment, or as a column that's never read.
  */
 class SchemaVerificationTest {
 
@@ -72,7 +72,7 @@ class SchemaVerificationTest {
         val failure = assertFailsWith<IllegalStateException> { Db.open(file, schema()).close() }
 
         // An extra column fails startup instead of being ignored. It means either a partly applied
-        // migration or a column removed from an entity without a migration, and both need a decision.
+        // migration, or a column removed from an entity without a migration, and both need a decision.
         assertContains(failure.message.orEmpty(), "'tasks.legacy_notes' is stored but no entity declares it")
     }
 

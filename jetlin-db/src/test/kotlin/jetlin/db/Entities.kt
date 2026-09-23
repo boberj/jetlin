@@ -3,11 +3,11 @@ package jetlin.db
 /**
  * The entities this module's tests use.
  *
- * Together they cover the three access patterns from §4.3 of the plan: owner only, shared through a
- * related record, and widely readable with one restricted column. Those are the patterns the design is
- * meant to support, so each needs a test.
+ * Together, they cover the three access patterns from §4.3 of the plan: owner only, shared through
+ * a related record, and widely readable with one restricted column. The design is meant to support
+ * those patterns, so each one needs a test.
  *
- * `:jetlin-db-ksp` generates their tables, column objects, drafts and policy-checked accessors.
+ * `:jetlin-db-ksp` generates their tables, column objects, drafts, and policy-checked accessors.
  */
 @Entity
 internal class User(name: String, admin: Boolean = false) : Record(), Principal {
@@ -17,7 +17,7 @@ internal class User(name: String, admin: Boolean = false) : Record(), Principal 
     companion object : Policy<User, User> {
         override fun canRead(record: User, principal: User): Boolean = true
 
-        /** Users can rename themselves; only an admin can rename someone else. */
+        /** Users can rename themselves, and only an admin can rename someone else. */
         override fun canWrite(record: User, principal: User): Boolean = record == principal || principal.admin
     }
 }
@@ -51,11 +51,11 @@ internal class Task(
 
     companion object : Policy<Task, User> {
         /**
-         * Shared through a related record: readable by the owner, and by everyone once its project is
-         * shared.
+         * Shared through a related record: the owner can read it, and so can everyone once its
+         * project is shared.
          *
-         * `record.project?.shared` reads a cell of another record, so sharing and unsharing a project
-         * updates open pages without any invalidation code.
+         * `record.project?.shared` reads a cell of another record, so sharing and unsharing a
+         * project updates open pages without any invalidation code.
          */
         override fun canRead(record: Task, principal: User): Boolean =
             record.owner == principal || record.project?.shared == true
@@ -70,5 +70,5 @@ internal class Task(
     }
 }
 
-/** The generated list of tables, in load order. */
+/** Returns the generated list of tables, in load order. */
 internal fun schema(): List<Table<out Record>> = JetlinSchema.tables

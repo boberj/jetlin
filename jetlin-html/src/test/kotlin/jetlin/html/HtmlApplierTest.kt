@@ -19,11 +19,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /**
- * Checks what a state change actually puts on the wire.
+ * Tests what a state change puts on the wire.
  *
- * Assertions are on exact op lists rather than "contains", so a change that updates more of the
- * page than it needs to — or re-creates nodes it could have moved — fails the build instead of
- * quietly costing bandwidth.
+ * The assertions compare exact op lists instead of checking what they contain. A change that updates
+ * more of the page than it needs to, or recreates nodes it could have moved, fails the build instead
+ * of wasting bandwidth unnoticed.
  */
 class HtmlApplierTest {
 
@@ -141,7 +141,7 @@ class HtmlApplierTest {
         var count by mutableStateOf(0)
         val seen = mutableListOf<Int>()
         harness {
-            // The lambda captures `count` by value each pass; a stale handler would record 0 twice.
+            // The lambda captures `count` by value on each pass. A stale handler would record 0 twice.
             Button({ onClick { seen += count; count++ } }) { Text("$count") }
         }.use { h ->
             h.event(1, "click")

@@ -5,33 +5,37 @@ public sealed interface Change {
     /** Whether applying this change loses data that reversing the migration couldn't restore. */
     public val destructive: Boolean
 
-    /** A one-line description, used in the migration's header and in `dbVerify`'s error message. */
+    /** A one-line description, for the migration's header and `dbVerify`'s error message. */
     public val summary: String
 
+    /** A new table. */
     public data class AddTable(val table: TableSchema) : Change {
         override val destructive: Boolean get() = false
         override val summary: String get() = "add table ${table.name}"
     }
 
+    /** A table that no entity declares anymore. */
     public data class DropTable(val table: TableSchema) : Change {
         override val destructive: Boolean get() = true
         override val summary: String get() = "drop table ${table.name}, and everything in it"
     }
 
+    /** A new column in the existing table [table]. */
     public data class AddColumn(val table: String, val column: ColumnSchema) : Change {
         override val destructive: Boolean get() = false
         override val summary: String get() = "add $table.${column.name} (${column.type})"
     }
 
+    /** A column that the entity doesn't declare anymore. */
     public data class DropColumn(val table: String, val column: ColumnSchema) : Change {
         override val destructive: Boolean get() = true
         override val summary: String get() = "drop $table.${column.name}, and the values in it"
     }
 
     /**
-     * A column whose type, nullability or foreign key changed.
+     * A column whose type, nullability, or foreign key changed.
      *
-     * SQLite can't make these changes in place, so they require a table rebuild.
+     * SQLite can't make these changes in place, so they require rebuilding the table.
      */
     public data class AlterColumn(
         val table: String,
@@ -39,8 +43,8 @@ public sealed interface Change {
         val to: ColumnSchema,
     ) : Change {
         override val destructive: Boolean
-            // Narrowing can lose data. SQLite silently converts values that don't fit a new type, and a
-            // row that violates a new NOT NULL makes the migration fail.
+            // Narrowing can lose data. SQLite converts values that don't fit a new type without an
+            // error, and a row that violates a new NOT NULL makes the migration fail.
             get() = from.nullable && !to.nullable || from.type != to.type
 
         override val summary: String get() = buildString {
@@ -66,8 +70,9 @@ public sealed interface Change {
 /**
  * Lists the changes that turn schema [from] into schema [to].
  *
- * The changes are ordered so the SQL can run top to bottom. New tables come before columns that
- * reference them, and drops come last, so a table isn't removed while something still references it.
+ * The changes are ordered so the SQL can run from top to bottom. New tables come before columns
+ * that reference them, and drops come last, so a table isn't removed while something still
+ * references it.
  */
 public fun diff(from: SchemaFile, to: SchemaFile): List<Change> {
     val changes = mutableListOf<Change>()
@@ -87,7 +92,7 @@ public fun diff(from: SchemaFile, to: SchemaFile): List<Change> {
         }
     }
 
-    // Drops go last. If something still references a dropped table or column, the foreign key check
+    // Put drops last. If something still references a dropped table or column, the foreign key check
     // fails the migration instead of leaving a dangling reference.
     for (table in from.tables) {
         val now = to.table(table.name) ?: continue

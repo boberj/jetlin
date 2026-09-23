@@ -15,7 +15,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
 
 /**
- * Runs [body] against a view composed from [content], with no browser and no server.
+ * Runs [body] against a view, with no browser and no server. Call [ViewTest.setContent] in [body]
+ * to compose the view.
  *
  * ```kotlin
  * @Test
@@ -29,13 +30,16 @@ import kotlinx.serialization.json.JsonElement
  * }
  * ```
  *
- * [url] is where the session starts. A view reached by a route declares its pattern on
- * [ViewTest.setContent], which resolves the path parameters from that URL. Supply [request] directly
- * when the view reads headers or application attributes.
+ * This function deliberately uses `runBlocking` instead of `runTest`. A view runs on real
+ * dispatchers, and virtual time would skip waits that the recomposer needs. No test needs to sleep:
+ * every interaction returns once the recomposition it caused has settled.
  *
- * Uses `runBlocking` rather than `runTest` deliberately: a view runs on real dispatchers, and
- * virtual time would skip past waiting the recomposer has to do. Nothing here needs a sleep — every
- * interaction returns once the recomposition it caused has settled.
+ * @param url where the session starts. A view reached through a route declares its pattern in
+ *   [ViewTest.setContent], which extracts the path parameters from this URL.
+ * @param request the request the session starts with. Pass it when the view reads headers or
+ *   application attributes.
+ * @param framePolicy how often the view may recompose.
+ * @param body the test.
  */
 public fun runViewTest(
     url: String = "/",
@@ -52,33 +56,37 @@ public fun runViewTest(
 }
 
 /**
- * One view under test: what it rendered, what can be done to it, and where it thinks it is.
+ * One view under test: what it rendered, what you can do to it, and where it thinks it is.
  *
- * Everything is addressed through matchers rather than node ids, and every interaction goes through
- * the same path a real client's message would, so a test describes the behaviour of the view and
- * not the shape of the protocol underneath it.
+ * Tests find nodes with matchers instead of node IDs, and every interaction takes the same path as a
+ * real client's message. So a test describes the view's behavior, not the protocol underneath it.
  */
 public class ViewTest internal constructor(
     private var request: RequestContext,
     private val framePolicy: FramePolicy,
 ) : AutoCloseable {
 
+    /** The content under test, kept so [hibernateAndRestore] can compose it again. */
     private var content: (@Composable (RequestContext) -> Unit)? = null
     private var view: LiveView? = null
+
+    /** The sequence number of the last event sent, as a client would number it. */
     private var seq = 0L
 
-    /** Ops seen since the last drain, collected only while [recordUpdate] is running. */
+    /** The ops seen since the last drain. They're collected only while [recordUpdate] runs. */
     private var recording: MutableList<Op>? = null
 
     /**
-     * Composes one view and waits for the first pass to finish. Call once, before anything else.
+     * Composes one view and waits for the first pass to finish. Call it once, before anything else.
      *
-     * [route] is the pattern the view is registered at, e.g. `/todo/{id}`. Give it whenever the view
-     * reads a path parameter: the parameters are resolved by matching the test's URL against it, so
-     * the id is written once instead of twice and the two cannot disagree.
+     * If the test navigates, use [setRoutes] instead. A single view set here stays composed wherever
+     * the session goes, which isn't what the application does.
      *
-     * Use [setRoutes] instead when the test navigates: a single view pinned here stays composed
-     * wherever the session goes, which is not what the application does.
+     * @param route the pattern the view is registered at, such as `/todo/{id}`. Pass it whenever the
+     *   view reads a path parameter. The parameters come from matching the test's URL against it, so
+     *   you write the ID once, and the two can't disagree.
+     * @throws IllegalStateException if [route] doesn't match the test's URL, or content was already
+     *   set.
      */
     public suspend fun setContent(route: String? = null, content: @Composable () -> Unit) {
         val params = route?.let { pattern ->
@@ -89,6 +97,7 @@ public class ViewTest internal constructor(
         setRoutedContent(routed) { content() }
     }
 
+    /** Composes [content] with the request [initial]. [setContent] and [setRoutes] call this. */
     internal suspend fun setRoutedContent(
         initial: RequestContext = request,
         content: @Composable (RequestContext) -> Unit,
@@ -98,6 +107,7 @@ public class ViewTest internal constructor(
         view = LiveView(initial, framePolicy, emptyMap(), false, content).also { it.start() }
     }
 
+    /** The view, which exists once content is set. */
     private val live: LiveView
         get() = view ?: error("No content set; call setContent { ... } first")
 
@@ -110,47 +120,57 @@ public class ViewTest internal constructor(
      * ```
      *
      * The attribute applies to every view composed after this call, including the one that
-     * [hibernateAndRestore] creates. That makes it possible to test waking from hibernation: a woken
-     * session recomputes its attributes from the new connection, so changing the principal and then
-     * calling [hibernateAndRestore] simulates a role being revoked while the session was hibernated.
+     * [hibernateAndRestore] creates. That lets you test waking from hibernation. A woken session
+     * recomputes its attributes from the new connection, so changing the principal and then calling
+     * [hibernateAndRestore] simulates a role revoked while the session was hibernated.
      */
     public fun <T> setAttribute(key: AttributeKey<T>, value: T?) {
         request = request.with(key, value)
     }
 
-    /** Where the view currently thinks it is, as it would appear in the address bar. */
+    /** Where the view thinks it is, as the address bar would show it. */
     public val currentUrl: String get() = live.currentUrl
 
     /**
-     * The document title set by the composition.
+     * Waits for the view to settle, and returns the document title that the composition set.
      *
-     * Assert on it separately from the body. The title is rendered into `<head>` before the body, so a
-     * title computed from a record reveals the record even if the body refused to show it.
+     * Assert on it separately from the body. The title is rendered into `<head>` before the body, so
+     * a title computed from a record reveals the record even if the body refused to show it.
      */
     public suspend fun title(): String? {
         live.awaitIdle()
         return live.title
     }
 
+    /**
+     * Asserts that the view is at [expected].
+     *
+     * @throws AssertionError if [currentUrl] differs.
+     */
     public fun assertUrl(expected: String) {
         assertSame("Current URL", expected, currentUrl)
     }
 
-    /** The subtree queries are currently confined to; see [within]. */
+    /** The subtree that queries are confined to, or `null` for the whole page. See [within]. */
     private var scope: NodeSelection? = null
 
-    /** Exactly one node is expected to match; anything else fails with the tree printed. */
+    /**
+     * Selects the one node that matches [matcher].
+     *
+     * The selection is resolved when you act on it or assert on it. If no node or more than one node
+     * matches then, it fails and prints the tree.
+     */
     public fun onNode(matcher: NodeMatcher): NodeSelection = NodeSelection(this, matcher, scope = scope)
 
-    /** Every node matching, in document order. */
+    /** Selects every node that matches [matcher], in document order. */
     public fun onAll(matcher: NodeMatcher): NodeCollection = NodeCollection(this, matcher, scope = scope)
 
     /**
      * Runs [block] with every query confined to the subtree under [selection].
      *
-     * For saying where something is rather than what it is. `onAll(hasTag("button") and
-     * hasText("up"))[2]` is an index across the whole page that happens to land on the third row's
-     * button; this says what was meant:
+     * Use it to say where something is, not only what it is.
+     * `onAll(hasTag("button") and hasText("up"))[2]` is an index across the whole page that happens to
+     * land on the third row's button. This says what you meant:
      *
      * ```kotlin
      * within(onAll(hasTestTag("todo"))[2]) {
@@ -158,9 +178,9 @@ public class ViewTest internal constructor(
      * }
      * ```
      *
-     * [selection] is re-resolved on each query inside the block rather than pinned once, for the
-     * same reason handles are lazy everywhere else: a recomposition can replace the node. Blocks
-     * nest, and an inner scope is resolved within its outer one.
+     * [selection] is resolved again for each query inside the block instead of once, for the same
+     * reason selections are lazy everywhere else: a recomposition can replace the node. Blocks nest,
+     * and an inner scope is resolved within its outer one.
      */
     public suspend fun within(selection: NodeSelection, block: suspend ViewTest.() -> Unit) {
         val previous = scope
@@ -173,44 +193,46 @@ public class ViewTest internal constructor(
     }
 
     /**
-     * Reads the settled node tree on the thread that owns it.
+     * Waits for the view to settle, then runs [block] on the tree, on the thread that owns it.
      *
-     * The querying API is built on this, and it is public for the occasional assertion the matchers
-     * do not cover.
+     * The query API is built on this. It's public for the occasional assertion that the matchers
+     * don't cover.
      */
     public suspend fun <T> inspect(block: (HtmlOwner) -> T): T = live.inspect(block)
 
     /**
-     * Waits for everything in flight to be applied.
+     * Waits for everything in progress to be applied.
      *
-     * Interactions already do this, so it is only needed after changing state from outside the view
-     * — a shared store written directly by the test, standing in for another user or a background
-     * job.
+     * Interactions already wait, so you need this only after changing state from outside the view,
+     * for example when the test writes a shared store directly to stand in for another user or a
+     * background job.
      */
     public suspend fun awaitIdle() {
         live.awaitIdle()
         drain()
     }
 
-    /** The server-rendered HTML. An escape hatch for when the markup itself is the thing under test. */
+    /** Returns the server-rendered HTML. Use it when the markup itself is what you're testing. */
     public suspend fun renderHtml(): String = live.renderHtml()
 
-    /** An indented rendering of the whole tree. For working out why a matcher found nothing. */
+    /** Returns the whole tree as indented text. Use it to work out why a matcher found nothing. */
     public suspend fun debugTree(): String = inspect { it.root.describe() }
 
-    /** Moves the view as a back or forward button would: the location changes, and the view follows. */
+    /**
+     * Moves the view to [url] as the back or forward button would: the location changes, and the
+     * view follows.
+     */
     public suspend fun navigate(url: String) {
         live.dispatch(ClientMessage.Navigate(url))
         drain()
     }
 
     /**
-     * Puts the session through hibernation and brings it back, as a dropped connection or a deploy
-     * would.
+     * Hibernates the session and wakes it again, as a dropped connection or a deployment would.
      *
-     * What survives is what the view declared with `rememberSaved`; everything in `remember` is
-     * recomputed. Which is which is an application decision, and this is how to check it was the
-     * right one. Every existing handle keeps working — the queries re-resolve against the restored
+     * What the view declared with `rememberSaved` survives, and everything in `remember` is
+     * recomputed. The application decides which is which, and this is how you check the decision.
+     * Existing selections keep working, because queries are resolved again against the restored
      * view.
      */
     public suspend fun hibernateAndRestore() {
@@ -226,17 +248,21 @@ public class ViewTest internal constructor(
     }
 
     /**
-     * Takes whatever the last change recorded, keeping it only if something is recording.
+     * Takes the ops that the last change recorded, and keeps them only if [recordUpdate] is running.
      *
-     * Nothing collects `LiveView.messages` in a test, so without this the buffer would grow for the
-     * whole test and eventually overflow — at which point the view drops it and the change
-     * assertions would silently see nothing.
+     * Nothing collects `LiveView.messages` in a test. Without this, the buffer would grow for the
+     * whole test and eventually overflow. The view would then drop it, and the change assertions
+     * would see nothing, without any error.
      */
     private suspend fun drain() {
         val ops = live.inspect { it.drainOps() }
         recording?.addAll(ops)
     }
 
+    /**
+     * Runs [block] and returns its result with every op recorded meanwhile. [recordUpdate] uses
+     * this.
+     */
     internal suspend fun <T> recordingOps(block: suspend () -> T): Pair<T, List<Op>> {
         check(recording == null) { "recordUpdate blocks cannot be nested" }
         drain()
@@ -244,8 +270,8 @@ public class ViewTest internal constructor(
         recording = collected
         try {
             val result = block()
-            // A change made without an interaction — a shared store written directly — still has to
-            // be settled and collected before the recording closes.
+            // A change made without an interaction, such as a shared store written directly, still
+            // has to settle and be collected before the recording ends.
             awaitIdle()
             return result to collected.toList()
         } finally {
@@ -253,6 +279,7 @@ public class ViewTest internal constructor(
         }
     }
 
+    /** Shuts down the view. [runViewTest] calls this for you. */
     override fun close() {
         view?.close()
     }

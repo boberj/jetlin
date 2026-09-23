@@ -16,33 +16,54 @@ import kotlinx.serialization.serializer
 /**
  * Holds the state that outlives a composition.
  *
- * A session's composition can be torn down while the user is away and rebuilt when they come back —
- * possibly on a different server. Everything held in `remember` is gone at that point, because it
- * lived in the slot table that was discarded. What survives is what was registered here, which is
- * why the distinction has to be visible in the code: `remember` is scratch space, [rememberSaved]
- * is state the user would notice losing.
+ * A session's composition can be torn down while the user is away and rebuilt when they return,
+ * possibly on a different server. Everything held in `remember` is lost then, because it lived in
+ * the discarded slot table. Only what was registered here survives. That's why the code has to make
+ * the difference visible: `remember` is scratch space, and [rememberSaved] is state the user would
+ * notice losing.
  */
 public interface SaveableStateRegistry {
 
     /**
-     * Takes the value stored under [key] by a previous incarnation, or null.
+     * Removes and returns the value that an earlier composition saved under [key].
      *
-     * Consuming rather than reading: a restored value seeds exactly one caller, so two composables
-     * that collide on a key cannot both silently receive it.
+     * This consumes the value instead of reading it. A restored value seeds exactly one caller, so if
+     * two composables collide on a key, they can't both receive it without anyone noticing.
+     *
+     * @return the saved value, or `null` if nothing was saved under [key] or it was already consumed.
      */
     public fun consumeRestored(key: String): JsonElement?
 
-    /** Registers a source for [key]'s value, to be asked at save time. */
+    /**
+     * Registers [provider] as the source of the value saved under [key].
+     *
+     * [performSave] calls [provider] at save time. A provider that returns `null` saves nothing.
+     *
+     * @return a registration to cancel when the value no longer needs saving.
+     */
     public fun registerProvider(key: String, provider: () -> JsonElement?): Registration
 
-    /** Asks every registered provider for its current value. */
+    /**
+     * Asks every registered provider for its current value.
+     *
+     * @return the non-null values, by key.
+     * @throws IllegalStateException if two providers are registered under the same key.
+     */
     public fun performSave(): Map<String, JsonElement>
 
+    /** A provider registered with [registerProvider]. */
     public fun interface Registration {
+        /** Removes the provider, so later saves no longer include its value. */
         public fun unregister()
     }
 }
 
+/**
+ * Creates a [SaveableStateRegistry].
+ *
+ * @param restored the values saved by an earlier composition, which
+ *   [SaveableStateRegistry.consumeRestored] hands out.
+ */
 public fun SaveableStateRegistry(
     restored: Map<String, JsonElement> = emptyMap(),
 ): SaveableStateRegistry = DefaultSaveableStateRegistry(restored)
@@ -78,16 +99,30 @@ private class DefaultSaveableStateRegistry(
     }
 }
 
+/**
+ * The error for two saved values that share a key. [performSave][SaveableStateRegistry.performSave]
+ * throws it.
+ */
 internal const val COLLISION_MESSAGE: String =
     "Two rememberSaved values share a key, so one would overwrite the other. Pass an explicit " +
         "key to each: rememberSaved(key = \"draft\") { ... }. Automatic keys come from the " +
         "composable's position in the tree, which is not unique where the tree itself moves — a " +
         "loop over reorderable data being the usual way to arrive here."
 
+/**
+ * The registry that [rememberSaved] registers with, or `null` if nothing saves state here.
+ *
+ * Without a registry, [rememberSaved] behaves like `remember`.
+ */
 public val LocalSaveableStateRegistry: ProvidableCompositionLocal<SaveableStateRegistry?> =
     staticCompositionLocalOf { null }
 
-/** Codec for persisted state. Separate from the wire codec: different audience, different lifetime. */
+/**
+ * The codec for saved state.
+ *
+ * It's separate from the wire codec, because saved state has a different reader and lives much
+ * longer. [Json.ignoreUnknownKeys] lets state written by a newer version still load.
+ */
 internal val SavedStateJson: Json = Json {
     encodeDefaults = true
     ignoreUnknownKeys = true
@@ -96,19 +131,22 @@ internal val SavedStateJson: Json = Json {
 /**
  * Like `remember`, but the value survives the composition being torn down and rebuilt.
  *
- * Use it for state a user would be annoyed to lose across a dropped connection or a server
- * restart — a half-typed form, a selected tab, an expanded row. Leave everything derived or
- * cheap to recompute in plain `remember`, so the saved payload stays small.
+ * Use it for state that a user would be annoyed to lose after a dropped connection or a server
+ * restart, such as a half-typed form, a selected tab, or an expanded row. Keep anything derived or
+ * cheap to recompute in plain `remember`, so the saved state stays small.
  *
- * [key] defaults to the composable's position in the composition, which tells apart saved values
- * living in different composables and, since Compose 1.12, two sitting side by side in the same
- * one. Position is still not an identity where the tree itself moves, so prefer an explicit key for
- * anything inside a loop over reorderable data. Any collision that does happen is detected at save
- * time and reported rather than allowed to lose data.
+ * A saved value that no longer deserializes, because its type changed after it was written, falls
+ * back to [init] instead of failing the session. Saved state outlives deployments, so meeting an
+ * older shape is normal, not exceptional.
  *
- * A value that no longer deserializes — because the type changed since it was written — falls back
- * to [init] rather than failing the session. Stored state outlives deployments, so encountering
- * yesterday's shape is a normal event, not an exceptional one.
+ * @param serializer the serializer for the value.
+ * @param key the key the value is saved under. It defaults to the composable's position in the
+ *   composition. That tells apart saved values in different composables and, since Compose 1.12,
+ *   two side by side in the same composable. A position isn't a stable identity where the tree
+ *   itself moves, so pass an explicit key inside a loop over data that can be reordered. If two
+ *   values do collide, saving reports an error instead of losing one of them.
+ * @param init produces the initial value when nothing was saved.
+ * @return the state holding the value. Writes to it are saved.
  */
 @Composable
 public fun <T> rememberSaved(
@@ -141,6 +179,11 @@ public fun <T> rememberSaved(
     return state
 }
 
+/**
+ * Like `remember`, but the value survives the composition being torn down and rebuilt.
+ *
+ * This overload looks up the serializer for [T]. See the other `rememberSaved` for details.
+ */
 @Composable
 public inline fun <reified T> rememberSaved(
     key: String? = null,

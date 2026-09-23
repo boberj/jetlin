@@ -19,8 +19,8 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /**
- * Tests storage, including the design's key property: a write the database refused is never visible to
- * anyone.
+ * Tests storage, including the design's key property: nobody ever sees a write that the database
+ * refused.
  */
 class PersistenceTest {
 
@@ -125,8 +125,8 @@ class PersistenceTest {
                         first.settle()
                         second.settle()
 
-                        // Neither session subscribed to the record, and nothing broadcast the change.
-                        // Both read the same cell, so applying the write invalidated both.
+                        // Neither session subscribed to the record, and nothing broadcast the
+                        // change. Both read the same cell, so applying the write invalidated both.
                         assertEquals(listOf(Op.SetText(3, "Read it twice")), first.drain())
                         assertEquals(listOf(Op.SetText(3, "Read it twice")), second.drain())
                     }
@@ -231,10 +231,10 @@ class PersistenceTest {
                 val alice = db.transact { db.insert(User("Alice")) }
                 val first = unsafe("test fixture") { db.insertUnchecked(Task(alice, "first"), id = 7) }
 
-                // Re-seeding a fixture: the old record is deleted and a new one reuses its id. The flush
-                // must run the delete before the insert, because primary key constraints can't be deferred.
-                // Foreign keys, by contrast, are checked at commit, so one transaction can create a record
-                // and point another record at it.
+                // Re-seeding a fixture: the old record is deleted, and a new one reuses its ID. The
+                // commit must run the delete before the insert, because primary key constraints can't
+                // be deferred. Foreign keys, by contrast, are checked at commit, so one transaction
+                // can create a record and point another record at it.
                 db.transact {
                     db.delete(first)
                     unsafe("test fixture") { db.insertUnchecked(Task(alice, "second"), id = 7) }
@@ -251,8 +251,8 @@ class PersistenceTest {
     fun `one transaction can create a record and the record that points at it`(): Unit = runTest {
         withStore { file ->
             Db.open(file, schema()).use { db ->
-                // Inserted in whatever order the application writes them, which may not be the order
-                // foreign keys would require if each statement were checked individually.
+                // Inserted in whatever order the application writes them, which might not be the
+                // order that foreign keys would require if each statement were checked on its own.
                 val task = db.transact {
                     val alice = db.insert(User("Alice"))
                     db.insert(Task(alice, "Read the plan"))
@@ -292,7 +292,7 @@ class PersistenceTest {
     }
 }
 
-/** Runs [block] against a new database file, which is deleted afterwards even if the block throws. */
+/** Runs [block] against a new database file, which is deleted afterward, even if the block throws. */
 @OptIn(ExperimentalPathApi::class)
 private suspend fun withStore(block: suspend (Path) -> Unit) {
     val directory = createTempDirectory("jetlin-db")
@@ -303,7 +303,7 @@ private suspend fun withStore(block: suspend (Path) -> Unit) {
     }
 }
 
-/** Reads the file through a second connection, the way a backup tool would. */
+/** Returns the number of rows in [table], read through a second connection, as a backup tool would. */
 private fun rowsIn(file: Path, table: String): Int =
     (singleValue(file, "SELECT count(*) FROM $table") as Number).toInt()
 

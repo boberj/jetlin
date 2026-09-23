@@ -9,9 +9,9 @@ import kotlin.test.assertTrue
 /**
  * Tests the processor's validation rules directly.
  *
- * Compiling a file that should fail would only show that the build failed, not that it failed for the
- * right reason or with a helpful message. The messages are what users see, so these tests assert on
- * their wording.
+ * Compiling a file that should fail would show only that the build failed, not that it failed for
+ * the right reason or with a helpful message. Users see the messages, so these tests assert on their
+ * wording.
  */
 class ModelTest {
 
@@ -23,7 +23,8 @@ class ModelTest {
         val message = errors.single()
         assertContains(message, "Todo")
         assertContains(message, "declares no policy")
-        // The message must explain the fix, since whoever sees it is usually encountering the rule for the first time.
+        // The message must explain the fix, because whoever sees it usually meets the rule for the
+        // first time.
         assertContains(message, "Policy<Todo, YourUser>")
         assertContains(message, "owned(Todo::owner)")
     }
@@ -98,8 +99,8 @@ class ModelTest {
 
     @Test
     fun `a nullable reference does not constrain the order`() {
-        // A null reference needs nothing loaded to resolve, so a cycle through a nullable reference can
-        // still be loaded and doesn't count as a cycle.
+        // A null reference needs nothing loaded to resolve, so a cycle through a nullable reference
+        // can still be loaded, and doesn't count as a cycle.
         val a = entity("A", columns = listOf(column("b", reference = "app.B", nullable = true)))
         val b = entity("B", columns = listOf(column("a", reference = "app.A", nullable = true)))
 
@@ -129,7 +130,8 @@ class ModelTest {
         assertEquals("my_things", plural(snakeCase("MyThing")))
         assertEquals("statuses", plural(snakeCase("Status")))
         assertEquals("stories", plural(snakeCase("Story")))
-        // The rule doesn't handle every word: `Person` becomes `persons`. That is why @Entity accepts a table name.
+        // The rule doesn't handle every word: `Person` becomes `persons`. That's why @Entity
+        // accepts a table name.
         assertEquals("persons", plural(snakeCase("Person")))
     }
 }

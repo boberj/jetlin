@@ -1,182 +1,178 @@
 # jetlin-db: implementation plan
 
-**Status:** Phases 1–6 are implemented. §11 was evaluated and deliberately reduced in scope instead of
-being built; see its status note and the last rows of §13. `:samples:demo` was ported to `jetlin-db` and
-then deliberately returned to its own in-memory store; those §13 rows also record what the port cost,
-which is the useful part. `./gradlew build` passes, with 359 tests in the main build and 10 in the
-migration tooling's included build. The browser suite passes 35 of 36 tests, the same result as before
-this work began; the one failure predates it and is unrelated. Nothing from phases 1–6 is outstanding.
-`docs/db.md` describes what was built. This document is the work plan and can be archived.
+This plan is finished, and kept as a record. Phases 1–6 are implemented, and nothing from them is
+outstanding. [§11](#11-external-systems) was evaluated and deliberately reduced in scope instead of
+being built. See its status note and the last rows of [§13](#13-decision-log). `:samples:demo` was
+ported to `jetlin-db` and then deliberately returned to its own in-memory store. Those §13 rows also
+record what the port cost, which is the useful part.
 
-**Audience:** Claude Code, working in the jetlin repository
+When the work finished, `./gradlew build` passed, with 359 tests in the main build and 10 in the
+migration tooling's included build. The browser suite passed 35 of 36 tests, the same result as
+before the work began. The one failure predates it and is unrelated. `docs/db.md` describes what was
+built.
 
-**Background reading:** `docs/architecture.md`, `samples/demo/src/main/kotlin/jetlin/samples/demo/Store.kt`
-
----
+- Audience: Claude Code, working in the Jetlin repository.
+- Background reading: `docs/architecture.md` and
+  `samples/demo/src/main/kotlin/jetlin/samples/demo/Store.kt`.
 
 ## 0. How to use this document
 
-Read sections 1–5 before writing any code. They explain the reasoning behind the design, and without
-them several of the implementation steps look arbitrary or wrong.
+Read sections 1–5 before you write any code. They explain the reasoning behind the design. Without
+them, several of the implementation steps look arbitrary or wrong.
 
 Sections 6 onward describe the work. Each phase is self-contained, ends with a passing build, and adds
-a capability that can be demonstrated. Don't start a phase until the previous phase's acceptance
-criteria pass, and don't combine phases. The ordering exists so that each phase can be abandoned or
+a capability that you can demonstrate. Don't start a phase until the previous phase's acceptance
+criteria pass, and don't combine phases. The order exists so that each phase can be abandoned or
 redesigned without undoing the earlier ones.
 
-When part of this plan turns out to be wrong, which will happen, record the correction in section 13
-instead of quietly doing something different. The next session will only have this file to go on.
+When part of this plan turns out to be wrong, which will happen, record the correction in section 13,
+instead of quietly doing something different. The next session will have only this file to go on.
 
----
+## 1. What's being built
 
-## 1. What is being built
+A storage framework for Jetlin applications. Entities are ordinary Kotlin objects kept in memory,
+backed by Compose snapshot state, and stored durably in SQLite. Reading a field subscribes the
+composable that read it. Writing a field commits the change to disk and recomposes every session that
+read it. Access control is declared for each entity as Kotlin functions, and enforced when code
+obtains data.
 
-A persistence framework for Jetlin applications. Entities are ordinary Kotlin objects kept in memory,
-backed by Compose snapshot state and stored durably in SQLite. Reading a field subscribes the composable
-that read it. Writing a field commits the change to disk and recomposes every session that read it.
-Access control is declared per entity as Kotlin functions and enforced when data is obtained.
+The design goals, in priority order:
 
-Design goals, in priority order:
-
-1. **Ease of use.** One mental model, no cache to invalidate, and no query language to learn for common
+1. Ease of use: one mental model, no cache to invalidate, and no query language to learn for common
    cases.
-2. **Per-record access control** for three patterns: owner only, shared through a property such as a
+2. Access control for each record, in three patterns: owner only, shared through a property such as a
    team, and readable by many but writable by few.
-3. **Type safety** without a separate query DSL that has to be kept consistent with the schema.
-4. **Migrations** that are generated, reviewable and editable.
+3. Type safety, without a separate query DSL that has to be kept consistent with the schema.
+4. Migrations that are generated, reviewable, and editable.
 
-The target is the same as Jetlin's: from a handful to a few thousand users, one node, one process, and
-a working set that fits comfortably in memory.
-
----
+The target is the same as Jetlin's: from a handful to a few thousand users, one node, one process,
+and a working set that fits comfortably in memory.
 
 ## 2. How the design was chosen
 
-This section exists so that later readers don't reopen settled decisions or, worse, reintroduce a
+This section exists so that later readers don't reopen settled decisions or, worse, bring back a
 rejected approach because it looks clever.
 
 ### 2.1 Four candidates were considered
 
 | | Approach | Outcome |
 |---|---|---|
-| A | SQL-first, like SQLDelight: `.sq` files generate typed Kotlin | Rejected. Access control relies on convention: the developer writes each `WHERE` clause by hand and can forget it. |
+| A | SQL-first, like SQLDelight: `.sq` files generate typed Kotlin | Rejected. Access control relies on convention: the developer writes each `WHERE` clause by hand, and can forget it. |
 | B | Kotlin DSL table objects, like Exposed or Ktorm | Rejected as the main model. Table objects have to be maintained alongside the domain classes, and a query-based read path doesn't fit Compose's read tracking. |
-| C | Annotated data classes, KSP-generated typed queries, and the principal as a required context parameter | **Partly adopted.** Its schema declarations and code generation, its migration diffing, and its compile-time principal requirement are all in the final design. |
-| D | Object-graph persistence, like EclipseStore | **Partly adopted.** Its model of reading and writing live objects is in the final design. Its lack of queries and its class-evolution approach to migrations are not. |
+| C | Annotated data classes, typed queries generated by KSP, and the principal as a required context parameter | Partly adopted. Its schema declarations and code generation, its migration diffing, and its compile-time principal requirement are all in the final design. |
+| D | Object-graph storage, like EclipseStore | Partly adopted. Its model of reading and writing live objects is in the final design. Its lack of queries and its class-evolution approach to migrations aren't. |
 
-The final design combines C and D. C's typed, policy-checked entry points are the only way to *obtain*
-an entity, and what you get *back* is one of D's live mutable objects.
+The final design combines C and D. C's typed, policy-checked entry points are the only way to obtain
+an entity, and what you get back is one of D's live mutable objects.
 
 ### 2.2 Why everything is kept in memory instead of using a query-backed ORM
 
-The deciding constraint is that Jetlin composes each session on a single confined dispatcher
-(`Dispatchers.Default.limitedParallelism(1)`; see `CompositionHost`). Lazily loading a relation inside a
+The deciding constraint is that Jetlin composes each session on a single dispatcher,
+`Dispatchers.Default.limitedParallelism(1)`. See `CompositionHost`. Lazily loading a relation inside a
 composable would block that thread. If only part of the data were in memory, reads during composition
-would either have to block or use an asynchronous loading protocol that would dominate the API.
+would either have to block, or use an asynchronous loading protocol that would dominate the API.
 
-Keeping the working set in memory avoids this completely. Following a relation is a field access, there
-is no N+1 problem, and no read ever blocks. The cost is that memory becomes a real limit, shared with
-the session compositions. That is acceptable at the target scale, but the limit must be documented
-clearly instead of being found by surprise.
+Keeping the working set in memory avoids this completely. Following a relation is a field access,
+there's no N+1 problem, and no read ever blocks. The cost is that memory becomes a real limit, shared
+with the session compositions. That's acceptable at the target scale, but the limit must be clearly
+documented, instead of found by surprise.
 
 ### 2.3 Why snapshots are used as transactions
 
-Compose snapshots provide MVCC: isolated reads, atomic apply, and conflict detection on merge. That is
-the same model as a database transaction. Committing to SQLite *before* calling `Snapshot.apply()`
-means a rejected write never becomes visible to any composition, so the browser never shows a value the
-database refused. This is strictly better than the usual approach of updating optimistically and rolling
-back on failure, and it is the strongest technical argument for the design. Don't lose it.
+Compose snapshots provide multiversion concurrency control: isolated reads, atomic apply, and conflict
+detection on merge. That's the same model as a database transaction. Committing to SQLite before
+calling `Snapshot.apply()` means a rejected write never becomes visible to any composition, so the
+browser never shows a value that the database refused. This is strictly better than the usual
+approach of updating optimistically and rolling back on failure, and it's the strongest technical
+argument for the design. Don't lose it.
 
 `CompositionHost.transact` already wraps every event handler in `Snapshot.withMutableSnapshot`, and
 nested mutable snapshots are allowed, so this needs no changes to `jetlin-runtime`.
 
-### 2.4 Why access is checked when a record is obtained, not when it is read
+### 2.4 Why access is checked when a record is obtained, not when it's read
 
 Three options were considered:
 
-- **A. Holding a reference grants access.** Queries, lookups and relation traversal are checked. Once
-  you have an entity, reading its fields isn't checked.
-- **B. Per-principal wrappers.** Every read goes through a wrapper for the current principal and is
+- A. Holding a reference grants access. Queries, lookups, and relation traversal are checked. Once you
+  have an entity, reading its fields isn't checked.
+- B. A wrapper for each principal. Every read goes through a wrapper for the current principal, and is
   checked.
-- **C. Reads require a principal in the type**, through extension properties with context parameters.
+- C. Reads require a principal in the type, through extension properties with context parameters.
 
-**Option A was chosen.** B adds an allocation and a check to every recomposition, and means application
-code handles a wrapper instead of the entity, which complicates identity and equality. C would add the
-principal to the signature of every composable that touches data, which is intrusive on every page, and
-still wouldn't solve transitive visibility (section 5.3).
+Option A was chosen. B adds an allocation and a check to every recomposition, and application code
+would handle a wrapper instead of the entity, which complicates identity and equality. C would add the
+principal to the signature of every composable that touches data, which is intrusive on every page,
+and still wouldn't solve transitive visibility ([§5.3](#53-visibility-changes-through-relations-arent-caught-on-write)).
 
-A is effectively what Rails, Django and Prisma provide once there is a repository layer. Its failure
-mode is a leaked reference, and section 4.8 describes a development-time detector that makes such leaks
-findable.
+A is effectively what Rails, Django, and Prisma provide once there's a repository layer. Its failure
+mode is a leaked reference, and [§4.8](#48-safeguards-for-option-a) describes a development-time
+detector that makes such leaks findable.
 
-**This is the most important decision in the design.** If it is ever reconsidered, most of section 4
+This is the most important decision in the design. If it's ever reconsidered, most of section 4
 changes with it.
-
----
 
 ## 3. What Jetlin already provides
 
-Read these before designing anything. The framework builds on existing mechanisms instead of adding its
-own.
+Read these before designing anything. The framework builds on existing mechanisms instead of adding
+its own.
 
-**`samples/demo/.../Store.kt` already follows this design, without persistence.** `Todo` has
-`var done: Boolean by mutableStateOf(done)`, `TodoStore` is shared by the whole process, and a comment
-notes that a write recomposes readers in other users' sessions. That file shows the model works, and
-porting it is the acceptance test for phase 6.
+`samples/demo/.../Store.kt` already follows this design, without storage. `Todo` has
+`var done: Boolean by mutableStateOf(done)`, the whole process shares `TodoStore`, and a comment notes
+that a write recomposes readers in other users' sessions. That file shows the model works, and porting
+it is the acceptance test for phase 6.
 
-**`CompositionHost.transact`** wraps handlers in `Snapshot.withMutableSnapshot` and waits for idle. One
-click is already one atomic state change that produces one patch.
+`CompositionHost.transact` wraps handlers in `Snapshot.withMutableSnapshot` and waits for the
+recomposition. One click is already one atomic state change that produces one patch.
 
-**`GlobalSnapshotManager`** already registers a global write observer that calls
-`Snapshot.sendApplyNotifications()`. Writes made outside a composition, such as by a background job or a
-load at startup, already reach every recomposer. Nothing new is needed for changes to propagate across
+`GlobalSnapshotManager` already registers a global write observer that calls
+`Snapshot.sendApplyNotifications()`. Writes made outside a composition, such as by a background job or
+a load at startup, already reach every recomposer. Changes need nothing new to propagate across
 sessions.
 
-**One thread per session.** Event handling, recomposition and sending patches can't interleave. That is
-what makes a thread-local principal safe here, which it wouldn't be on a typical async server.
+There's one thread per session. Event handling, recomposition, and sending patches can't interleave.
+That's what makes a thread-local principal safe here, which it wouldn't be on a typical async server.
 
-**`JetlinConfig.attributes { }`** computes session values from the originating HTTP request. Its KDoc
-says it runs again when a WebSocket wakes a hibernated session, specifically so that the principal is
-recomputed instead of being restored from an outdated snapshot. That is exactly the hook the principal
-needs. Read that KDoc; it defines the contract.
+`JetlinConfig.attributes { }` computes session values from the originating HTTP request. Its KDoc says
+that it runs again when a WebSocket wakes a hibernated session, so that the principal is recomputed
+instead of restored from an outdated snapshot. That's exactly the hook the principal needs. Read that
+KDoc, because it defines the contract.
 
-**`rememberSaved` is JSON-based.** Entities can't be stored in session state, only their ids. That
-enforces one of the safeguards automatically.
+`rememberSaved` is based on JSON. Session state can hold only entity IDs, not entities, which enforces
+one of the safeguards automatically.
 
-**`FramePolicy.Paced`** limits how often a session turns state changes into patches, which matters once
+`FramePolicy.Paced` limits how often a session turns state changes into patches, which matters once
 one write can affect many sessions.
 
-**`:conventions`** holds repository-wide rules as Konsist tests. New rules this framework needs go
+`:conventions` holds repository-wide rules as Konsist tests. New rules that this framework needs go
 there.
-
----
 
 ## 4. The design
 
 ### 4.1 Modules
 
-Add to `settings.gradle.kts`:
+Add these to `settings.gradle.kts`:
 
 ```
 :jetlin-db          runtime: Record, columns, policies, identity map, transactions, SQLite
 :jetlin-db-ksp      KSP processor: schema metadata, Draft types, column objects
 :jetlin-db-gradle   Gradle tasks: dbDiff, dbMigrate, dbVerify
-:samples:teams      a multi-user sample that uses all three access patterns
+:samples:teams      a sample with several users that uses all three access patterns
 ```
 
 `:jetlin-db` depends on `:jetlin-runtime` for the snapshot system, not on `:jetlin-html`. The optional
 code that reads the principal from a `CompositionLocal` goes in a small `:jetlin-db-html` module or
 behind an interface, so that `:jetlin-db` can be used and tested without a composition.
 
-`jetlin-` modules use `explicitApi()`, so public declarations need explicit visibility and return types.
+`jetlin-` modules use `explicitApi()`, so public declarations need explicit visibility and return
+types.
 
-**Keep the boundary clean.** `Record`, `Policy`, `View`, `Id` and the cell delegate must not contain
-anything specific to databases: no SQL, connections, transactions or tables. Section 11 moves them into
-a `:jetlin-data` core shared with adapters for external systems, and that should only require moving
-files, not redesigning them. Keeping the boundary clean costs nothing now and makes all the difference
-later.
+Keep the boundary clean. `Record`, `Policy`, `View`, `Id`, and the cell delegate must not contain
+anything specific to databases: no SQL, connections, transactions, or tables. Section 11 moves them
+into a `:jetlin-data` core shared with adapters for external systems, and that should require only
+moving files, not redesigning them. Keeping the boundary clean costs nothing now, and makes all the
+difference later.
 
-**Don't change `:samples:demo` until phase 6.** It is covered by 36 Playwright tests and 16 application
+Don't change `:samples:demo` until phase 6. It's covered by 36 Playwright tests and 16 application
 tests, and breaking it early would make every later failure harder to diagnose.
 
 ### 4.2 Entities
@@ -199,14 +195,14 @@ class Todo(
 - `Record` provides identity (`id`), equality by identity, and the hook that records writes.
 - `column(initial)` is a property delegate backed by `mutableStateOf`. Reads subscribe. Writes go
   through the policy check and are recorded.
-- `reference()` is a delegate holding another `Record`. It is stored as a foreign key and resolved to an
-  object reference when loaded.
+- `reference()` is a delegate that holds another `Record`. It's stored as a foreign key, and resolved
+  to an object reference when loaded.
 - `hasMany<T>()` is the inverse, returning a policy-filtered `View<T>`.
-- Constructor parameters that are also columns are passed to the delegate, as shown. `@Owner` marks the
-  ownership column for the `owned()` shorthand and for migration metadata.
+- Constructor parameters that are also columns are passed to the delegate, as shown. `@Owner` marks
+  the ownership column for the `owned()` shorthand and for migration metadata.
 
-Entities are classes with mutable properties, not immutable data classes. That is inherent to the model
-and was accepted deliberately.
+Entities are classes with mutable properties, not immutable data classes. That's inherent to the
+model, and was accepted deliberately.
 
 ### 4.3 Policies
 
@@ -220,11 +216,11 @@ public interface Policy<T : Record, P : Principal> {
 }
 ```
 
-The principal is a normal parameter, not a context parameter. Only the framework calls policies, never
-application code, so there is nothing to enforce at this level. Context parameters are only for the
-application-facing API.
+The principal is a normal parameter, not a context parameter. Only the framework calls policies,
+never application code, so there's nothing to enforce at this level. Context parameters are only for
+the application-facing API.
 
-Because all data is in memory, a policy is ordinary Kotlin code. There is no SQL translation, no
+Because all data is in memory, a policy is ordinary Kotlin code. There's no SQL translation, no
 expression tree, and no second representation to keep in sync. This is the main benefit of keeping
 everything in memory.
 
@@ -250,10 +246,10 @@ override fun canWrite(record: Todo, column: Column<Todo, *>, principal: User) = 
 ```
 
 `principal.isAdmin` and `principal.teams` read a live `User` entity, not a copy taken at sign-in.
-Section 4.7 explains why that matters.
+[§4.7](#47-reactive-authorization) explains why that matters.
 
-**KSP must fail the build if an `@Entity` has no policy.** An entity without access rules is almost
-always a mistake, and this is the cheapest safety check available.
+KSP must fail the build if an `@Entity` has no policy. An entity without access rules is almost always
+a mistake, and this is the cheapest safety check available.
 
 ### 4.4 Getting a principal
 
@@ -268,17 +264,18 @@ jetlin {
 }
 ```
 
-**The principal is nullable.** An earlier draft of this plan threw `Unauthenticated` here, which is
-wrong: login pages and marketing pages must be reachable. Authentication is a requirement of individual
-*routes*, declared per route as described in 4.11, not a requirement for having a session.
+The principal is nullable. An earlier draft of this plan threw `Unauthenticated` here, which is wrong:
+sign-in pages and marketing pages must be reachable. Authentication is a requirement of individual
+routes, declared for each route as [§4.11](#411-protecting-routes-and-views) describes, not a
+requirement for having a session.
 
 `db.authenticate(id)` is the framework's one privileged entry point. It looks up a `User` without a
-principal, because otherwise there would be no way to establish the first principal. It must be the
-*only* such entry point, and a `:conventions` test should check that nothing else in `:jetlin-db`'s
-public API returns a `Record` without a principal in scope.
+principal, because otherwise there'd be no way to establish the first principal. It must be the only
+such entry point, and a `:conventions` test should check that nothing else in `:jetlin-db`'s public
+API returns a `Record` without a principal in scope.
 
-Context parameters are lexically scoped and aren't passed through a `@Composable () -> Unit`, so views
-need a helper:
+Context parameters are lexically scoped, and they aren't passed through a `@Composable () -> Unit`, so
+views need a helper:
 
 ```kotlin
 @Composable
@@ -290,14 +287,14 @@ public fun WithPrincipal(content: @Composable context(User) () -> Unit) {
 view("/", title = "Todos") { WithPrincipal { TodoListPage() } }
 ```
 
-Context parameters are stable from Kotlin 2.4. **Check `gradle/libs.versions.toml` before starting
-phase 3** and record the result in section 13. If the project uses an earlier version, either upgrade or
-fall back to an explicit `principal: User` parameter on root composables, which is less convenient but
-changes nothing structural.
+Context parameters are stable from Kotlin 2.4. Check `gradle/libs.versions.toml` before you start
+phase 3, and record the result in section 13. If the project uses an earlier version, either upgrade,
+or fall back to an explicit `principal: User` parameter on root composables, which is less convenient
+but changes nothing structural.
 
 ### 4.5 Reading
 
-Root composables need a principal; everything below them doesn't.
+Root composables need a principal. Everything below them doesn't.
 
 ```kotlin
 @Composable
@@ -317,7 +314,7 @@ internal fun TodoRow(todo: Todo) {
 ```
 
 `db.todos` is a `View<Todo>`: a lazy `List<Todo>` over the identity map, filtered by read access. Use
-the standard library's `filter`, `sortedBy` and `groupBy`. There is deliberately no query DSL. At this
+the standard library's `filter`, `sortedBy`, and `groupBy`. There's deliberately no query DSL. At this
 scale, a linear scan over in-memory objects is fine, and declared indexes can be added later without
 changing any call site.
 
@@ -328,7 +325,7 @@ context(principal: User)
 public fun <T : Record> View<T>.find(id: Id<T>): T?    // null, not someone else's record
 ```
 
-`project.todos` returns only the records this principal may read.
+`project.todos` returns only the records that this principal can read.
 
 ### 4.6 Writing
 
@@ -340,13 +337,13 @@ todo.delete()
 ```
 
 `update` takes `context(principal: User)`, so a write without a principal in scope doesn't compile.
-The `Draft` receiver is a generated type per entity, whose setters check the column-level policy, so
-`archived = true` can be refused while `title = "x"` in the same block is allowed.
+The `Draft` receiver is a type generated for each entity, whose setters check the column-level policy,
+so `archived = true` can be refused while `title = "x"` in the same block is allowed.
 
-Plain assignment such as `todo.done = true` was considered and rejected. A property setter can't take a
-context parameter, so it would have to fall back to a runtime check against a thread-local principal.
-`update { }` is only slightly longer and keeps the check at compile time. A future shorthand for
-`owned()` policies could bring back plain assignment, but not in v1.
+Plain assignment, such as `todo.done = true`, was considered and rejected. A property setter can't take
+a context parameter, so it would have to fall back to a runtime check against a thread-local
+principal. `update { }` is only slightly longer, and it keeps the check at compile time. A future
+shorthand for `owned()` policies could bring back plain assignment, but not in the first version.
 
 The transaction:
 
@@ -367,61 +364,63 @@ public suspend fun <T> Db.transact(block: () -> T): T {
 ```
 
 The write observer tracks changes for free, with no persistence context and no separate pass to find
-changed objects. The commit happens before the apply, so a denial or a constraint violation produces no
-patch at all.
+changed objects. The commit happens before the apply, so a refusal or a constraint violation produces
+no patch at all.
 
 ### 4.7 Reactive authorization
 
-Policies read live snapshot state, and reading a filtered `View` subscribes the reader to everything the
-policy read. That makes revocation reactive. When an admin writes `user.teams`, the composables that
-iterated a team-filtered collection are invalidated, and the shared records disappear from that user's
-open page without any invalidation code.
+Policies read live snapshot state, and reading a filtered `View` subscribes the reader to everything
+the policy read. That makes revocation reactive. When an admin writes `user.teams`, the composables
+that iterated a team-filtered collection are invalidated, and the shared records disappear from that
+user's open page, without any invalidation code.
 
-This comes for free and isn't a feature to build, but it needs an explicit test, because it is easy to
-break by accident: for example, by caching a policy result per entity instead of per (entity, principal)
-pair, or by copying the principal at sign-in.
+This comes for free, and isn't a feature to build, but it needs an explicit test, because it's easy
+to break by accident: for example, by caching a policy result for each entity instead of for each pair
+of entity and principal, or by copying the principal at sign-in.
 
-It also means **policies run during recomposition.** They must be cheap, pure and free of side effects.
-Document this, and consider a Konsist rule that policy bodies don't call suspending functions or do IO.
+It also means that policies run during recomposition. They must be cheap, pure, and free of side
+effects. Document this, and consider a Konsist rule that policy bodies don't call suspending functions
+or do I/O.
 
 ### 4.8 Safeguards for option A
 
 These make "holding a reference grants access" workable. Each is cheap, and all of them are required.
 
-1. No unchecked `get(id)` is reachable from application code. `authenticate` is the only exception.
+1. Application code can't reach an unchecked `get(id)`. `authenticate` is the only exception.
 2. Relation collections are filtered by policy, accepting the cost on every read.
 3. Entities can't be put in `rememberSaved`. Its JSON format already prevents this, but assert it.
-4. Writes are checked again, because a reference can outlive the check that produced it. Writes are rare
-   enough that the cost doesn't matter.
-5. There is exactly one way to bypass the checks. It is named `unsafe`, easy to search for, and logs at
-   WARN.
-6. **The leak detector.** In development and test builds, each entity records the principal that
-   obtained it, and every read checks that the current principal still matches. It is compiled out of
-   production builds behind a flag. This turns a leaked reference from an invisible problem into a test
-   failure with a stack trace pointing to where the record was obtained.
+4. Writes are checked again, because a reference can outlive the check that produced it. Writes are
+   rare enough that the cost doesn't matter.
+5. There's exactly one way to bypass the checks. It's named `unsafe`, it's easy to search for, and it
+   logs at `WARN`.
+6. The leak detector. In development and test builds, each entity records the principal that obtained
+   it, and every read checks that the current principal still matches. A flag compiles it out of
+   production builds. This turns a leaked reference from an invisible problem into a test failure,
+   with a stack trace that points to where the record was obtained.
 
 Item 6 is the most valuable item in this section. It doesn't make option A safe, but it makes option
-A's actual failure mode findable, which is the difference between a model you can ship and one you can
+A's real failure mode findable, which is the difference between a model you can ship and one you can
 only hope is correct.
 
 ### 4.9 Storage
 
-Use SQLite through `org.xerial:sqlite-jdbc`, with WAL mode, `synchronous=NORMAL`, `foreign_keys=ON` and a
-`busy_timeout`. It is a single file accessed in process, with no database server.
+Use SQLite through `org.xerial:sqlite-jdbc`, with WAL mode, `synchronous=NORMAL`, `foreign_keys=ON`,
+and a `busy_timeout`. It's a single file accessed in the process, with no database server.
 
-The process owns the file: take an exclusive lock and record `PRAGMA data_version` at startup, so that
-another process writing the file is detected with an error instead of silently corrupting the in-memory
-graph.
+The process owns the file. Take an exclusive lock, and record `PRAGMA data_version` at startup, so
+that another process writing the file is detected with an error, instead of corrupting the in-memory
+graph without anyone noticing.
 
-At startup, load the tables into the identity map, resolve references and build declared indexes. At the
-target scale this takes well under a second, and it can be made lazy per table later if needed.
+At startup, load the tables into the identity map, resolve references, and build declared indexes. At
+the target scale, this takes well under a second, and it can be made lazy for each table later if
+needed.
 
 Litestream is the recommended backup approach. It needs no code changes, only a note in the deployment
 documentation.
 
 ### 4.10 Migrations
 
-KSP generates the schema from the entity classes into a snapshot file that is checked into the
+KSP generates the schema from the entity classes into a snapshot file that's checked into the
 repository.
 
 ```
@@ -430,29 +429,30 @@ repository.
 ./gradlew dbVerify                        # CI: fails if entities and snapshot disagree
 ```
 
-Generated migrations are SQL files that people read and may edit. SQLite's `ALTER TABLE` only supports
-adding, dropping and renaming columns and renaming tables. Everything else needs the 12-step table
-rebuild, which the generator must produce automatically. Views that reference a rebuilt table are the
-known pitfall.
+Generated migrations are SQL files that people read and might edit. SQLite's `ALTER TABLE` supports
+only adding, dropping, and renaming columns, and renaming tables. Everything else needs the 12-step
+table rebuild, which the generator must produce automatically. Views that reference a rebuilt table
+are the known pitfall.
 
-Destructive changes need an explicit acknowledgement in the migration file instead of being generated
-silently. Startup fails if the schema doesn't match.
+Destructive changes need an explicit acknowledgement in the migration file, instead of being generated
+without a word. Startup fails if the schema doesn't match.
 
 ### 4.11 Protecting routes and views
 
 Route protection involves three separate questions that are easy to mix up:
 
-1. **Is there a principal at all?** Authentication. Answered in 4.4, before any composition exists.
-2. **May this principal use this route?** A coarse, role-based check, such as for `/admin/*`.
-3. **Does the record this route names exist for this principal?** For example, `/todo/42` where 42
-   belongs to someone else. `find` already returns null (4.5); what's missing is how the *route*
-   responds.
+1. Is there a principal at all? That's authentication, answered in
+   [§4.4](#44-getting-a-principal), before any composition exists.
+2. Can this principal use this route? That's a coarse, role-based check, such as for `/admin/*`.
+3. Does the record that this route names exist for this principal? For example, `/todo/42`, where 42
+   belongs to someone else. `find` already returns `null` ([§4.5](#45-reading)). What's missing is how
+   the route responds.
 
-The third is the one that leaks in practice, and the demo currently has the insecure pattern:
+The third is the one that leaks in practice, and the demo has the insecure pattern:
 `view("/todo/{id}") { TodoStore.find(pathParam("id")) }` is a classic insecure direct object reference.
 
-**Guards are declared in the route table, not in the view body.** A check inside the view only runs
-after the view has started.
+Declare guards in the route table, not in the view body. A check inside the view runs only after the
+view has started.
 
 ```kotlin
 view("/login",       title = "Sign in")                       { LoginPage() }
@@ -460,8 +460,8 @@ view("/todos",       title = "My todos", requires = SignedIn) { WithPrincipal { 
 view("/admin/users", title = "Users", requires = { it.isAdmin }) { WithPrincipal { AdminUsers() } }
 ```
 
-A guard returns a value, never throws. A view that throws ends the session and reloads the page (the
-demo's error test relies on that behaviour), and guards must not use that path.
+A guard returns a value, and never throws. A view that throws ends the session and reloads the page,
+and the demo's error test relies on that behavior, so guards must not use that path.
 
 ```kotlin
 public sealed interface Access {
@@ -471,11 +471,11 @@ public sealed interface Access {
 }
 ```
 
-`SignedIn` returns `Redirect("/login?next=$url")`. **A failed role check returns `NotFound`, not a
-forbidden page**, unless the route's existence is already public. A 403 on `/admin/users` confirms that
-an admin panel exists. Default to hiding things, and make revealing them an explicit choice.
+`SignedIn` returns `Redirect("/login?next=$url")`. A failed role check returns `NotFound`, not a
+forbidden page, unless the route's existence is already public. A `403` on `/admin/users` confirms
+that an admin panel exists. Hide things by default, and make revealing them an explicit choice.
 
-**Entity-bound routes are the most important part.** The route looks up its own subject:
+Routes for one record are the most important part. The route looks up its own subject:
 
 ```kotlin
 view(
@@ -487,16 +487,16 @@ view(
 }
 ```
 
-`find` is policy-checked (4.5), so it returns null for a record this principal may not read, and null
-becomes `NotFound` before the view is composed. The body receives a non-null `Todo` that has already
-passed the read check.
+`find` is policy-checked ([§4.5](#45-reading)), so it returns `null` for a record that this principal
+can't read, and `null` becomes `NotFound` before the view is composed. The body receives a non-null
+`Todo` that has already passed the read check.
 
-This removes the whole class of bug instead of guarding against it: the view never receives the path
-parameter, so there is no way to look up an arbitrary id by hand. It also fixes the title, which would
+This removes the whole class of bug, instead of guarding against it: the view never receives the path
+parameter, so there's no way to look up an arbitrary ID by hand. It also fixes the title, which would
 otherwise put another user's data into `<head>` before the body checked anything.
 
-**Eviction comes for free.** The guard is evaluated inside the composition and reads live snapshot
-state, so revocation is reactive (4.7):
+Moving a user off a page comes for free. The guard runs inside the composition and reads live
+snapshot state, so revocation is reactive ([§4.7](#47-reactive-authorization)):
 
 ```kotlin
 @Composable
@@ -511,150 +511,161 @@ internal fun Guarded(route: Route, content: @Composable () -> Unit) {
 ```
 
 `principal.isAdmin` is a cell. When an admin revokes the role, the write invalidates `Guarded`, which
-re-evaluates to `Redirect` and moves the user off the page they're on, without polling or a logout
-broadcast. Entity-bound routes behave the same way: if a project is unshared, anyone viewing one of its
-todos is moved to the not-found page.
+now returns `Redirect` and moves the user off the page they're on, without polling or a logout
+broadcast. Routes for one record behave the same way: if a project is unshared, anyone viewing one of
+its todos is moved to the not-found page.
 
-**Navigation links use the same guard.** Hiding a link and blocking its route are the same decision,
-and two copies of the rule would drift apart.
+Navigation links use the same guard. Hiding a link and blocking its route are the same decision, and
+two copies of the rule would drift apart.
 
 ```kotlin
 IfPermitted("/admin/users") { NavLink("/admin/users") { Text("Users") } }
 ```
 
-**Test the three ways of reaching a route separately.**
+Test the three ways of reaching a route separately:
 
-- **Deep link.** The guard runs before the server-side render, and a redirect is a 302.
-- **Navigation within a session.** No page load. The guard runs in the composition and redirects on
-  the client.
-- **Waking from hibernation.** `attributes { }` runs again, so the principal is recomputed from the new
-  connection. But the session resumes on whatever URL it was on, so **the guard for the current route
-  must be re-evaluated on wake, not only when a route is entered.** Otherwise a user whose role was
-  revoked while the session was hibernated would resume on `/admin/users`. This is the case most likely
-  to be missed.
+- A deep link. The guard runs before the server-side render, and a redirect is a `302`.
+- Navigation within a session. There's no page load. The guard runs in the composition and redirects
+  on the client.
+- Waking from hibernation. `attributes { }` runs again, so the principal is recomputed from the new
+  connection. But the session resumes on whatever URL it was on, so the guard for the current route
+  must run again on wake, not only when a route is entered. Otherwise, a user whose role was revoked
+  while the session was hibernated would resume on `/admin/users`. This is the case most likely to be
+  missed.
 
-**Guards are not the security boundary; record policies are.** A guard improves the user experience
-and avoids rendering a page that would be empty. If a route guard is ever the only protection for some
-data, forgetting that guard leaks it, and the design has fallen back to candidate A from 2.1. Keep the
-layers in order: `find` is checked, traversal is checked, `update` is checked, and guards are added on
-top, never instead. State this in the module KDoc, because "the route is protected" is a tempting reason
-to skip the policy.
-
----
+Guards aren't the security boundary. Record policies are. A guard improves the user experience and
+avoids rendering a page that would be empty. If a route guard is ever the only protection for some
+data, forgetting the guard leaks the data, and the design has fallen back to candidate A from
+[§2.1](#21-four-candidates-were-considered). Keep the layers in order: `find` is checked, traversal is
+checked, `update` is checked, and guards are added on top, never instead. State this in the module
+KDoc, because "the route is protected" is a tempting reason to skip the policy.
 
 ## 5. Known limitations: don't treat these as bugs
 
 ### 5.1 Holding a reference grants access
-A deliberate choice. See 2.4 and 4.8.
+
+This is a deliberate choice. See [§2.4](#24-why-access-is-checked-when-a-record-is-obtained-not-when-its-read)
+and [§4.8](#48-safeguards-for-option-a).
 
 ### 5.2 Memory is the limit
-All data is kept in memory and shares the heap with live session compositions, which
-`samples/demo:benchmark` already measures. Extend that benchmark to report the graph's size next to
-the sessions' size (phase 5), so the limit is visible before it is reached.
 
-Section 11.3 eases this considerably. An asynchronous cell renders a placeholder instead of blocking, so
-rarely used tables could be moved out of memory without changing the model. Keeping everything in
-memory is an optimization, not a foundation of the design. Don't use asynchronous cells for the
-database in v1, because a SQLite read that takes microseconds shouldn't make a placeholder flicker on
-screen, but keep in mind that the option exists.
+All data is kept in memory, and shares the heap with live session compositions, which
+`samples/demo:benchmark` already measures. Extend that benchmark to report the graph's size next to
+the sessions' size (phase 5), so the limit is visible before it's reached.
+
+[§11.3](#113-lazy-loading-is-a-cell-that-starts-empty) eases this considerably. An asynchronous cell
+renders a placeholder instead of blocking, so rarely used tables could move out of memory without
+changing the model. Keeping everything in memory is an optimization, not a foundation of the design.
+Don't use asynchronous cells for the database in the first version, because a SQLite read that takes
+microseconds shouldn't make a placeholder flicker on screen, but keep in mind that the option exists.
 
 ### 5.3 Visibility changes through relations aren't caught on write
-Moving a project to another team changes who can read its todos, but only `Project`'s policy is
-evaluated. Catching this would require policies to declare what their visibility depends on, and the
-write path to propagate the change. **Out of scope for v1.** Document it in the module KDoc.
+
+Moving a project to another team changes who can read its todos, but only `Project`'s policy runs.
+Catching this would require policies to declare what their visibility depends on, and the write path
+to propagate the change. This is out of scope for the first version. Document it in the module KDoc.
 
 ### 5.4 No second layer of enforcement
-SQLite has no row-level security, so the framework is the only layer enforcing access. Arbitrary Kotlin
-policies can't be translated to Postgres RLS, so an application that later needs a second layer won't
-get one automatically.
+
+SQLite has no row-level security, so the framework is the only layer that enforces access. Arbitrary
+Kotlin policies can't be translated to Postgres row-level security, so an application that later needs
+a second layer won't get one automatically.
 
 ### 5.5 Write conflicts between sessions
-Two sessions writing the same entity can conflict when their snapshots are applied, and a plain
-`mutableStateOf` rejects the losing apply. Decide per column whether to use last-write-wins through a
-merge policy, or to report the conflict. Phase 4.
 
-### 5.6 Ad-hoc queries are linear scans
-No indexes in v1. That is acceptable at the target scale; only revisit it based on measurements.
+Two sessions that write the same entity can conflict when their snapshots are applied, and a plain
+`mutableStateOf` rejects the losing apply. For each column, decide whether to use last-write-wins
+through a merge policy, or to report the conflict. That's for phase 4.
 
----
+### 5.6 Ad hoc queries are linear scans
+
+There are no indexes in the first version. That's acceptable at the target scale. Revisit it only
+based on measurements.
 
 ## 6. Implementation phases
 
-Each phase ends with `./gradlew build` passing and the stated capability demonstrable.
+Each phase ends with `./gradlew build` passing, and the stated capability demonstrable.
 
-### Phase 1: Records and columns, no persistence
+### Phase 1: Records and columns, without storage
 
-Create `:jetlin-db`, without SQLite, policies or KSP.
+Create `:jetlin-db`, without SQLite, policies, or KSP.
 
-- `Record` base class: identity, `id`, and `equals`/`hashCode` by identity.
-- `column(initial)` property delegate backed by `mutableStateOf`.
-- `reference()` delegate.
-- `IdentityMap`: a registry of live records by type and id.
+- A `Record` base class: identity, `id`, and `equals` and `hashCode` by identity.
+- A `column(initial)` property delegate backed by `mutableStateOf`.
+- A `reference()` delegate.
+- `IdentityMap`: a registry of live records by type and ID.
 - `View<T>`: a lazy `List<T>` over the identity map, unfiltered for now.
 
-**Acceptance:** a test composes a view that reads `record.field`, writes the field from outside the
+Acceptance: a test composes a view that reads `record.field`, writes the field from outside the
 composition, and asserts that exactly one op is produced. Follow the harness style in
-`jetlin-html/src/test/.../HtmlApplierTest.kt`: assert exact op lists, not `contains`.
+`jetlin-html/src/test/.../HtmlApplierTest.kt`, and assert exact op lists, not what they contain.
 
-This phase proves the reactivity works before anything is persisted, which is the right order. If this
+This phase proves that reactivity works before anything is stored, which is the right order. If this
 doesn't work, nothing else matters.
 
-### Phase 2: SQLite persistence and snapshot transactions
+### Phase 2: SQLite storage and snapshot transactions
 
-- A SQLite connection with the pragmas from 4.9, the exclusive lock, and the `data_version` check.
+- A SQLite connection with the pragmas from [§4.9](#49-storage), the exclusive lock, and the
+  `data_version` check.
 - Record writes with `Snapshot.takeMutableSnapshot(writeObserver = ...)`.
-- `Db.transact` exactly as in 4.6.
-- Load at startup: read tables into the identity map and resolve references.
-- A hand-written schema for now; KSP comes in phase 3.
+- `Db.transact`, exactly as in [§4.6](#46-writing).
+- Load at startup: read tables into the identity map, and resolve references.
+- A hand-written schema for now. KSP comes in phase 3.
 
-**Acceptance:**
+Acceptance:
+
 1. A write inside `transact` survives a process restart.
-2. A `transact` whose block throws leaves the database unchanged **and produces no ops**. Assert both.
-   This is the property from 2.3, and it is the one most likely to be lost later.
+2. A `transact` whose block throws leaves the database unchanged and produces no ops. Assert both.
+   This is the property from [§2.3](#23-why-snapshots-are-used-as-transactions), and it's the one
+   most likely to be lost later.
 3. Two `LiveView`s over one identity map both recompose after a single write.
 
-### Phase 3: KSP: schema, Draft types, column objects
+### Phase 3: KSP: schema, Draft types, and column objects
 
 Create `:jetlin-db-ksp`.
 
 - Read `@Entity`, `@Owner`, and the column and reference delegates.
 - Generate a schema descriptor, a column object like `Todos`, and a `Draft` type for each entity.
-- **Fail the build for an `@Entity` without a policy.**
+- Fail the build for an `@Entity` without a policy.
 - Write the schema snapshot file that phase 5 uses.
 
-Check the Kotlin version for context parameter support here (4.4), and record the result in section 13.
+Check the Kotlin version for context parameter support here ([§4.4](#44-getting-a-principal)), and
+record the result in section 13.
 
-**Acceptance:** an entity with a typo in a column name fails to compile, and an entity without a policy
-fails to compile with a message naming the entity.
+Acceptance: an entity with a typo in a column name fails to compile, and an entity without a policy
+fails to compile, with a message that names the entity.
 
 ### Phase 4: Policies and access checks
 
 - The `Policy` interface and the `owned()` shorthand.
-- Check `canRead` in `View`, `find` and relation traversal.
+- Check `canRead` in `View`, `find`, and relation traversal.
 - `update { }` with a `context(principal)` parameter and column-level `canWrite`.
 - `add` and `delete`, checked with `canCreate` and `canDelete`.
 - The `unsafe` escape hatch, with logging.
-- The leak detector (4.8, item 6), behind a build flag.
-- Decide on and implement the conflict policy (5.5).
-- Route guards (4.11): `Access`, `requires`, the entity-bound `subject`, `Guarded`, `IfPermitted`, and
-  re-evaluating guards on wake from hibernation.
-- `setPrincipal` in `:jetlin-testing`, so guards and policies can be tested headlessly.
+- The leak detector ([§4.8](#48-safeguards-for-option-a), item 6), behind a build flag.
+- Decide on and implement the conflict policy
+  ([§5.5](#55-write-conflicts-between-sessions)).
+- Route guards ([§4.11](#411-protecting-routes-and-views)): `Access`, `requires`, the `subject` of a
+  route for one record, `Guarded`, `IfPermitted`, and running guards again on wake from hibernation.
+- `setPrincipal` in `:jetlin-testing`, so guards and policies can be tested without a browser.
 
-**Acceptance:**
+Acceptance:
+
 1. Policies are pure functions that can be tested without a database:
    `assertFalse(Todo.canWrite(todo, Todos.archived, teammate))`.
 2. An `update { }` call without a principal in scope doesn't compile. Assert this with a
    compile-testing fixture or, failing that, a Konsist rule.
-3. **Reactive revocation**: a session reading a team-shared record stops seeing it when an admin writes
-   `user.teams`, with no invalidation code. This is 4.7, and any caching added later could quietly break
-   it, so it needs a test now.
+3. Reactive revocation: a session reading a team-shared record stops seeing it when an admin writes
+   `user.teams`, with no invalidation code. This is [§4.7](#47-reactive-authorization), and caching
+   added later could break it without anyone noticing, so it needs a test now.
 4. The leak detector throws when a record obtained by one principal is read by another.
-5. An entity-bound route for a record the principal may not read shows not-found, and **the page title
-   doesn't reveal the record**. Test the title explicitly, since it is rendered before the body.
+5. A route for a record the principal can't read shows the not-found page, and the page title doesn't
+   reveal the record. Test the title explicitly, because it's rendered before the body.
 6. Guards give the same result for a deep link, navigation within a session, and waking from
    hibernation. The wake case gets its own test: revoke a role while the session is hibernated, wake
    it, and assert the redirect.
 7. Revoking a role removes the user from an open page, with no invalidation code:
+
    ```kotlin
    @Test
    fun `losing admin evicts an open admin page`(): Unit = runViewTest(url = "/admin/users") {
@@ -668,48 +679,46 @@ fails to compile with a message naming the entity.
    }
    ```
 
-### Phase 5: Migrations, tooling and benchmark
+### Phase 5: Migrations, tooling, and benchmark
 
-- `:jetlin-db-gradle` with `dbDiff`, `dbMigrate` and `dbVerify`.
-- Generating SQLite's 12-step table rebuild, including preserving indexes, triggers and views.
+- `:jetlin-db-gradle`, with `dbDiff`, `dbMigrate`, and `dbVerify`.
+- Generating SQLite's 12-step table rebuild, including preserving indexes, triggers, and views.
 - Acknowledgement for destructive changes.
 - Schema verification at startup.
-- Extend `samples/demo:benchmark` to report the graph's size next to the sessions' size (5.2).
+- Extend `samples/demo:benchmark` to report the graph's size next to the sessions' size
+  ([§5.2](#52-memory-is-the-limit)).
 
-**Acceptance:** adding a column, dropping a column, changing a column's type, and adding a foreign key
+Acceptance: adding a column, dropping a column, changing a column's type, and adding a foreign key
 each produce a correct migration, and the entity can be stored and loaded with the migrated database.
 The type change and the foreign key use the rebuild path, so test them explicitly.
 
 ### Phase 6: Samples and documentation
 
-- `:samples:teams`: a multi-user sample using all three access patterns from 4.3, with two logins and a
-  visible team share. This shows the design working in a readable way.
-- Port `:samples:demo` to `jetlin-db` **last**, after everything else passes. Its 36 Playwright tests
-  and 16 application tests are the regression suite, so keep `TodoStore`'s observable behaviour
-  identical and they should pass unchanged. If `Main.kt` needs changes beyond the store, something in
-  the design is wrong: stop and record it in section 13.
-- `docs/db.md`, in the style of `docs/architecture.md`: what it does, why, and what is missing.
+- `:samples:teams`: a sample with several users that uses all three access patterns from
+  [§4.3](#43-policies), with two sign-ins and a visible team share. This shows the design working in
+  a readable way.
+- Port `:samples:demo` to `jetlin-db` last, after everything else passes. Its 36 Playwright tests and
+  16 application tests are the regression suite, so keep `TodoStore`'s observable behavior identical,
+  and they should pass unchanged. If `Main.kt` needs changes beyond the store, something in the
+  design is wrong: stop, and record it in section 13.
+- `docs/db.md`, in the style of `docs/architecture.md`: what it does, why, and what's missing.
 - Add an assertion to `:jetlin-testing` that a principal's page contains nothing from another
   principal's records. The op-recording machinery already knows which nodes changed, so this is mostly
   wiring.
 
----
-
 ## 7. Repository conventions
 
-- `explicitApi()` is enabled for every `jetlin-` module. Declare visibility and return types.
-- **Every test function with an expression body must declare `: Unit`.** JUnit silently skips test
-  functions that don't, and `:conventions` fails the build if one is found. See
+- `explicitApi()` is on for every `jetlin-` module. Declare visibility and return types.
+- Every test function with an expression body must declare `: Unit`. JUnit skips test functions that
+  don't, without any warning, and `:conventions` fails the build if it finds one. See
   `conventions/src/test/kotlin/jetlin/conventions/TestConventionsTest.kt` for the reasoning.
-- Framework tests assert exact op lists, not `contains`. An update that changes more of the page than
-  necessary must fail.
-- `:jetlin-testing` doesn't depend on any test framework; its assertions throw `AssertionError`
+- Framework tests assert exact op lists, not what the lists contain. An update that changes more of
+  the page than necessary must fail.
+- `:jetlin-testing` doesn't depend on a test framework, and its assertions throw `AssertionError`
   directly. Anything added there must do the same.
-- Comments explain *why*, where the reasoning isn't obvious. Use the existing code as the style guide,
+- Comments explain why, where the reasoning isn't obvious. Use the existing code as the style guide,
   especially `Session.kt` and `GlobalSnapshotManager.kt`. Don't describe what the code does.
 - New repository-wide rules go in `:conventions` as Konsist tests, not in review checklists.
-
----
 
 ## 8. New conventions this framework needs
 
@@ -717,51 +726,46 @@ Add these to `:conventions` once they can be checked:
 
 1. No public function in `:jetlin-db` returns a `Record` without a principal in scope, except
    `authenticate`.
-2. Policy implementations don't call suspending functions or do IO.
+2. Policy implementations don't call suspending functions or do I/O.
 3. Every `@Entity` has a companion object implementing `Policy`. Enforce this in KSP if Konsist can't
    see it.
 
----
-
 ## 9. (empty)
 
-This section is intentionally empty.
-
----
+This section is deliberately empty.
 
 ## 10. Open questions
 
-- **Kotlin version.** Context parameters are stable from 2.4. Check `gradle/libs.versions.toml` and
+- Kotlin version: context parameters are stable from 2.4. Check `gradle/libs.versions.toml`, and
   record the answer in section 13.
-- **Conflict policy** (5.5): last-write-wins per column, or report the conflict? Decide in phase 4.
-- **Where the principal's `CompositionLocal` lives.** In a `:jetlin-db-html` module, or as an interface
-  in `:jetlin-db` that the application implements? Prefer the interface if it keeps `:jetlin-db` from
+- Conflict policy ([§5.5](#55-write-conflicts-between-sessions)): last-write-wins for each column, or
+  report the conflict? Decide in phase 4.
+- Where the principal's `CompositionLocal` lives: in a `:jetlin-db-html` module, or as an interface in
+  `:jetlin-db` that the application implements? Prefer the interface if it keeps `:jetlin-db` from
   depending on `:jetlin-html`.
-- **Whether `:samples:demo` gets authentication** when it is ported, or keeps one implicit principal.
-  One principal keeps the Playwright suite unchanged and is probably right; `:samples:teams` is where
-  multi-user behaviour is shown.
-
----
+- Whether `:samples:demo` gets authentication when it's ported, or keeps one implicit principal. One
+  principal keeps the Playwright suite unchanged, and is probably right. `:samples:teams` is where
+  behavior with several users is shown.
 
 ## 11. External systems
 
-**Status:** evaluated, costed, and deliberately not built. The core idea, a value that arrives late and
-is held as snapshot state, was implemented as `jetlin.runtime.Fetch` and `jetlin.runtime.rememberAction`,
-with a working adapter in `:samples:teams`, and is documented in `docs/architecture.md` §8. The two
-modules this section designs (`:jetlin-data` and `:jetlin-remote`), the shared gate and the authority
-dimension of the cache key were **not** built. The last rows of §13 explain why, and name the three
-situations that would change the decision. Read this section as a design that was evaluated, not as
-pending work.
+This section was evaluated, costed, and deliberately not built. The core idea, a value that arrives
+late and is held as snapshot state, was implemented as `jetlin.runtime.Fetch` and
+`jetlin.runtime.rememberAction`, with a working adapter in `:samples:teams`, and it's documented in
+`docs/architecture.md` §8. The two modules that this section designs, `:jetlin-data` and
+`:jetlin-remote`, the shared gate, and the authority component of the cache key weren't built. The
+last rows of §13 explain why, and name the three situations that would change the decision. Read this
+section as a design that was evaluated, not as pending work.
 
 ### 11.1 The split
 
-Extend the core and keep adapters separate. The dividing line is the write path.
+Extend the core, and keep adapters separate. The write path is the dividing line.
 
-The read side and the authorization model apply equally well to external APIs. The write side doesn't,
-for one reason: `snapshot.dispose()` can't undo a POST request. Committing before applying (2.3) only
-works because SQLite can reject a write before anything becomes visible, and an external system offers
-no such opportunity. Putting both behind one write API would force the database to give up its best
-property to match the weaker one.
+The read side and the authorization model apply equally well to external APIs. The write side
+doesn't, for one reason: `snapshot.dispose()` can't undo a `POST` request. Committing before applying
+([§2.3](#23-why-snapshots-are-used-as-transactions)) works only because SQLite can reject a write
+before anything becomes visible, and an external system offers no such opportunity. Putting both
+behind one write API would force the database to give up its best property to match the weaker one.
 
 ```
 :jetlin-data     identity, cells, Policy, gating, leak detector, View
@@ -769,28 +773,32 @@ property to match the weaker one.
 :jetlin-remote   + async cells, commands, staleness, credentials
 ```
 
-### 11.2 What is shared
+### 11.2 What's shared
 
-Sections 4.2, 4.3, 4.5 and 4.8 move to `:jetlin-data` largely unchanged, because none of them is really
-about databases:
+Sections 4.2, 4.3, 4.5, and 4.8 move to `:jetlin-data` largely unchanged, because none of them is
+really about databases:
 
-- `Record`, the identity map and `Id<T>`. A GitHub repository has an identity just as a database row does.
+- `Record`, the identity map, and `Id<T>`. A GitHub repository has an identity, just as a database
+  row does.
 - The `column()` delegate: named snapshot state that doesn't care where its value came from.
-- `Policy<T, P>`. Nothing in it is database-specific. `canRead(repo, principal)` asks the same question
-  as `canRead(todo, principal)`.
-- Access checks when obtaining records, and `context(principal)`, with the same compile-time guarantee.
+- `Policy<T, P>`. Nothing in it is specific to databases. `canRead(repo, principal)` asks the same
+  question as `canRead(todo, principal)`.
+- Access checks when obtaining records, and `context(principal)`, with the same compile-time
+  guarantee.
 - `View<T>` and policy-filtered collections.
-- The leak detector, which matters even more here, since external data is more often sensitive.
-- Reactive revocation (4.7), which works the same way for the same reason.
+- The leak detector, which matters even more here, because external data is more often sensitive.
+- Reactive revocation ([§4.7](#47-reactive-authorization)), which works the same way for the same
+  reason.
 
-Only 4.6, 4.9 and 4.10 (transactions, keeping data in memory, and migrations) are specific to databases.
-The benefit is that an application reasons about access in one place, wherever its data lives.
+Only sections 4.6, 4.9, and 4.10, transactions, keeping data in memory, and migrations, are specific
+to databases. The benefit is that an application reasons about access in one place, wherever its data
+lives.
 
 ### 11.3 Lazy loading is a cell that starts empty
 
-No new machinery is needed. A value that hasn't been fetched yet is snapshot state holding `Loading`, a
-coroutine fills it in, and `GlobalSnapshotManager` already publishes writes made outside a composition.
-Reading subscribes, and the arrival triggers recomposition.
+No new machinery is needed. A value that hasn't been fetched yet is snapshot state that holds
+`Loading`, a coroutine fills it in, and `GlobalSnapshotManager` already publishes writes made outside a
+composition. Reading subscribes, and the arrival triggers recomposition.
 
 ```kotlin
 @Composable
@@ -805,12 +813,12 @@ fun RepoCard(repo: Repo) {
 
 Reading the value starts the fetch: the first read schedules it, and later reads share the one in
 progress. Composition never blocks, which was the constraint that ruled out lazy loading for the
-database in 2.2.
+database in [§2.2](#22-why-everything-is-kept-in-memory-instead-of-using-a-query-backed-orm).
 
 ### 11.4 Writes are commands, not assignments
 
-There is no change tracking here. A property assignment can't represent something like "charge this
-card", which takes arguments, can partly succeed, and can't be batched into a snapshot apply.
+There's no change tracking here. A property assignment can't represent something like "charge this
+card," which takes arguments, can partly succeed, and can't be batched into a snapshot apply.
 
 ```kotlin
 context(principal: User)
@@ -818,7 +826,7 @@ suspend fun Repo.addLabel(name: String): Label
 ```
 
 Jetlin's event handlers are synchronous (`transact` takes `() -> T`), so a command can't be awaited in
-`onClick`. It has to be launched, which means its in-progress state has to be modelled. That is useful
+`onClick`. It has to be launched, which means its in-progress state has to be modeled. That's useful
 anyway, for disabling the button and showing an error message.
 
 ```kotlin
@@ -832,11 +840,11 @@ addLabel.error?.let { P({ classes("error") }) { Text(it.message) } }
 ```
 
 Default to pessimistic updates: nothing changes until the call returns. Optimistic updates should be
-opt-in with an explicit revert, because they bring back exactly the flicker on rejection that 2.3
-avoids.
+opt-in, with an explicit revert, because they bring back exactly the flicker on rejection that
+[§2.3](#23-why-snapshots-are-used-as-transactions) avoids.
 
-A useful consequence: because `transact` takes a non-suspending lambda, **an external call can't be
-awaited inside a database transaction.** That is the correct rule, and the compiler already enforces it.
+A useful consequence: because `transact` takes a lambda that can't suspend, an external call can't be
+awaited inside a database transaction. That's the correct rule, and the compiler already enforces it.
 Where writing a record and calling an API must happen atomically, use an outbox: record the intent in
 the transaction, and let a background worker make the call and reconcile.
 
@@ -845,56 +853,57 @@ the transaction, and let a background worker make the call and reconcile.
 There are two modes, and the adapter interface must support both from the start, because the cache key
 depends on which one is used:
 
-- **Application token.** The external system sees a single identity and doesn't authorize anything on
+- Application token. The external system sees a single identity, and doesn't authorize anything on
   the user's behalf. `Policy` is the only thing between a user and every other user's data in that
-  system. This is the default and the v1 target.
-- **User token,** through OAuth. The external system enforces access independently, which gives real
-  defense in depth: the one thing SQLite can't provide (5.4). Prefer it where the API supports it.
+  system. This is the default, and the target for the first version.
+- User token, through OAuth. The external system enforces access independently, which gives real
+  defense in depth, the one thing SQLite can't provide
+  ([§5.4](#54-no-second-layer-of-enforcement)). Prefer it where the API supports it.
 
-**The risk, which has no database equivalent:** the identity map is shared by the whole process. If
-`Repo("acme/private")` is fetched with Alice's token and cached under `(Repo, "acme/private")`, Bob reads
-data fetched with Alice's access. The policy check passes, because the object is in the map and Bob's
-policy only knows about the resource, not how it was obtained.
+The risk, which has no database equivalent: the whole process shares the identity map. If
+`Repo("acme/private")` is fetched with Alice's token and cached under `(Repo, "acme/private")`, Bob
+reads data fetched with Alice's access. The policy check passes, because the object is in the map, and
+Bob's policy knows only about the resource, not how it was obtained.
 
-The identity map key therefore needs a third component:
+So the identity map key needs a third component:
 
 ```kotlin
 public data class CellKey(val type: KClass<*>, val id: Any, val authority: AuthorityId)
 ```
 
-Sources using the application credential share one authority and are cached once. Sources using user
-credentials are cached per user, which costs memory and loses sharing. **This isn't optional, and it is
-the most important thing to get right in `:jetlin-remote`.** It is also the kind of bug that no
-single-user test can catch, so its test must involve two users.
+Sources that use the application credential share one authority, and are cached once. Sources that
+use user credentials are cached for each user, which costs memory and loses sharing. This isn't
+optional, and it's the most important thing to get right in `:jetlin-remote`. It's also the kind of bug
+that no single-user test can catch, so its test must involve two users.
 
 Defaulting to the application token doesn't remove this requirement. The key includes an authority
-either way; with a shared application token it is simply the same for everyone. Adding it now costs one
-field. Adding it later would mean auditing every cached read.
+either way. With a shared application token, it's the same for everyone. Adding it now costs one field.
+Adding it later would mean auditing every cached read.
 
 ### 11.6 Staleness
 
-Database data doesn't go stale, because the process owns the file (4.9). External data goes stale all
-the time, so `:jetlin-remote` needs things `:jetlin-db` doesn't: a TTL per cell, revalidation on read,
-invalidation when a command completes, and a decision about whether to show stale data while
-revalidating.
+Database data doesn't go stale, because the process owns the file ([§4.9](#49-storage)). External data
+goes stale all the time, so `:jetlin-remote` needs things that `:jetlin-db` doesn't: a TTL for each
+cell, revalidation on read, invalidation when a command completes, and a decision about whether to show
+stale data while revalidating.
 
-SWR and React Query solve this problem; their documentation is a good reference for the terminology.
-The difference here is that the underlying mechanism is snapshot state rather than a store with
-subscriptions, so delivering updates is already solved: a revalidation that writes a cell recomposes
-exactly the readers of that cell, in every session, without any subscription bookkeeping.
+SWR and React Query solve this problem, and their documentation is a good reference for the
+terminology. The difference here is that the underlying mechanism is snapshot state instead of a store
+with subscriptions, so delivering updates is already solved: a revalidation that writes a cell
+recomposes exactly the readers of that cell, in every session, without any subscription bookkeeping.
 
 ### 11.7 When to do this, and what to do now
 
-Complete phases 1–4 first, then extract `:jetlin-data` from the existing code while writing the first
-adapter. Extracting a shared core from a single implementation is guesswork; extracting it from one
-working implementation while writing a second is not.
+Complete phases 1–4 first, then extract `:jetlin-data` from the existing code while you write the first
+adapter. Extracting a shared core from a single implementation is guesswork. Extracting it from one
+working implementation while writing a second isn't.
 
-For now, the only thing to do is keep the module boundary clean (4.1). It costs little, and it decides
-whether the extraction is a matter of moving files or a redesign.
+For now, the only thing to do is keep the module boundary clean ([§4.1](#41-modules)). It costs little,
+and it decides whether the extraction is a matter of moving files or a redesign.
 
 ### 11.8 Acceptance criteria for this phase
 
-1. Two users reading the same user-credentialed resource get separate cells, and neither sees the
+1. Two users reading the same resource with user credentials get separate cells, and neither sees the
    other's data. The test uses two principals, because it can't fail with one.
 2. Reading an unfetched cell renders a placeholder without blocking the session's thread, and the
    arrival produces exactly one op.
@@ -903,157 +912,156 @@ whether the extraction is a matter of moving files or a redesign.
 4. An external call inside `transact` doesn't compile.
 5. `:jetlin-data` doesn't depend on `:jetlin-db`, checked in `:conventions`.
 
----
-
 ## 12. Documentation
 
-This repository documents itself unusually thoroughly, and that is worth preserving rather than
-treating as a chore for the end. Existing documents: `README.md`, `docs/architecture.md`,
+This repository documents itself unusually thoroughly, and that's worth preserving, instead of treating
+it as a chore for the end. The existing documents are `README.md`, `docs/architecture.md`,
 `docs/comparison.md`, `ci/README.md`, and the KDoc, which carries most of the reasoning.
 
 ### 12.1 Style
 
-Read `docs/architecture.md` before writing any of this. The conventions that matter:
+Read `docs/architecture.md` before you write any of this. The conventions that matter:
 
-- **Explain why, not what.** The architecture document explains why text nodes need markers, not just
+- Explain why, not what. The architecture document explains why text nodes need markers, not only
   that they have them. Record the reason next to every design decision that might look arbitrary.
-- **Give evidence.** "Break `key(todo.id)` and fifteen of sixteen tests still pass" is worth more than a
-  paragraph saying the test matters. Prefer a number or an observation someone can reproduce.
-- **List what is missing, ordered by how likely each gap is to block a release.** §13 of the
-  architecture document is the model. An honest list of limitations is more useful than a feature list
-  that isn't.
-- **Use numbered sections separated by `---`, and code examples that would actually compile.**
+- Give evidence. "Break `key(todo.id)`, and fifteen of sixteen tests still pass" is worth more than a
+  paragraph saying the test matters. Prefer a number or an observation that someone can reproduce.
+- List what's missing, in order of how likely each gap is to block a release. §13 of the architecture
+  document is the model. An honest list of limitations is more useful than a feature list that isn't.
+- Use numbered sections, and code examples that would compile.
 
 ### 12.2 What to write
 
-**`docs/db.md`** is new, written in the style of `docs/architecture.md`, and is the main deliverable.
-It shouldn't be this plan reformatted: this plan is a work order to be deleted or archived when the work
-is done, while `docs/db.md` describes what exists. It should cover:
+`docs/db.md` is new, written in the style of `docs/architecture.md`, and it's the main deliverable. It
+shouldn't be this plan reformatted: this plan is a work order to delete or archive when the work is
+done, while `docs/db.md` describes what exists. It should cover:
 
 1. How it works: the identity map, cells, snapshots as transactions, and one diagram.
-2. Entities and policies, with the three access patterns from 4.3.
-3. Getting a principal, and protecting routes (4.11).
+2. Entities and policies, with the three access patterns from [§4.3](#43-policies).
+3. Getting a principal, and protecting routes ([§4.11](#411-protecting-routes-and-views)).
 4. Reading and writing, and why `update { }` instead of assignment.
-5. Reactive authorization (4.7). This is the framework's most distinctive feature and deserves its own
-   section with a worked example.
-6. Storage, keeping data in memory, and the memory limit (5.2), with real benchmark numbers.
+5. Reactive authorization ([§4.7](#47-reactive-authorization)). This is the framework's most
+   distinctive feature, and it deserves its own section with a worked example.
+6. Storage, keeping data in memory, and the memory limit ([§5.2](#52-memory-is-the-limit)), with real
+   benchmark numbers.
 7. Migrations.
-8. **What is missing**, carrying over the substance of 5.1 through 5.6: holding a reference grants
-   access, visibility changes through relations aren't caught, there is no second layer of enforcement,
-   and there are no indexes.
+8. What's missing, carrying over the substance of sections 5.1 through 5.6: holding a reference grants
+   access, visibility changes through relations aren't caught, there's no second layer of
+   enforcement, and there are no indexes.
 
-Carry the *reasoning* from sections 2 and 5 of this plan into it. A future reader needs those parts
-most, and would otherwise have to reconstruct them.
+Carry the reasoning from sections 2 and 5 of this plan into it. A future reader needs those parts most,
+and would otherwise have to reconstruct them.
 
-**`README.md`**, four changes:
-- Add `jetlin-db`, `jetlin-db-ksp` and `jetlin-db-gradle` to the Modules table.
-- Add a short data section after "Testing your own views", in the same example-driven style as the rest
-  of the README. The `todo.update { done = !done }` example and the reactive revocation example are
-  enough; link to `docs/db.md` for the rest.
-- Update the Status section. It currently points to `docs/architecture.md` §13 for what is missing, and
-  should point to `docs/db.md` as well.
-- Update the "Try it" section if `:samples:teams` is worth running.
+Make four changes to `README.md`:
 
-**`docs/architecture.md` §13**: the current text mentions "a database subscription" as a possible
-example of a coroutine writing state. That was hypothetical and is now real. More importantly, §13's
-"Blocks a real application" list should drop whatever this framework now covers, and the "Blocks
-scaling beyond one machine" list needs a new item: **the in-memory graph belongs to one process, so a
-second node would hold its own copy and the two would drift apart.** That is a bigger obstacle to
-running on multiple nodes than `SessionStore`, and it should be listed next to it.
+- Add `jetlin-db`, `jetlin-db-ksp`, and `jetlin-db-gradle` to the modules table.
+- Add a short data section after the section on testing views, in the same example-driven style as
+  the rest of the README. The `todo.update { done = !done }` example and the reactive revocation
+  example are enough. Link to `docs/db.md` for the rest.
+- Update the status section. It points to `docs/architecture.md` §13 for what's missing, and should
+  point to `docs/db.md` as well.
+- Update the section on trying the samples, if `:samples:teams` is worth running.
 
-**`docs/comparison.md`**: Phoenix has Ecto, Rails has Active Record, and Blazor has EF Core. The
-comparison should explain where `jetlin-db` stands relative to them: no query language, policies as
-functions instead of scopes, reactive revocation that none of them have, and no second layer of
-enforcement, which all of them have.
+In `docs/architecture.md` §13, the text mentions "a database subscription" as a possible example of a
+coroutine writing state. That was hypothetical, and it's now real. More importantly, §13's list of what
+blocks a real application should drop whatever this framework now covers, and the list of what blocks
+scaling beyond one machine needs a new item: the in-memory graph belongs to one process, so a second
+node would hold its own copy, and the two would drift apart. That's a bigger obstacle to running on
+several nodes than `SessionStore`, and it should be listed next to it.
 
-**KDoc**: the module-level KDoc for `:jetlin-db` should carry the most important warnings, because it is
-what an IDE shows and what an agent reads first:
-- Guards are not the security boundary (4.11).
-- Holding a reference grants access (2.4).
-- Policies run during recomposition and must be pure and cheap (4.7).
-- Visibility changes through relations aren't caught on write (5.3).
+`docs/comparison.md` should explain where `jetlin-db` stands relative to Ecto, Active Record, and EF
+Core: no query language, policies as functions instead of scopes, reactive revocation that none of
+them have, and no second layer of enforcement, which all of them have.
 
-**`ci/github-actions.yml`**: add `dbVerify` to the build job, so the entities and the schema snapshot
-can't drift apart, in the same way the existing check ensures `jetlin.js` is up to date.
+The module-level KDoc for `:jetlin-db` should carry the most important warnings, because it's what an
+IDE shows and what an agent reads first:
+
+- Guards aren't the security boundary ([§4.11](#411-protecting-routes-and-views)).
+- Holding a reference grants access
+  ([§2.4](#24-why-access-is-checked-when-a-record-is-obtained-not-when-its-read)).
+- Policies run during recomposition, and must be pure and cheap ([§4.7](#47-reactive-authorization)).
+- Visibility changes through relations aren't caught on write
+  ([§5.3](#53-visibility-changes-through-relations-arent-caught-on-write)).
+
+In `ci/github-actions.yml`, add `dbVerify` to the build job, so the entities and the schema snapshot
+can't drift apart, in the same way that the existing check ensures `jetlin.js` is up to date.
 
 ### 12.3 When
 
-Write documentation **in the phase that creates the feature**, not all at once in phase 6. Phase 6
-covers the samples, the README changes and a final pass over `docs/db.md`, but a phase that adds a
-concept without documenting it isn't finished. The KDoc warnings in particular belong in phase 4, next
-to the code they describe.
+Write documentation in the phase that creates the feature, not all at once in phase 6. Phase 6 covers
+the samples, the README changes, and a final pass over `docs/db.md`, but a phase that adds a concept
+without documenting it isn't finished. The KDoc warnings in particular belong in phase 4, next to the
+code they describe.
 
-If `docs/db.md` and the implementation ever disagree, either the implementation is wrong or the
+If `docs/db.md` and the implementation ever disagree, either the implementation is wrong, or the
 document is out of date. Either way, record it in section 13 first.
-
----
 
 ## 13. Decision log
 
-Add entries here as the work progresses, with the date, the decision and the reasoning. If this plan
-turns out to be wrong about something, record it here instead of quietly working around it; the next
-session will only have this file.
+Add entries here as the work progresses, with the date, the decision, and the reasoning. If this plan
+turns out to be wrong about something, record it here, instead of quietly working around it. The next
+session will have only this file.
 
 | Date | Decision | Reasoning |
 |---|---|---|
-| 2026-09-12 | **Kotlin is 2.4.10, so context parameters are available.** This answers the §10 open question; no fallback to an explicit `principal` parameter is needed. | From `gradle/libs.versions.toml`. For reference, the rest of the toolchain: Compose runtime 1.12.0, Gradle 9.7.1, JVM toolchain 24. |
-| 2026-09-12 | **The phase gate is `./gradlew check`, not `./gradlew build`.** | `:samples:demo:distTar` fails on a clean checkout, before any of this work: `org.jetbrains.compose.runtime:runtime-desktop` and `androidx.compose.runtime:runtime-desktop` both produce a file named `runtime-desktop-1.12.0.jar`, and the application plugin's distribution puts both into one flat `lib/` directory. The problem arrived with the Compose 1.12.0 upgrade (17cefdb). It isn't fixed here because §4.1 says not to touch `:samples:demo` until phase 6, and removing the duplicate in its build script is a packaging concern for the sample, not part of this framework. `check` runs every test in every module, which is what a phase gate needs. Fix it in phase 6, either with `duplicatesStrategy` or by depending on `androidx.compose.runtime:runtime` directly. |
-| 2026-09-12 | Phase 1: **record ids are allocated at construction, from a per-class sequence shared by the whole process**, not at insert and not per database. | A record must be usable as a `key` before it is stored, so an id that only exists after an insert doesn't work. The sequence is per process rather than per database because §4.9 already says the process owns the file exclusively. Loading moves the sequence past the highest id on disk, so ids can't collide after a restart. Tests that open several databases share the sequence, which only means there are gaps in the ids. |
-| 2026-09-12 | Phase 1: **`IdentityMap`'s members that return records are `internal`.** | §4.8 item 1 says no unchecked `get(id)` may be reachable from application code. Making that true from the first commit costs nothing; fixing it after a public unchecked `find` has shipped does. The public, policy-checked API is added on top of these members in phase 4. |
-| 2026-09-12 | Phase 1: **the write-recording hook is postponed to phase 2**, where `transact` uses it. | §4.2 lists it as part of `Record`, but a hook that nothing uses is unreachable code whose purpose the next reader would have to guess. Phases are meant to be self-contained, and this item was simply listed in the wrong phase. |
-| 2026-09-12 | Phase 2: **`transact` is not `suspend`.** §4.6's sketch declares `suspend fun <T> Db.transact(block: () -> T): T`. | Transactions must be callable from event handlers, and a handler is `() -> Unit`: `onClick { todo.update { … } }` in §4.6 can't await anything. It also never needs to suspend: the JDBC driver is blocking and the snapshot work is synchronous. Keeping the block non-suspending also matters separately for §11.4, because it makes an external call inside a transaction fail to compile. |
-| 2026-09-12 | Phase 2: **the cell records writes, instead of `Snapshot.takeMutableSnapshot(writeObserver = …)`** as §4.6 sketches. | The write observer receives a `StateObject`, and there is no public way to get from it back to the cell or record that owns it. That would need a process-wide side table mapping state objects to cells, kept up to date as records are deleted. A cell already knows its record and its name, so recording in the setter needs less machinery *and* is more precise: the flush updates only the columns that changed, instead of every column of a changed record. The plan's actual claim, change tracking with no persistence context and no separate pass to find changes, still holds. |
-| 2026-09-12 | Phase 2: **writing stored state without an open transaction throws** instead of silently not persisting. | This is the same guarantee seen from the other side. If a field can change in memory without reaching disk, nobody notices until a restart loses the value. Records that haven't been stored yet are exempt, because their insert will include whatever values their fields have by then. Phase 4's `update { }` opens a transaction when none is open, so application code never hits this error by accident. |
-| 2026-09-12 | Phase 2: **no `PRAGMA locking_mode=EXCLUSIVE`; a writer in another process is detected with `PRAGMA data_version` instead.** | §4.9 asks for both an exclusive lock and Litestream, and the two are incompatible: in WAL mode an exclusive lock also blocks readers, so Litestream couldn't read the file it is supposed to back up. `data_version` doesn't change for this connection's own commits but does change for other connections' commits, so checking it before each flush detects an outside writer one commit late, with an error, while leaving readers free. Detection one commit late is worth more than a backup approach that doesn't work. |
-| 2026-09-12 | Phase 2: **tables are loaded in declaration order, and a reference to a table declared later fails with an error** naming both tables. | Resolving references against records already loaded needs no second pass and no placeholder objects, and the error says exactly what to reorder. The cost is that a reference cycle (`User.team` / `Team.owner`) can't be loaded in v1. Revisit when something needs it; a second pass that fills in nullable references is the obvious approach and doesn't change the model. |
-| 2026-09-12 | Phase 2: **a snapshot conflict on `apply()` after a successful commit is a known gap**, left for phase 4 (§5.5). | Committing before applying hides a database rejection, but it can't hide a *snapshot* rejection: if two sessions write the same cell, the losing session's commit has already happened when `apply().check()` throws. This needs the conflict policy decision, so it belongs in phase 4 rather than being half-solved here. |
-| 2026-09-12 | Phase 3: **KSP 2.3.12 works with Kotlin 2.4.10.** | KSP now has its own version numbers (no longer `<kotlin>-<ksp>`), so there is no need to wait for a KSP release built for a specific Kotlin version. The processor module only depends on `symbol-processing-api`. |
-| 2026-09-12 | Phase 3: **`Policy` and `Principal` are declared in phase 3 instead of phase 4.** | Phase 3 has to fail the build for an `@Entity` without a policy, which isn't possible before the type exists. Only the declarations move; `owned()`, the access checks and the draft's column checks stay in phase 4. |
-| 2026-09-12 | Phase 3: **a column is either a delegated property or a primary-constructor property.** A plain `var` is a build error, and a plain `val` with a backing field is a warning. | KSP can see that a property is delegated, but not the delegate *expression*, so it tells `column()` and `reference()` apart by the property's type, not by which function was called. A property without a delegate can't be a cell. A plain `var` is an error rather than a warning because writes to it would appear on screen but never reach the database, since nothing records them, and nobody would notice until a restart. |
-| 2026-09-12 | Phase 3: **load order is generated, not declared.** The schema object lists tables in topological order of their non-null references, and a cycle is a build error naming both entities. | Phase 2 left the load order to the application (§4.9 ordering), which is an easy mistake to make and pointless now that something knows the reference graph. The limitation on cycles from the phase 2 entry still applies, but it is now caught at compile time instead of at startup. |
-| 2026-09-12 | Phase 3: **the schema snapshot is written to generated resources (`jetlin-db-schema.json`), not into the source tree.** | §4.10 wants a snapshot checked into the repository, and that is still the plan. But having KSP write files that people are expected to review is a bad idea: it races the IDE, and a generated file that appears in code review looks as if it can be edited. Phase 5's `dbDiff` and `dbVerify` compare this generated file with the committed copy, which is also exactly what `dbVerify` has to do in CI. |
-| 2026-09-12 | Phase 3: **there is no end-to-end test that invalid code fails to compile.** The rules and their messages are unit-tested against the processor's model instead. | The repository has no compile-testing dependency, and adding one (kotlin-compile-testing with a KSP2 runner) is a large dependency for the benefit. What matters about "no policy fails the build" is the rule and its message, and those are tested directly; that `logger.error` fails a build is KSP's responsibility, not this processor's. Revisit in phase 5 if the Gradle tooling needs a compile harness anyway. |
-| 2026-09-12 | Phase 3: **the generated draft writes directly for now; column-level policy checks are added to its setters in phase 4.** | The draft exists *because* of the column check, so the type is incomplete until phase 4. But generating it now proves the approach works, and phase 4 then extends one generator function instead of introducing the type. |
-| 2026-09-12 | Phase 4: **the conflict policy is last-write-wins per cell, and transactions are serialized.** This answers the §5.5 / §10 question. | These are two parts of one answer. Every cell uses a merge policy that keeps the value being applied, so concurrent writes resolve instead of throwing. That matters because commits happen before applies: a *rejected apply* would leave the database ahead of memory, with the commit already done. And `transact` holds a per-database lock for the whole block, which it has to anyway, because one JDBC connection can't run two transactions and `autoCommit` applies to the whole connection. Serializing writes also makes commits and applies happen in the same order, which is what makes last-write-wins match what is on disk, rather than being merely a preference. Reads aren't serialized and never block. |
-| 2026-09-12 | Phase 4: **a refused column fails the whole `update { }`** instead of being skipped. | §4.6 says "`archived = true` can be denied while `title = \"x\"` in the same block succeeds", which reads as if each column is applied separately. What is actually true is that each column is *checked* separately. Silently skipping a refused write is exactly the failure this design is meant to prevent, a field changed on screen but not on disk. So a refusal throws and rolls back the transaction, and nothing is committed or applied. |
-| 2026-09-12 | Phase 4: **the leak detector needs a thread-local principal, and only checks reads where one is set.** | §4.8 item 6 says every read checks that the current principal still matches. A record keeps the *set* of principals that obtained it through the gate (a single principal would give false positives on every legitimately shared record), and a cell read checks the thread's current principal against that set, attaching the stack trace of the acquisition as the exception's cause. A read without a current principal can't be checked, because there is no way to know whose read it is. So this catches leaks in tests and wherever a session sets the principal, not everywhere. `System.getProperty("jetlin.db.leakDetector")` enables it, and `:jetlin-db`'s test task sets it. |
-| 2026-09-12 | Phase 4: **generated code is the only caller of the gate.** `Gate`, `databaseOf` and the draft constructors are public so that generated accessors in the application's own module can reach them. | A Konsist rule enforces what matters, that nothing public returns a record without a principal in its signature, and lists its two exceptions (`Row.reference` and `Row.referenceOrNull`, used by the loader at startup when no principal exists yet). §4.4's `authenticate` isn't needed as a special case: loading is the privileged entry point, and once `attributes { }` has a `User`, it is obtained through the same checked lookup as everything else. |
-| 2026-09-12 | Phase 4: **`View` gained `add`, and inverse relations are generated as extension properties** (`project.tasks`), not as the `hasMany()` delegate §4.2 sketches. | A delegate is a property getter, and a getter can't take the principal as a parameter. It could only read a thread-local principal, which is the runtime check §4.6 rejects for assignment, for the same reason. A generated extension property with a context parameter keeps the compile-time guarantee and looks the same at the call site. `View.add` is the one member returning a record without a principal in its signature: the view was created by the gate and already carries the principal, and the Konsist rule is worded to allow this deliberately. |
-| 2026-09-12 | Phase 4: **route guards live in `:jetlin-html`, not in a `:jetlin-db-html` module.** This answers that §10 question. | A guard is a pure function of the request and the attributes `attributes { }` added to it, so it needs nothing from the database. `Principals(PrincipalKey)` is generic over the application's principal type. `:jetlin-db` therefore stays independent of the UI, and guards also work for applications whose principal isn't a stored record. |
-| 2026-09-12 | Phase 4: **a route's document title comes from the composition**, through a `TitleSink` that the view provides. | §4.11 requires that the title can't reveal a record the body refused to show, and the title is rendered before the body. The route table can't know the title of an entity-bound route, and resolving the subject twice (once for `<head>` and once for the body) gives two chances for them to disagree. So `Subject` sets the title after resolving the record, and the page render uses whatever the composition set. **Known gap:** navigating within a session to an entity-bound route still shows the route table's static title, because the title is sent in `ServerMessage.Navigate`, and changing the protocol would mean rebuilding `jetlin.js`. Page loads and waking from hibernation show the correct title; in-session navigation shows the fallback. |
-| 2026-09-12 | Phase 4: **a failed guard is an HTTP 404, and a redirect is a 302 decided before any session is created.** | §4.11's "default to hiding things" applies to the status code as well as to the page. Answering redirects in the HTTP layer also avoids composing a whole session for someone who is about to be sent elsewhere. The same guard then runs again inside the composition, which is what makes revocation and hibernation work. |
-| 2026-09-12 | Phase 5: **the command is `./gradlew dbDiff --name=share_todos_by_team`**, not the positional argument §4.10 shows. | Gradle tasks take options, not positional arguments. The name is also optional: without one, the migration is named after the first change it contains, which is better than refusing to generate it. |
-| 2026-09-12 | Phase 5: **the runner, not the generated SQL, ensures indexes, triggers and views are preserved.** | §4.10 asks the generator to handle this, but the generator only has two schema files. It can't see what a particular database contains, and an index a deployment added by hand is exactly what would be lost. So `dbMigrate` records every index, trigger and view before applying a migration, checks that they all still exist afterwards, and rolls back if any are missing, naming them and suggesting the fix (add the `CREATE` statement to the migration). That turns the known pitfall, a view over a rebuilt table, into a failed migration instead of a missing view nobody notices. It also runs `PRAGMA foreign_key_check` before committing, which catches rows a new foreign key would have orphaned. |
-| 2026-09-12 | Phase 5: **a destructive migration contains a marker line that must be deleted** before `dbMigrate` will run it. | This is §4.10's "explicit acknowledgement in the migration file". A marker in the file can be reviewed and shows up in the diff, whereas a `--force` flag leaves no trace once it has been typed. |
-| 2026-09-12 | Phase 5: **adding a *required* reference to an existing table rebuilds the table instead of using `ALTER`.** | SQLite only adds a column with a foreign key if its default is NULL, so a required reference can't be added in place. Adding the constraint to an existing column needs a rebuild for the same reason a type change does. Both use one code path, with one acceptance test each. |
-| 2026-09-12 | Phase 5: **startup verification compares the declared tables with `PRAGMA table_info` and `foreign_key_list`**, and also fails on a stored column that no entity declares. | §4.10 only asks for startup to fail on a mismatch. An extra column is worth failing on too, because it means either a partly applied migration or a field removed from an entity without a migration, and both need a decision rather than a default. One SQLite quirk had to be handled in both the runtime and the tests: an `INTEGER PRIMARY KEY` is reported as nullable, because it aliases the rowid, where inserting NULL means "allocate an id". |
-| 2026-09-12 | Phase 5: **the acceptance criterion "the resulting database round-trips the entity" is met in two parts**, because the entities and the migration engine are in different modules. | The plugin's tests check that a migrated database's schema matches the new snapshot and that the rows survived. `:jetlin-db`'s tests check that `Db.open` accepts a matching schema, loads the entity, and rejects every kind of mismatch. Together they cover the round trip. Doing it in one test would require running KSP inside the Gradle module, or putting the tooling inside the runtime. |
-| 2026-09-12 | Phase 5: **reporting the graph size in the benchmark moves to phase 6.** | It needs an in-memory graph to measure, which requires `:samples:demo` to be ported, and §4.1 says not to touch the demo before phase 6. Measuring an empty graph would give a meaningless number. |
-| 2026-09-12 | Phase 5: **the plugin makes `check` depend on `dbVerify`** in any module that applies it. | This follows the same idea as the existing check that `jetlin.js` is up to date, and it means `ci/github-actions.yml` needs no new step: the existing `./gradlew build` runs it once a module applies the plugin. |
-| 2026-09-12 | Phase 6: **`:samples:demo` is not ported, because of the plan's own stop condition.** *(Superseded the same day by the port, which was then reverted on 2026-09-13. The demo ends up where this entry left it, but for different reasons. The analysis was right about what the design requires and wrong about what it costs.)* | §6 says that if `Main.kt` needs changes beyond the store, something in the design is wrong and the work should stop. It does: every page that writes needs a principal in lexical scope (`update { }` takes it as a context parameter), so each of the demo's five views would need a `context(principal:)` signature and a `WithPrincipal` wrapper, plus a synthetic principal for an application with no users. That isn't a flaw in the design, since the compile-time guarantee is the point, but it is more than the store, and the plan asked to be told. Two more reasons not to force it: the demo would need a `position` column to keep its move-up/move-down behaviour, since a `View` has no ordering beyond insertion order; and the regression suite the port was meant to run against couldn't run in this environment (see the next entry). `:samples:teams` demonstrates the design instead, with 12 application tests that run two principals against one database. |
-| 2026-09-12 | Phase 6: **the Playwright suite couldn't run at first.** Chromium installs but can't start without `libnspr4.so`, which needs root to install. *(Resolved: the dependency was installed and the suite now runs, with 35 of 36 passing, unchanged from before this work.)* | All 36 failures were the browser failing to launch, not the application. The server side was checked by hand instead: every demo route still renders with the right `<title>`, including through the new title path, and the 16 application tests, the headless equivalent of the browser suite, pass. Anyone picking this up with a working browser should run `cd e2e && npx playwright test` against `:samples:demo:run` before trusting the changes this work made to `:jetlin-html` and `:jetlin-server-ktor`. |
-| 2026-09-12 | Phase 6: **`./gradlew build` passes again**, so the phase gate recorded at the top of this log is back to what the plan assumed. | The duplicate `runtime-desktop-1.12.0.jar` came from depending on `org.jetbrains.compose.runtime:runtime`, a redirect that resolves to its own `runtime-desktop` artifact *as well as* androidx's. Depending on `androidx.compose.runtime:runtime` directly gives one artifact, one dependency chain and no duplicates. That is better than a `duplicatesStrategy`, which would have left two jars with the same name in a flat `lib/`. All tests still pass. |
-| 2026-09-12 | Phase 6: **`:jetlin-db-gradle` is an included build, not a subproject.** | A project can't apply a plugin built by a sibling subproject, because the plugin has to be on the build's classpath first, and the point of phase 6 was for `:samples:teams` to apply the real plugin rather than a copy of its logic. The downside is that the root build's lifecycle tasks don't run the included build's tasks, so the root project registers `build` and `check` tasks that depend on the included build's. Those two commands still cover everything. |
-| 2026-09-12 | Phase 6: **a second privileged entry point, `insertUnchecked`, only works inside `unsafe { }`.** | §4.4 wants exactly one privileged entry point and §4.8 wants exactly one escape hatch, and seeding needs both at once: nobody can be allowed to create the first user in an empty database. Requiring `unsafe`, which logs a warning with its reason every time, keeps it to one bypass rather than two, and the `:conventions` test lists it next to `authenticate`. |
-| 2026-09-12 | Phase 6: **the benchmark settles the per-record figure but leaves the per-session figure open.** A record in memory costs **1.1 kB**, stable from 20 records to 20,000. *(The session figure is settled in a later entry: it was an artifact of the benchmark's own baseline subtraction.)* | That is the figure §5.2 asked for, and it puts the memory limit in the hundreds of thousands of records, not the thousands. The session figure is *not* settled: the teams sample's todo page measures 2.3 MB per session, against 128 kB for a comparable page in `samples/demo`. Investigation ruled out the gate, the `View` and the policy: a plain `List<Todo>` of five records measures the same 340 kB as the policy-checked one, and an empty session measures 12 kB. So the cause is something about a keyed list in this measurement, not anything `jetlin-db` added. It needs a heap profile rather than a heap difference. `docs/db.md` §6 says so instead of quoting an unexplained number. |
-| 2026-09-12 | Phase 6: **`:jetlin-testing` gained three things**: `setAttribute` (for the principal), `title()` and `assertNotDisclosed(…)`. | The first two make guards testable headlessly. `setAttribute` also covers the hibernation wake case: a session that wakes recomputes its attributes, so changing the principal and then waking is exactly what a role revoked during hibernation looks like. `assertNotDisclosed` implements §6's "nothing derived from another principal's records". It checks the rendered HTML rather than the node tree, because an attribute or a title can reveal data just as text can. |
-| 2026-09-12 | Phase 6: **`:samples:demo` was ported after all**, and the stop condition it hit turned out to need one line of API, not a design change. *(Reverted the next day by the owner's decision; see the last entries. The cost figures here still stand, which is why this is still recorded.)* | The earlier entry stands as reasoning. What changed is that a working browser made the regression suite runnable, and the port then cost less than the analysis predicted. All 16 application tests and all 36 browser tests pass *unchanged*. Three things made that possible: the demo's principal is a constant (`object Visitor : Principal`; a principal doesn't have to be a record), so the store supplies it and no page signature mentions it; a `position` column replaces the list order that a `View` doesn't have, and `move` swaps positions in one transaction; and seeding can now choose ids, because both test suites hard-code `/todo/1`. The only changes outside the store are the three writes that used to be plain assignments, `todo.done = it` and two in the save handler, which is the design working as intended rather than a compromise. |
-| 2026-09-12 | Phase 6: **seeding can choose a record's id** (`insertUnchecked(record, id = 1)`), which moves the sequence past it. | The demo's reset has to produce ids 1, 2 and 3 every time, because `/todo/1` appears in both test suites and in the markup they assert on. Fixtures often need a specific id, for example a seeded record that something links to by number, so this is worth one parameter. It can't cause collisions: the sequence moves past a chosen id, and an id already in memory is rejected. |
-| 2026-09-12 | Phase 6: **the port found a real bug in the write flush.** Inserts ran before deletes, so re-seeding a record with an id that had just been deleted failed on the primary key. | Fixed by ordering deletes first, then inserts, then updates, and by setting `PRAGMA defer_foreign_keys=ON` for the transaction. The pragma is what makes a single fixed order possible. With foreign keys checked per statement, a transaction that creates both a row and a row pointing at it, and a transaction that points a row away from something it then deletes, need opposite orders. Deferred to commit, neither order matters. A primary key *can't* be deferred, which is why deletes have to come first. Two tests cover both parts. |
-| 2026-09-12 | Phase 6: **the session memory anomaly is resolved: it came from the teams benchmark's method.** | Measured with the same harness, the demo's synthetic 113-node page costs 130 kB per session and its real 202-node list page costs 332 kB, about 1.6 kB per node, and nothing to do with the database. The teams benchmark's 2.3 MB came from subtracting a baseline it had created and closed, which the demo's harness doesn't do. The teams benchmark now only measures the graph, which it does well: **1.09 kB per record, stable from 2,000 to 20,000 records**. `samples/demo:benchmark` reports a graph figure next to its session figures, as §5.2 asked. A policy-filtered scan does add to a session's read set, by about 30 bytes per scanned record: a real cost, but an order of magnitude below the cost of rendering one. |
-| 2026-09-12 | **One browser test fails, and the failure predates this work.** `markup that cannot be adopted falls back to a full render`: after a deliberately broken adoption, a click no longer updates the page. | Confirmed by running the suite against `b724ff1`, before any of this work: 35 passed and 1 failed, identically. Left alone because it is a bug in `jetlin.js`'s client-side fallback path, unrelated to persistence, and fixing it means changing the TypeScript and rebuilding the committed bundle. It deserves its own change. |
-| 2026-09-13 | **`:samples:demo` is back on its own in-memory store.** The port is reverted; the framework improvements it produced are kept. | This was the owner's decision, and a reasonable one: a sample meant to show the view layer is clearer without a database, and keeping one sample on plain `mutableStateOf` shows that `jetlin-db` is optional. What the port established is still worth knowing, so it is recorded here rather than deleted: it cost one `object Visitor : Principal`, a `position` column, and changes to three writes in `Main.kt` that used to be plain assignments, and nothing else. 16 application tests and 36 browser tests passed unchanged. Anyone considering porting an existing application can use that as an estimate. |
-| 2026-09-13 | Kept from the port: **the write-flush ordering fix**, `insertUnchecked(record, id = …)`, and the corrected memory figures. | The flush bug was real regardless of which sample found it: any transaction that deleted a row and inserted another with the same id failed on the primary key, and any transaction creating both a row and a row pointing at it depended on the application happening to write them in the right order. Both are fixed and tested, and the id-reuse test is what `insertUnchecked`'s `id` parameter exists for. |
-| 2026-09-13 | **Each benchmark now measures one thing**, and the numbers in `docs/db.md` §6 were measured again after the revert. | `:samples:teams:benchmark` reports the graph: 1.09 kB per record, stable from 2,000 to 20,000 records. `:samples:demo:benchmark` reports sessions, with `PAGE=real` for the application's own page instead of the synthetic one: 113 nodes at 129 kB and 42 nodes at 65 kB, about 1.5 kB per node either way. §5.2's request to report graph size alongside session size is therefore met by two tools rather than one, because the demo no longer has a graph. The earlier 332 kB figure for the demo's real page was measured while it used `jetlin-db` with 20 seeded records on the page, so it isn't comparable and is no longer quoted. |
-| 2026-09-13 | §4.8 item 3, **"entities can't be put in `rememberSaved`, but assert it"**, can't be asserted in this module, so the attempt is dropped. | The safeguard is real: an entity has no serializer, so `rememberSaved(todo)` doesn't compile. But that is a property of an *application's* entities, not of `:jetlin-db`, and nothing here stops someone adding `@Serializable` to one. A test in this module could only check that its own test fixture lacks an annotation, which tests the fixture. So the reasoning is documented on `Record` instead, including something the plan doesn't say: the real problem is identity, not size. A record deserialized from JSON would be a second object for a row the identity map already holds, not equal to it, not recomposing its readers, and never access-checked. The assertion belongs to whoever owns the entities. Worth adding to `docs/db.md` if an application ever needs the recipe. |
-| 2026-09-13 | §12.2's **"add `dbVerify` to the build job"** is done by task wiring instead of a step in `ci/github-actions.yml`, on purpose. | The plugin makes `check` depend on `dbVerify` in any module that applies it, so `./gradlew build`, which the CI job already runs, runs it and fails with the mismatched columns listed. A separate step in the workflow file would duplicate that in a file nobody runs locally, and the two would diverge the first time the task was renamed or a module was added. `ci/README.md` explains where the check comes from, which is what a reader needs. Only revisit this if CI stops running `build`. |
-| 2026-09-13 | **One term for the concept: `principal`, never "viewer".** The rename covers the code, the context parameter in generated accessors, the route guards, `:samples:teams`, `docs/db.md` and this document. | This plan used both words for the same thing, `Principal` for the interface and "viewer" in every signature, parameter and sentence around it. That reads as if there were two concepts, and leaves readers unsure which one a sentence means. `principal` is the standard term in access control, while "viewer" suggests read-only access, which is wrong for what `canWrite` and `canDelete` decide. So: `Policy<T, P>` with `canRead(record, principal)`, `context(principal: User)` in every generated accessor, `CurrentPrincipal`, `WithPrincipal`, `PrincipalKey`, `Principals(…)` for the typed guards, and the Konsist rule's parameter check looking for `P` or `Principal`. Only names and text changed, and the 351 tests confirm it. |
-| 2026-09-13 | **And one term for what a policy is about: `record`.** "Row" now only means what SQLite stores. | The same kind of mix-up, one level down: `canRead(row: Todo, …)`, `Gate.add(row)`, `View.rows`, `IdentityMap.rows` and `resident.rowCount` all called a live Kotlin object a row. The rule now is that a **record** is the object the application holds, and a **row** is the tuple in the database file: so `canRead(record, principal)`, `records(type)`, `recordCount`, and the benchmark's `RECORDS=` instead of `ROWS=`. "Row" is kept deliberately where the text really is about the file: the loader's `Row` type and its `reference`/`referenceOrNull`, `insertRow`/`updateRow`/`deleteRow` (named for what they write, with a comment saying so), the statement-ordering comments in `commit`, discussion of `PRAGMA` and `rowid`, affected-row counts, the migration tooling throughout, and Postgres's "row-level security" when referring to what another system provides. Sentences like "one row is one object" also keep it, because that describes exactly this boundary. Only names and text changed; the 351 tests are unchanged. |
-| 2026-09-13 | **§11 is evaluated, costed, and not built.** The `:jetlin-data` extraction, `:jetlin-remote`, the shared gate and `CellKey`'s authority component are all deliberately absent. | Most of what the two modules would share is shared by choice, not by necessity, and every reason for the *identity map* fails for external data: the process doesn't own the data, it doesn't fit in memory, following a reference means a network call anyway, and it goes stale (all four premises of §2.2 are false here). Two findings settle the question. **The §11.5 risk is caused by the shared map**: Bob only reads a resource fetched with Alice's token because external data would be cached in a process-wide map. Keep one holder per principal and there is nothing to fix later. And **"one graph" doesn't survive the schema**: `reference()` is stored as a foreign key, so a stored reference can't point outside the database. You store the external key and look it up, which needs a lookup function on the adapter, not a shared identity map. What remains of the shared part is `Policy` implemented twice against one interface. That is real, but not worth a module split, a package rename, a dozen broken `internal` declarations and the fifteen corrections the design needed. |
-| 2026-09-13 | **What was built instead: `Fetch`/`Fetched` and `rememberAction`/`Run`, in `:jetlin-runtime`.** No new module. | The essential shared idea is a value that arrives late, held as snapshot state so that every session that read it recomposes. That is just a cell plus `GlobalSnapshotManager`, both of which already existed. Neither type refers to a database, an HTTP client or an element, and `:jetlin-runtime` already contains the composable helpers, so a new module would add nothing. The substance is the three ways to get this wrong, each now documented by a comment at the line that prevents it: **reading writes no snapshot state** (an in-flight marker stored in a cell would invalidate its own reader on every pass, so the session would never settle, which is why two of the tests would hang instead of fail if this regressed); **the fetch runs off the session's confined thread**; and **the arrival is a single write**, so one response causes one recomposition and one patch, however many fields it fills. |
-| 2026-09-13 | **An `Action` takes no argument**, and a failure is `Run.Failed` instead of an `error` field next to a `running` flag. | The plan had `Action<A, R>`, with `rememberAction` overloaded on the lambda's number of parameters. The overloads are ambiguous, because a lambda without declared parameters matches both. Removing the argument turned out to be a better API anyway. The block is re-read on every composition, so whatever the work needs, it reads from state when it runs. A list then needs one action per row (remembered inside the row's `key`), because one shared action would disable every button whenever any row was busy. The sealed `Run` type replaces `running`/`error`/`result` for the same reason `Fetched` is sealed: three fields can describe impossible states, and one field makes a failure a single write, so re-enabling the button and showing the message happen in one patch. |
-| 2026-09-13 | **Staleness is decided**: a stale value is shown while it is revalidated, there is no `Stale` state, and nothing retries automatically. | §11.6 left this open. Switching a `Ready` cell back to `Loading` on expiry would bring back exactly the placeholder flicker that §2.2 and §2.3 avoid, and would throw away a value that is probably still correct. A failed revalidation keeps the existing value for the same reason. The TTL limits how old a value a *read* will accept; it isn't a refresh interval. **Nothing happens automatically when a value expires**, because a read only happens when the composable that reads it recomposes. A page left alone keeps showing an expired value until something recomposes it: another state change, a click, a navigation, or a hibernated session waking. `refresh()` is for callers who know someone is looking: a command that just changed the value, a retry button, or a polling loop in a `LaunchedEffect` that lasts as long as the page. `invalidate()` marks the value stale and lets the next reader trigger the fetch. The two are separate because fetching a value nobody is looking at is exactly the cost this design avoids. Both successes and failures record when they happened, so a broken endpoint can't turn a page into one request per recomposition. That means a failed fetch with the default infinite TTL stays failed until `invalidate()` is called, so a page showing "unavailable" should offer a retry that calls it. A revalidation that returns an equal value recomposes nothing, which `LastWriteWins.equivalent` provides automatically and a test verifies. |
-| 2026-09-13 | **`Record.stored` is removed; `Record.database != null` expresses the same thing.** | The two were set and cleared in exactly the same three places, `commit`'s insert and delete loops and the loader, and a comment in `Db.kt` even called them "both flags". They were two fields recording one fact, and removing one changed no test, which shows it was a simplification rather than a behaviour change. This was worth doing regardless of §11. |
-| 2026-09-13 | **Instead of the extraction, this rule applies: there is never a second authorization model.** Only one of three situations should reopen §11. | The worst outcome would be `:jetlin-remote` growing its own `Policy` that drifts away from this one. So §11 should only be reopened if (1) something outside `:jetlin-db` needs authorization enforced by the framework, a rule the application writes rather than a cache key that answers the question by design; (2) an application wants to cache external data across principals, which is when `Authority` stops being speculative; or (3) a page really needs to treat stored records and external resources as one type, not just render both. Any of those would be the second implementation that §11.7 says the extraction needs. The `:samples:teams` adapter shows that none of them applies yet: its per-principal cache is keyed by principal, so there is no object the wrong principal could reach, and its shared value needs no rule because it is the same for everyone. |
-| 2026-09-13 | **§11.8's acceptance criteria, mapped to what exists.** | 1 (two principals, separate data) is shown in `HubTest` over real HTTP, with the stub counting the requests it received, because the claim is about a request that did *not* happen. 2 (a placeholder without blocking, and one op on arrival) is shown in `FetchTest` using `changeCount`, and the same pattern is rendered in the sample. 3 (a failed command changes nothing and doesn't end the session) is covered by `ActionTest` and `HubTest`. The `try` is inside the launched coroutine, because an exception escaping it cancels the composition's scope and ends the session. 4 (an external call inside `transact` doesn't compile) is a property of the types, since `transact` takes `() -> T`. It is documented rather than asserted, following the precedent from §4.8 item 3 that this module can't make assertions about application code. 5 (`:jetlin-data` doesn't depend on `:jetlin-db`) doesn't apply while there is only one module. It is also worth stating plainly, both in the sample and here, that its "external system" is a stub running in the same process: a fixture with a real HTTP boundary, not a third-party API. |
-| 2026-09-13 | **`Fetch.fresh(every)` is how polling works: watchers are counted on the value, not per session.** | What a page actually needs is "keep this current while I am showing it". On Android, `collectAsStateWithLifecycle` does this by tying a collection to a lifecycle. Here the composition *is* the lifecycle, so a `DisposableEffect` is all that is needed. And because the value is shared between sessions, the polling loop belongs to the value: `watch` counts watchers, one loop serves them all, the shortest interval is used, and the loop stops when the last page showing the value goes away (including a session that hibernates, whose composition is disposed). Ten people watching a dashboard cost the same as one. The alternative, a loop per session, would multiply requests by the number of viewers, which is exactly what a shared cache exists to avoid. |
+| 2026-09-12 | Kotlin is 2.4.10, so context parameters are available. This answers the §10 open question, and no fallback to an explicit `principal` parameter is needed. | From `gradle/libs.versions.toml`. For reference, the rest of the toolchain is Compose runtime 1.12.0, Gradle 9.7.1, and JVM toolchain 24. |
+| 2026-09-12 | The phase gate is `./gradlew check`, not `./gradlew build`. | `:samples:demo:distTar` fails on a clean checkout, before any of this work. `org.jetbrains.compose.runtime:runtime-desktop` and `androidx.compose.runtime:runtime-desktop` both produce a file named `runtime-desktop-1.12.0.jar`, and the application plugin's distribution puts both into one flat `lib/` directory. The problem arrived with the Compose 1.12.0 upgrade (17cefdb). It isn't fixed here, because §4.1 says not to touch `:samples:demo` until phase 6, and removing the duplicate in its build script is a packaging concern for the sample, not part of this framework. `check` runs every test in every module, which is what a phase gate needs. Fix it in phase 6, either with `duplicatesStrategy`, or by depending on `androidx.compose.runtime:runtime` directly. |
+| 2026-09-12 | Phase 1: record IDs are allocated at construction, from a sequence for each class shared by the whole process, not at insert and not for each database. | A record must be usable as a `key` before it's stored, so an ID that exists only after an insert doesn't work. The sequence is for the process instead of the database, because §4.9 already says the process owns the file exclusively. Loading moves the sequence past the highest ID on disk, so IDs can't collide after a restart. Tests that open several databases share the sequence, which only means there are gaps in the IDs. |
+| 2026-09-12 | Phase 1: `IdentityMap`'s members that return records are `internal`. | §4.8 item 1 says that application code can't reach an unchecked `get(id)`. Making that true from the first commit costs nothing. Fixing it after a public unchecked `find` has shipped does. The public, policy-checked API is added on top of these members in phase 4. |
+| 2026-09-12 | Phase 1: the hook that records writes is postponed to phase 2, where `transact` uses it. | §4.2 lists it as part of `Record`, but a hook that nothing uses is unreachable code whose purpose the next reader would have to guess. Phases are meant to be self-contained, and this item was listed in the wrong phase. |
+| 2026-09-12 | Phase 2: `transact` isn't `suspend`. §4.6's sketch declares `suspend fun <T> Db.transact(block: () -> T): T`. | Transactions must be callable from event handlers, and a handler is `() -> Unit`: `onClick { todo.update { … } }` in §4.6 can't await anything. It also never needs to suspend: the JDBC driver blocks, and the snapshot work is synchronous. Keeping the block non-suspending also matters separately for §11.4, because it makes an external call inside a transaction fail to compile. |
+| 2026-09-12 | Phase 2: the cell records writes, instead of `Snapshot.takeMutableSnapshot(writeObserver = …)`, as §4.6 sketches. | The write observer receives a `StateObject`, and there's no public way to get from it back to the cell or record that owns it. That would need a process-wide side table mapping state objects to cells, kept up to date as records are deleted. A cell already knows its record and its name, so recording in the setter needs less machinery, and it's more precise: the commit updates only the columns that changed, instead of every column of a changed record. The plan's real claim, change tracking with no persistence context and no separate pass to find changes, still holds. |
+| 2026-09-12 | Phase 2: writing stored state without an open transaction throws, instead of not storing the change without an error. | This is the same guarantee seen from the other side. If a field can change in memory without reaching disk, nobody notices until a restart loses the value. Records that aren't stored yet are exempt, because their insert will include whatever values their fields have by then. Phase 4's `update { }` opens a transaction when none is open, so application code never hits this error by accident. |
+| 2026-09-12 | Phase 2: no `PRAGMA locking_mode=EXCLUSIVE`. A writer in another process is detected with `PRAGMA data_version` instead. | §4.9 asks for both an exclusive lock and Litestream, and the two are incompatible: in WAL mode, an exclusive lock also blocks readers, so Litestream couldn't read the file it's supposed to back up. `data_version` doesn't change for this connection's own commits, but does change for other connections' commits, so checking it before each commit detects an outside writer one commit late, with an error, while leaving readers free. Detection one commit late is worth more than a backup approach that doesn't work. |
+| 2026-09-12 | Phase 2: tables are loaded in declaration order, and a reference to a table declared later fails with an error that names both tables. | Resolving references against records already loaded needs no second pass and no placeholder objects, and the error says exactly what to reorder. The cost is that a reference cycle, such as `User.team` and `Team.owner`, can't be loaded in the first version. Revisit this when something needs it. A second pass that fills in nullable references is the obvious approach, and doesn't change the model. |
+| 2026-09-12 | Phase 2: a snapshot conflict on `apply()` after a successful commit is a known gap, left for phase 4 (§5.5). | Committing before applying hides a database rejection, but it can't hide a snapshot rejection. If two sessions write the same cell, the losing session's commit has already happened when `apply().check()` throws. This needs the conflict policy decision, so it belongs in phase 4, instead of being half-solved here. |
+| 2026-09-12 | Phase 3: KSP 2.3.12 works with Kotlin 2.4.10. | KSP now has its own version numbers, no longer `<kotlin>-<ksp>`, so there's no need to wait for a KSP release built for a specific Kotlin version. The processor module depends only on `symbol-processing-api`. |
+| 2026-09-12 | Phase 3: `Policy` and `Principal` are declared in phase 3 instead of phase 4. | Phase 3 has to fail the build for an `@Entity` without a policy, which isn't possible before the type exists. Only the declarations move. `owned()`, the access checks, and the draft's column checks stay in phase 4. |
+| 2026-09-12 | Phase 3: a column is either a delegated property or a primary-constructor property. A plain `var` is a build error, and a plain `val` with a backing field is a warning. | KSP can see that a property is delegated, but not the delegate expression, so it tells `column()` and `reference()` apart by the property's type, not by which function was called. A property without a delegate can't be a cell. A plain `var` is an error instead of a warning, because writes to it would appear on screen but never reach the database, since nothing records them, and nobody would notice until a restart. |
+| 2026-09-12 | Phase 3: the load order is generated, not declared. The schema object lists tables in the topological order of their non-null references, and a cycle is a build error that names both entities. | Phase 2 left the load order to the application (the ordering in §4.9), which is an easy mistake to make, and pointless now that something knows the reference graph. The limitation on cycles from the phase 2 entry still applies, but it's now caught at compile time, instead of at startup. |
+| 2026-09-12 | Phase 3: the schema snapshot is written to generated resources (`jetlin-db-schema.json`), not into the source tree. | §4.10 wants a snapshot checked into the repository, and that's still the plan. But having KSP write files that people are expected to review is a bad idea: it races the IDE, and a generated file that appears in code review looks as if it can be edited. Phase 5's `dbDiff` and `dbVerify` compare this generated file with the committed copy, which is also exactly what `dbVerify` has to do in CI. |
+| 2026-09-12 | Phase 3: there's no end-to-end test that invalid code fails to compile. The rules and their messages are unit-tested against the processor's model instead. | The repository has no compile-testing dependency, and adding one (kotlin-compile-testing with a KSP2 runner) is a large dependency for the benefit. What matters about "no policy fails the build" is the rule and its message, and those are tested directly. That `logger.error` fails a build is KSP's responsibility, not this processor's. Revisit this in phase 5, if the Gradle tooling needs a compile harness anyway. |
+| 2026-09-12 | Phase 3: the generated draft writes directly for now. Column-level policy checks are added to its setters in phase 4. | The draft exists because of the column check, so the type is incomplete until phase 4. But generating it now proves that the approach works, and phase 4 then extends one generator function, instead of introducing the type. |
+| 2026-09-12 | Phase 4: the conflict policy is last-write-wins for each cell, and transactions run one at a time. This answers the question in §5.5 and §10. | These are two parts of one answer. Every cell uses a merge policy that keeps the value being applied, so concurrent writes resolve instead of throwing. That matters because commits happen before applies: a rejected apply would leave the database ahead of memory, with the commit already done. And `transact` holds a lock on the database for the whole block, which it has to anyway, because one JDBC connection can't run two transactions, and `autoCommit` applies to the whole connection. Running writes one at a time also makes commits and applies happen in the same order, which is what makes last-write-wins match what's on disk, instead of being only a preference. Reads aren't serialized, and never block. |
+| 2026-09-12 | Phase 4: a refused column fails the whole `update { }`, instead of being skipped. | §4.6 says that `archived = true` can be refused while `title = "x"` in the same block is allowed, which reads as if each column is applied separately. What's really true is that each column is checked separately. Skipping a refused write without an error is exactly the failure this design is meant to prevent: a field changed on screen but not on disk. So a refusal throws and rolls back the transaction, and nothing is committed or applied. |
+| 2026-09-12 | Phase 4: the leak detector needs a thread-local principal, and checks only reads where one is set. | §4.8 item 6 says every read checks that the current principal still matches. A record keeps the set of principals that obtained it through the gate, because a single principal would give false positives on every legitimately shared record. A cell read checks the thread's current principal against that set, and attaches the stack trace of the acquisition as the exception's cause. A read without a current principal can't be checked, because there's no way to know whose read it is. So this catches leaks in tests and wherever a session sets the principal, not everywhere. `System.getProperty("jetlin.db.leakDetector")` turns it on, and `:jetlin-db`'s test task sets it. |
+| 2026-09-12 | Phase 4: generated code is the only caller of the gate. `Gate`, `databaseOf`, and the draft constructors are public, so that generated accessors in the application's own module can reach them. | A Konsist rule enforces what matters, that nothing public returns a record without a principal in its signature, and lists its two exceptions: `Row.reference` and `Row.referenceOrNull`, which the loader uses at startup when no principal exists yet. §4.4's `authenticate` isn't needed as a special case: loading is the privileged entry point, and once `attributes { }` has a `User`, it's obtained through the same checked lookup as everything else. |
+| 2026-09-12 | Phase 4: `View` gained `add`, and inverse relations are generated as extension properties (`project.tasks`), not as the `hasMany()` delegate that §4.2 sketches. | A delegate is a property getter, and a getter can't take the principal as a parameter. It could only read a thread-local principal, which is the runtime check that §4.6 rejects for assignment, for the same reason. A generated extension property with a context parameter keeps the compile-time guarantee, and looks the same at the call site. `View.add` is the one member that returns a record without a principal in its signature: the gate created the view, and it already carries the principal. The Konsist rule is worded to allow this deliberately. |
+| 2026-09-12 | Phase 4: route guards live in `:jetlin-html`, not in a `:jetlin-db-html` module. This answers that §10 question. | A guard is a pure function of the request and the attributes that `attributes { }` added to it, so it needs nothing from the database. `Principals(PrincipalKey)` is generic over the application's principal type. So `:jetlin-db` stays independent of the UI, and guards also work for applications whose principal isn't a stored record. |
+| 2026-09-12 | Phase 4: a route's document title comes from the composition, through a `TitleSink` that the view provides. | §4.11 requires that the title can't reveal a record the body refused to show, and the title is rendered before the body. The route table can't know the title of a route for one record, and looking up the subject twice, once for `<head>` and once for the body, gives two chances for them to disagree. So `Subject` sets the title after looking up the record, and the page render uses whatever the composition set. There's a known gap: navigating within a session to a route for one record still shows the route table's static title, because the title is sent in `ServerMessage.Navigate`, and changing the protocol would mean rebuilding `jetlin.js`. Page loads and waking from hibernation show the correct title. Navigation within a session shows the fallback. |
+| 2026-09-12 | Phase 4: a failed guard is an HTTP `404`, and a redirect is a `302` decided before any session is created. | §4.11's "hide things by default" applies to the status code as well as to the page. Answering redirects in the HTTP layer also avoids composing a whole session for someone who's about to be sent elsewhere. The same guard then runs again inside the composition, which is what makes revocation and hibernation work. |
+| 2026-09-12 | Phase 5: the command is `./gradlew dbDiff --name=share_todos_by_team`, not the positional argument that §4.10 shows. | Gradle tasks take options, not positional arguments. The name is also optional: without one, the migration is named after the first change it contains, which is better than refusing to generate it. |
+| 2026-09-12 | Phase 5: the runner, not the generated SQL, ensures that indexes, triggers, and views are preserved. | §4.10 asks the generator to handle this, but the generator has only two schema files. It can't see what a particular database contains, and an index that a deployment added by hand is exactly what would be lost. So `dbMigrate` records every index, trigger, and view before applying a migration, checks that they all still exist afterward, and rolls back if any are missing, naming them and suggesting the fix: add the `CREATE` statement to the migration. That turns the known pitfall, a view over a rebuilt table, into a failed migration, instead of a missing view that nobody notices. It also runs `PRAGMA foreign_key_check` before committing, which catches rows that a new foreign key would have orphaned. |
+| 2026-09-12 | Phase 5: a destructive migration contains a marker line that must be deleted before `dbMigrate` will run it. | This is §4.10's "explicit acknowledgement in the migration file." A marker in the file can be reviewed, and shows up in the diff, while a `--force` flag leaves no trace once it's typed. |
+| 2026-09-12 | Phase 5: adding a required reference to an existing table rebuilds the table, instead of using `ALTER`. | SQLite adds a column with a foreign key only if its default is `NULL`, so a required reference can't be added in place. Adding the constraint to an existing column needs a rebuild for the same reason a type change does. Both use one code path, with one acceptance test each. |
+| 2026-09-12 | Phase 5: startup verification compares the declared tables with `PRAGMA table_info` and `foreign_key_list`, and also fails on a stored column that no entity declares. | §4.10 asks only for startup to fail on a mismatch. An extra column is worth failing on too, because it means either a partly applied migration or a field removed from an entity without a migration, and both need a decision instead of a default. One SQLite quirk had to be handled in both the runtime and the tests: an `INTEGER PRIMARY KEY` is reported as nullable, because it's an alias for the rowid, where inserting `NULL` means "allocate an ID." |
+| 2026-09-12 | Phase 5: the acceptance criterion "the resulting database round-trips the entity" is met in two parts, because the entities and the migration engine are in different modules. | The plugin's tests check that a migrated database's schema matches the new snapshot, and that the rows survived. `:jetlin-db`'s tests check that `Db.open` accepts a matching schema, loads the entity, and rejects every kind of mismatch. Together, they cover the round trip. Doing it in one test would require running KSP inside the Gradle module, or putting the tooling inside the runtime. |
+| 2026-09-12 | Phase 5: reporting the graph size in the benchmark moves to phase 6. | It needs an in-memory graph to measure, which requires porting `:samples:demo`, and §4.1 says not to touch the demo before phase 6. Measuring an empty graph would give a meaningless number. |
+| 2026-09-12 | Phase 5: the plugin makes `check` depend on `dbVerify` in any module that applies it. | This follows the same idea as the existing check that `jetlin.js` is up to date, and it means `ci/github-actions.yml` needs no new step: the existing `./gradlew build` runs it once a module applies the plugin. |
+| 2026-09-12 | Phase 6: `:samples:demo` isn't ported, because of the plan's own stop condition. (Superseded the same day by the port, which was then reverted on 2026-09-13. The demo ends up where this entry left it, but for different reasons. The analysis was right about what the design requires, and wrong about what it costs.) | §6 says that if `Main.kt` needs changes beyond the store, something in the design is wrong, and the work should stop. It does: every page that writes needs a principal in lexical scope, because `update { }` takes it as a context parameter. So each of the demo's five views would need a `context(principal:)` signature and a `WithPrincipal` wrapper, plus a synthetic principal for an application with no users. That isn't a flaw in the design, because the compile-time guarantee is the point, but it's more than the store, and the plan asked to be told. Two more reasons not to force it: the demo would need a `position` column to keep its move-up and move-down behavior, because a `View` has no order beyond insertion order, and the regression suite that the port was meant to run against couldn't run in this environment (see the next entry). `:samples:teams` shows the design instead, with 12 application tests that run two principals against one database. |
+| 2026-09-12 | Phase 6: the Playwright suite couldn't run at first. Chromium installs but can't start without `libnspr4.so`, which needs root to install. (Resolved: the dependency was installed, and the suite now runs, with 35 of 36 passing, unchanged from before this work.) | All 36 failures were the browser failing to launch, not the application. The server side was checked by hand instead: every demo route still renders with the right `<title>`, including through the new title path, and the 16 application tests, the equivalent of the browser suite without a browser, pass. Anyone picking this up with a working browser should run `cd e2e && npx playwright test` against `:samples:demo:run` before trusting the changes this work made to `:jetlin-html` and `:jetlin-server-ktor`. |
+| 2026-09-12 | Phase 6: `./gradlew build` passes again, so the phase gate recorded at the top of this log is back to what the plan assumed. | The duplicate `runtime-desktop-1.12.0.jar` came from depending on `org.jetbrains.compose.runtime:runtime`, a redirect that resolves to its own `runtime-desktop` artifact as well as androidx's. Depending on `androidx.compose.runtime:runtime` directly gives one artifact, one dependency chain, and no duplicates. That's better than a `duplicatesStrategy`, which would have left two JARs with the same name in a flat `lib/`. All tests still pass. |
+| 2026-09-12 | Phase 6: `:jetlin-db-gradle` is an included build, not a subproject. | A project can't apply a plugin that a sibling subproject builds, because the plugin has to be on the build's classpath first, and the point of phase 6 was for `:samples:teams` to apply the real plugin, instead of a copy of its logic. The downside is that the root build's lifecycle tasks don't run the included build's tasks, so the root project registers `build` and `check` tasks that depend on the included build's. Those two commands still cover everything. |
+| 2026-09-12 | Phase 6: a second privileged entry point, `insertUnchecked`, works only inside `unsafe { }`. | §4.4 wants exactly one privileged entry point, and §4.8 wants exactly one escape hatch, and seeding needs both at once: nobody can be allowed to create the first user in an empty database. Requiring `unsafe`, which logs a warning with its reason every time, keeps it to one bypass instead of two, and the `:conventions` test lists it next to `authenticate`. |
+| 2026-09-12 | Phase 6: the benchmark settles the figure for each record, but leaves the figure for each session open. A record in memory costs 1.1 kB, stable from 20 records to 20,000. (A later entry settles the session figure: it was an artifact of the benchmark's own baseline subtraction.) | That's the figure §5.2 asked for, and it puts the memory limit in the hundreds of thousands of records, not the thousands. The session figure isn't settled: the teams sample's todo page measures 2.3 MB per session, against 128 kB for a comparable page in `samples/demo`. Investigation ruled out the gate, the `View`, and the policy: a plain `List<Todo>` of five records measures the same 340 kB as the policy-checked one, and an empty session measures 12 kB. So the cause is something about a keyed list in this measurement, not anything `jetlin-db` added. It needs a heap profile, instead of a heap difference. `docs/db.md` §6 says so, instead of quoting an unexplained number. |
+| 2026-09-12 | Phase 6: `:jetlin-testing` gained three things: `setAttribute` (for the principal), `title()`, and `assertNotDisclosed(…)`. | The first two make guards testable without a browser. `setAttribute` also covers the case of waking from hibernation: a session that wakes recomputes its attributes, so changing the principal and then waking is exactly what a role revoked during hibernation looks like. `assertNotDisclosed` implements §6's "nothing from another principal's records." It checks the rendered HTML instead of the node tree, because an attribute or a title can reveal data just as text can. |
+| 2026-09-12 | Phase 6: `:samples:demo` was ported after all, and the stop condition it hit turned out to need one line of API, not a design change. (Reverted the next day by the owner's decision. See the last entries. The cost figures here still stand, which is why this is still recorded.) | The earlier entry stands as reasoning. What changed is that a working browser made the regression suite runnable, and the port then cost less than the analysis predicted. All 16 application tests and all 36 browser tests pass unchanged. Three things made that possible. The demo's principal is a constant, `object Visitor : Principal`, because a principal doesn't have to be a record, so the store supplies it, and no page signature mentions it. A `position` column replaces the list order that a `View` doesn't have, and `move` swaps positions in one transaction. And seeding can now choose IDs, because both test suites hard-code `/todo/1`. The only changes outside the store are the three writes that used to be plain assignments, `todo.done = it` and two in the save handler, which is the design working as intended, not a compromise. |
+| 2026-09-12 | Phase 6: seeding can choose a record's ID (`insertUnchecked(record, id = 1)`), which moves the sequence past it. | The demo's reset has to produce IDs 1, 2, and 3 every time, because `/todo/1` appears in both test suites and in the markup they assert on. Fixtures often need a specific ID, for example a seeded record that something links to by number, so this is worth one parameter. It can't cause collisions: the sequence moves past a chosen ID, and an ID already in memory is rejected. |
+| 2026-09-12 | Phase 6: the port found a real bug in the commit. Inserts ran before deletes, so re-seeding a record with an ID that had just been deleted failed on the primary key. | The fix orders deletes first, then inserts, then updates, and sets `PRAGMA defer_foreign_keys=ON` for the transaction. The pragma is what makes a single fixed order possible. With foreign keys checked for each statement, a transaction that creates both a row and a row pointing at it, and a transaction that points a row away from something it then deletes, need opposite orders. Deferred to commit, neither order matters. A primary key can't be deferred, which is why deletes have to come first. Two tests cover both parts. |
+| 2026-09-12 | Phase 6: the session memory anomaly is resolved. It came from the teams benchmark's method. | Measured with the same harness, the demo's synthetic 113-node page costs 130 kB per session, and its real 202-node list page costs 332 kB, about 1.6 kB per node, and nothing to do with the database. The teams benchmark's 2.3 MB came from subtracting a baseline that it had created and closed, which the demo's harness doesn't do. The teams benchmark now measures only the graph, which it does well: 1.09 kB per record, stable from 2,000 to 20,000 records. `samples/demo:benchmark` reports a graph figure next to its session figures, as §5.2 asked. A policy-filtered scan does add to a session's read set, by about 30 bytes per scanned record: a real cost, but an order of magnitude below the cost of rendering one. |
+| 2026-09-12 | One browser test fails, and the failure predates this work: `markup that cannot be adopted falls back to a full render`. After a deliberately broken adoption, a click no longer updates the page. | Running the suite against `b724ff1`, before any of this work, confirmed it: 35 passed and 1 failed, identically. It's left alone, because it's a bug in `jetlin.js`'s client-side fallback path, unrelated to storage, and fixing it means changing the TypeScript and rebuilding the committed bundle. It deserves its own change. |
+| 2026-09-13 | `:samples:demo` is back on its own in-memory store. The port is reverted, and the framework improvements it produced are kept. | This was the owner's decision, and a reasonable one: a sample meant to show the view layer is clearer without a database, and keeping one sample on plain `mutableStateOf` shows that `jetlin-db` is optional. What the port established is still worth knowing, so it's recorded here instead of deleted: it cost one `object Visitor : Principal`, a `position` column, and changes to three writes in `Main.kt` that used to be plain assignments, and nothing else. 16 application tests and 36 browser tests passed unchanged. Anyone considering porting an existing application can use that as an estimate. |
+| 2026-09-13 | Kept from the port: the fix to the commit's statement order, `insertUnchecked(record, id = …)`, and the corrected memory figures. | The commit bug was real, whichever sample found it: any transaction that deleted a row and inserted another with the same ID failed on the primary key, and any transaction that created both a row and a row pointing at it depended on the application writing them in the right order. Both are fixed and tested, and the ID-reuse test is what `insertUnchecked`'s `id` parameter exists for. |
+| 2026-09-13 | Each benchmark now measures one thing, and the figures in `docs/db.md` §6 were measured again after the revert. | `:samples:teams:benchmark` reports the graph: 1.09 kB per record, stable from 2,000 to 20,000 records. `:samples:demo:benchmark` reports sessions, with `PAGE=real` for the application's own page instead of the synthetic one: 113 nodes at 129 kB and 42 nodes at 65 kB, about 1.5 kB per node either way. So §5.2's request to report the graph size next to the session size is met by two tools instead of one, because the demo no longer has a graph. The earlier 332 kB figure for the demo's real page was measured while it used `jetlin-db` with 20 seeded records on the page, so it isn't comparable, and is no longer quoted. |
+| 2026-09-13 | §4.8 item 3, "entities can't be put in `rememberSaved`, but assert it," can't be asserted in this module, so the attempt is dropped. | The safeguard is real: an entity has no serializer, so `rememberSaved(todo)` doesn't compile. But that's a property of an application's entities, not of `:jetlin-db`, and nothing here stops someone from adding `@Serializable` to one. A test in this module could only check that its own test fixture lacks an annotation, which tests the fixture. So the reasoning is documented on `Record` instead, including something the plan doesn't say: the real problem is identity, not size. A record deserialized from JSON would be a second object for a row the identity map already holds: not equal to it, not recomposing its readers, and never access-checked. The assertion belongs to whoever owns the entities. It's worth adding to `docs/db.md` if an application ever needs the recipe. |
+| 2026-09-13 | §12.2's "add `dbVerify` to the build job" is done by task wiring instead of a step in `ci/github-actions.yml`, on purpose. | The plugin makes `check` depend on `dbVerify` in any module that applies it, so `./gradlew build`, which the CI job already runs, runs it, and fails with the mismatched columns listed. A separate step in the workflow file would duplicate that in a file that nobody runs locally, and the two would diverge the first time the task was renamed or a module was added. `ci/README.md` explains where the check comes from, which is what a reader needs. Revisit this only if CI stops running `build`. |
+| 2026-09-13 | One term for the concept: `principal`, never "viewer." The rename covers the code, the context parameter in generated accessors, the route guards, `:samples:teams`, `docs/db.md`, and this document. | This plan used both words for the same thing: `Principal` for the interface, and "viewer" in every signature, parameter, and sentence around it. That reads as if there were two concepts, and leaves readers unsure which one a sentence means. `principal` is the standard term in access control, while "viewer" suggests read-only access, which is wrong for what `canWrite` and `canDelete` decide. So: `Policy<T, P>` with `canRead(record, principal)`, `context(principal: User)` in every generated accessor, `CurrentPrincipal`, `WithPrincipal`, `PrincipalKey`, `Principals(…)` for the typed guards, and the Konsist rule's parameter check looking for `P` or `Principal`. Only names and text changed, and the 351 tests confirm it. |
+| 2026-09-13 | And one term for what a policy is about: `record`. "Row" now means only what SQLite stores. | The same kind of mix-up, one level down: `canRead(row: Todo, …)`, `Gate.add(row)`, `View.rows`, `IdentityMap.rows`, and `resident.rowCount` all called a live Kotlin object a row. The rule now is that a record is the object the application holds, and a row is the tuple in the database file. So: `canRead(record, principal)`, `records(type)`, `recordCount`, and the benchmark's `RECORDS=` instead of `ROWS=`. "Row" is kept deliberately where the text really is about the file: the loader's `Row` type and its `reference` and `referenceOrNull`, `insertRow`, `updateRow`, and `deleteRow` (named for what they write, with a comment saying so), the statement-order comments in `commit`, discussion of `PRAGMA` and `rowid`, affected-row counts, the migration tooling throughout, and Postgres's "row-level security," when referring to what another system provides. Sentences like "one row is one object" also keep it, because that describes exactly this boundary. Only names and text changed, and the 351 tests are unchanged. |
+| 2026-09-13 | §11 is evaluated, costed, and not built. The `:jetlin-data` extraction, `:jetlin-remote`, the shared gate, and `CellKey`'s authority component are all deliberately absent. | Most of what the two modules would share is shared by choice, not by necessity, and every reason for the identity map fails for external data: the process doesn't own the data, it doesn't fit in memory, following a reference means a network call anyway, and it goes stale. All four premises of §2.2 are false here. Two findings settle the question. The §11.5 risk is caused by the shared map: Bob reads a resource fetched with Alice's token only because external data would be cached in a process-wide map. Keep one holder for each principal, and there's nothing to fix later. And "one graph" doesn't survive the schema: `reference()` is stored as a foreign key, so a stored reference can't point outside the database. You store the external key and look it up, which needs a lookup function on the adapter, not a shared identity map. What remains of the shared part is `Policy`, implemented twice against one interface. That's real, but not worth a module split, a package rename, a dozen broken `internal` declarations, and the fifteen corrections the design needed. |
+| 2026-09-13 | What was built instead: `Fetch` and `Fetched`, and `rememberAction` and `Run`, in `:jetlin-runtime`. No new module. | The essential shared idea is a value that arrives late, held as snapshot state, so that every session that read it recomposes. That's only a cell plus `GlobalSnapshotManager`, both of which already existed. Neither type refers to a database, an HTTP client, or an element, and `:jetlin-runtime` already contains the composable helpers, so a new module would add nothing. The substance is the three ways to get this wrong, each now documented by a comment at the line that prevents it. Reading writes no snapshot state: an in-flight marker stored in a cell would invalidate its own reader on every pass, so the session would never settle, which is why two of the tests would hang instead of fail if this regressed. The fetch runs off the session's thread. And the arrival is a single write, so one response causes one recomposition and one patch, however many fields it fills. |
+| 2026-09-13 | An `Action` takes no argument, and a failure is `Run.Failed`, instead of an `error` field next to a `running` flag. | The plan had `Action<A, R>`, with `rememberAction` overloaded on the lambda's number of parameters. The overloads are ambiguous, because a lambda without declared parameters matches both. Removing the argument turned out to be a better API anyway. The block is read again on every composition, so whatever the work needs, it reads from state when it runs. A list then needs one action for each row, remembered inside the row's `key`, because one shared action would disable every button whenever any row was busy. The sealed `Run` type replaces `running`, `error`, and `result` for the same reason that `Fetched` is sealed: three fields can describe impossible states, and one field makes a failure a single write, so re-enabling the button and showing the message happen in one patch. |
+| 2026-09-13 | Staleness is decided: a stale value is shown while it's revalidated, there's no `Stale` state, and nothing retries automatically. | §11.6 left this open. Switching a `Ready` cell back to `Loading` on expiry would bring back exactly the placeholder flicker that §2.2 and §2.3 avoid, and would throw away a value that's probably still correct. A failed revalidation keeps the existing value for the same reason. The TTL is the oldest value a read accepts. It isn't a refresh interval. Nothing happens by itself when a value expires, because a read happens only when the composable that reads it recomposes. A page left alone keeps showing an expired value until something recomposes it: another state change, a click, a navigation, or a hibernated session waking. `refresh()` is for callers who know someone is looking: a command that just changed the value, a retry button, or a polling loop in a `LaunchedEffect` that lasts as long as the page. `invalidate()` marks the value stale, and lets the next reader trigger the fetch. The two are separate, because fetching a value that nobody is looking at is exactly the cost this design avoids. Both successes and failures record when they happened, so a broken endpoint can't turn a page into one request per recomposition. That means a failed fetch with the default infinite TTL stays failed until something calls `invalidate()`, so a page that shows "unavailable" should offer a retry that calls it. A revalidation that returns an equal value recomposes nothing, which `LastWriteWins.equivalent` provides automatically, and a test verifies. |
+| 2026-09-13 | `Record.stored` is removed. `Record.database != null` expresses the same thing. | The two were set and cleared in exactly the same three places, the insert and delete loops in `commit` and the loader, and a comment in `Db.kt` even called them "both flags." They were two fields recording one fact, and removing one changed no test, which shows it was a simplification, not a behavior change. This was worth doing regardless of §11. |
+| 2026-09-13 | Instead of the extraction, this rule applies: there's never a second authorization model. Only one of three situations should reopen §11. | The worst outcome would be `:jetlin-remote` growing its own `Policy` that drifts away from this one. So reopen §11 only if (1) something outside `:jetlin-db` needs authorization that the framework enforces, a rule the application writes, instead of a cache key that answers the question by design; (2) an application wants to cache external data across principals, which is when `Authority` stops being speculative; or (3) a page really needs to treat stored records and external resources as one type, not only render both. Any of those would be the second implementation that §11.7 says the extraction needs. The `:samples:teams` adapter shows that none of them applies yet: its cache is keyed by principal, so there's no object the wrong principal could reach, and its shared value needs no rule, because it's the same for everyone. |
+| 2026-09-13 | §11.8's acceptance criteria, mapped to what exists. | 1 (two principals, separate data) is shown in `HubTest` over real HTTP, with the stub counting the requests it received, because the claim is about a request that wasn't made. 2 (a placeholder without blocking, and one op on arrival) is shown in `FetchTest` with `changeCount`, and the sample renders the same pattern. 3 (a failed command changes nothing and doesn't end the session) is covered by `ActionTest` and `HubTest`. The `try` is inside the launched coroutine, because an exception escaping it cancels the composition's scope and ends the session. 4 (an external call inside `transact` doesn't compile) is a property of the types, because `transact` takes `() -> T`. It's documented instead of asserted, following the precedent from §4.8 item 3 that this module can't make assertions about application code. 5 (`:jetlin-data` doesn't depend on `:jetlin-db`) doesn't apply while there's only one module. It's also worth stating plainly, both in the sample and here, that its "external system" is a stub running in the same process: a fixture with a real HTTP boundary, not a third-party API. |
+| 2026-09-13 | `Fetch.fresh(every)` is how polling works: the value counts its watchers, not each session. | What a page really needs is "keep this current while I'm showing it." On Android, `collectAsStateWithLifecycle` does this by tying a collection to a lifecycle. Here, the composition is the lifecycle, so a `DisposableEffect` is all that's needed. And because the value is shared between sessions, the polling loop belongs to the value: `watch` counts watchers, one loop serves them all, the shortest interval is used, and the loop stops when the last page showing the value goes away, including a session that hibernates, whose composition is disposed. Ten people watching a dashboard cost the same as one. The alternative, a loop for each session, would multiply requests by the number of viewers, which is exactly what a shared cache exists to avoid. |

@@ -8,27 +8,31 @@ import jetlin.protocol.NodeSpec
 import jetlin.protocol.Op
 
 /**
- * Which nodes an interaction actually changed.
+ * The nodes that an interaction changed.
  *
- * The question this answers is not "did the page end up right" — the ordinary assertions cover that
- * — but "did it get there by touching what it needed to". Break `key(todo.id)` in a list and the
- * page still renders identically and still passes every assertion about its contents; it just
- * rebuilds every row on every keystroke. Nothing visible catches that, and on a server-driven
- * framework it is the difference between a small patch and the whole list crossing the wire.
+ * The ordinary assertions check whether the page ended up right. This class checks whether it got
+ * there by changing only what it needed to. If you break `key(todo.id)` in a list, the page still
+ * renders identically and passes every assertion about its contents, but it rebuilds every row on
+ * every keystroke. Nothing visible catches that, and in a server-driven framework it's the
+ * difference between a small patch and sending the whole list.
+ *
+ * Every assertion throws [AssertionError] and prints the tree when it fails.
+ *
+ * @property changedNodes the IDs of the elements that changed. A changed text node counts as a
+ *   change to the element that contains it.
  */
 public class Update internal constructor(
     private val test: ViewTest,
     public val changedNodes: Set<NodeId>,
 ) {
     /**
-     * Asserts that exactly the nodes matched by [matchers] changed, and nothing else did.
+     * Asserts that exactly the nodes that [matchers] match changed, and nothing else did.
      *
-     * Deliberately exact rather than "contains": an update that touches more than it should is the
-     * thing being looked for, so allowing extras would defeat the purpose.
+     * The check is deliberately exact instead of "contains." An update that changes more than it
+     * should is what you're looking for, so allowing extras would defeat the purpose.
      *
-     * Nodes the interaction *removed* cannot be named here — a removal is recorded against the
-     * parent, and the node itself is gone by the time a matcher could resolve it. Assert on the
-     * parent in that case.
+     * You can't name nodes that the interaction removed. A removal is recorded against the parent,
+     * and the node is gone by the time a matcher could find it. Assert on the parent instead.
      */
     public suspend fun assertOnly(vararg matchers: NodeMatcher) {
         val expected = idsOf(matchers.toList())
@@ -45,11 +49,11 @@ public class Update internal constructor(
     }
 
     /**
-     * Asserts that everything the update changed lies inside one of the subtrees matched.
+     * Asserts that everything the update changed is inside one of the subtrees that [matchers] match.
      *
-     * Usually what "only that row changed" means, and sturdier than [assertOnly]: it does not
-     * require the test to know that ticking a checkbox writes both the row's class and the input's
-     * `checked` property, only that neither of them was outside the row.
+     * This is usually what "only that row changed" means, and it's sturdier than [assertOnly]. The
+     * test doesn't need to know that checking a checkbox sets both the row's class and the input's
+     * `checked` property, only that neither change was outside the row.
      */
     public suspend fun assertOnlyWithin(vararg matchers: NodeMatcher) {
         val allowed = test.inspect { owner ->
@@ -68,7 +72,7 @@ public class Update internal constructor(
         }
     }
 
-    /** Asserts that none of the nodes matched by [matchers] were touched. */
+    /** Asserts that none of the nodes that [matchers] match changed. */
     public suspend fun assertUntouched(vararg matchers: NodeMatcher) {
         val touched = idsOf(matchers.toList()) intersect changedNodes
         if (touched.isNotEmpty()) {
@@ -79,7 +83,7 @@ public class Update internal constructor(
         }
     }
 
-    /** Asserts the interaction produced no DOM changes at all. */
+    /** Asserts that the interaction produced no DOM changes at all. */
     public suspend fun assertNothingChanged() {
         if (changedNodes.isNotEmpty()) {
             throw AssertionError(
@@ -89,9 +93,11 @@ public class Update internal constructor(
         }
     }
 
+    /** Returns the IDs of every node that any of [matchers] match. */
     private suspend fun idsOf(matchers: List<NodeMatcher>): Set<NodeId> =
         test.inspect { owner -> matchers.flatMapTo(mutableSetOf()) { m -> owner.find(m).map { it.id } } }
 
+    /** Describes each node in [ids] by ID and tag, for failure messages. */
     private suspend fun describeIds(ids: Set<NodeId>): String {
         if (ids.isEmpty()) return "none"
         val byId = test.inspect { owner ->
@@ -102,7 +108,10 @@ public class Update internal constructor(
 }
 
 /**
- * Runs [block] and reports which nodes it changed.
+ * Runs [block] and returns the nodes it changed.
+ *
+ * Changes that settle after [block] returns, such as from a shared store the test wrote directly,
+ * are included.
  *
  * ```kotlin
  * val update = recordUpdate {
@@ -110,19 +119,21 @@ public class Update internal constructor(
  * }
  * update.assertOnlyWithin(hasTestTag("todo"), hasTestTag("remaining"))
  * ```
+ *
+ * @throws IllegalStateException if called inside another `recordUpdate` block.
  */
 public suspend fun ViewTest.recordUpdate(block: suspend () -> Unit): Update {
     val (_, ops) = recordingOps(block)
     val raw = ops.flatMapTo(mutableSetOf()) { it.touchedNodes() }
-    // Text nodes are addressed by the protocol but never by a matcher, which only ever resolves to
-    // elements. Reporting one would make the assertion unsatisfiable, so a changed text node counts
-    // as a change to the element holding it — which is what "this part of the page moved" means to
-    // whoever is reading the test.
+    // The protocol addresses text nodes, but matchers only find elements. Reporting a text node
+    // would make the assertion impossible to satisfy, so a changed text node counts as a change to
+    // the element that contains it. That's what "this part of the page changed" means to whoever
+    // reads the test.
     val enclosing = inspect { owner -> owner.enclosingElements() }
     return Update(this, raw.mapTo(mutableSetOf()) { enclosing[it] ?: it })
 }
 
-/** Maps every node id in the tree to the element that holds it; an element maps to itself. */
+/** Maps every node ID in the tree to the element that contains it. An element maps to itself. */
 private fun HtmlOwner.enclosingElements(): Map<NodeId, NodeId> {
     val map = mutableMapOf<NodeId, NodeId>()
     fun walk(element: ElementNode) {
@@ -139,11 +150,11 @@ private fun HtmlOwner.enclosingElements(): Map<NodeId, NodeId> {
 }
 
 /**
- * The nodes an op is evidence of having changed.
+ * Returns the nodes that this op changed.
  *
- * Structural ops name the parent rather than the node moved or removed, which is exactly right for
- * this purpose: a row appearing, vanishing or shifting *is* a change to the list holding it. An
- * insert additionally names what arrived, so that a new row can be asserted on directly.
+ * Structural ops name the parent instead of the node that moved or was removed, which is right
+ * here: a row appearing, disappearing, or moving is a change to the list that holds it. An insert
+ * also names the nodes that arrived, so a test can assert on a new row directly.
  */
 private fun Op.touchedNodes(): List<NodeId> = when (this) {
     is Op.SetText -> listOf(id)
@@ -156,6 +167,7 @@ private fun Op.touchedNodes(): List<NodeId> = when (this) {
     is Op.Move -> listOf(parent)
 }
 
+/** Returns the IDs of this node and every node in its subtree. */
 private fun NodeSpec.ids(): List<NodeId> = when (this) {
     is NodeSpec.Text -> listOf(id)
     is NodeSpec.Element -> listOf(id) + children.flatMap { it.ids() }
@@ -164,12 +176,15 @@ private fun NodeSpec.ids(): List<NodeId> = when (this) {
 /**
  * Asserts that none of [values] appear anywhere in the rendered page.
  *
- * Use this in multi-user applications to check that a page shows nothing belonging to another
- * principal. Pass values from the other principal's records, such as titles, names or anything they
- * wrote, and the assertion fails if any of them appear in the markup.
+ * Use this in multi-user applications to check that a page shows nothing that belongs to another
+ * principal. Pass values from the other principal's records, such as titles, names, or anything they
+ * wrote. The assertion fails if any of them appear in the markup.
  *
- * The check runs against the rendered HTML instead of the node tree. Data can leak through an attribute,
- * a property or the title as well as through text, and the HTML is what actually reaches the browser.
+ * The check runs against the rendered HTML instead of the node tree. Data can leak through an
+ * attribute or a property as well as through text, and the HTML is what reaches the browser.
+ *
+ * The rendered HTML doesn't include `<head>`, so check the document title separately with
+ * [ViewTest.title].
  *
  * ```kotlin
  * setAttribute(PrincipalKey, bob)

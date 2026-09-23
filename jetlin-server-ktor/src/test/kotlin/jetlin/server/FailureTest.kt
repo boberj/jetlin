@@ -21,12 +21,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * What a client is told when something goes wrong on the server.
+ * Tests what a client is told when something goes wrong on the server.
  *
- * The distinction these pin down is the whole point: a handler that throws leaves the composition
+ * The distinction these tests check is the whole point. A handler that throws leaves the composition
  * healthy and costs one interaction, while a composable that throws stops the recomposer for good.
- * Treating both the same means either killing sessions that were fine, or leaving a page that looks
- * live and can never change again.
+ * Treating both the same means either ending sessions that were fine, or leaving a page that looks
+ * live but can never change again.
  */
 class FailureTest {
 
@@ -56,7 +56,7 @@ class FailureTest {
             send(ClientMessage.Event(node = 2, event = "click", seq = 1))
             val error = awaitMessage<ServerMessage.Error>()
             assertFalse(error.fatal, "a failed handler does not end the session: $error")
-            // Nothing about the exception's own text reaches the browser.
+            // Nothing from the exception's own text reaches the browser.
             assertFalse(error.message.contains("blew up"), "the message leaks server detail: $error")
 
             // And the session carries on: the next click still works.
@@ -79,8 +79,8 @@ class FailureTest {
                     var broken by remember { mutableStateOf(false) }
                     Div {
                         Button({ attr("id", "break"); onClick { broken = true } }) { Text("break") }
-                        // Fine on the first pass, fatal on the next: the recomposer stops and
-                        // nothing this session does afterwards can succeed.
+                        // This is fine on the first pass and fails on the next. The recomposer
+                        // stops, and nothing this session does afterward can succeed.
                         if (broken) error("the view blew up")
                     }
                 }
@@ -122,8 +122,8 @@ class FailureTest {
             hello(token)
             awaitMessage<ServerMessage.Reset>()
 
-            // Anyone could send this. Ending the session over it would let a client kill its own
-            // session with a typo, and would turn a version skew into an outage.
+            // Anyone could send this. Ending the session over it would let a client end its own
+            // session with a typo, and would turn a version mismatch into an outage.
             send(Frame.Text("{ not json at all"))
             send(Frame.Text("""{"t":"nonsense"}"""))
 

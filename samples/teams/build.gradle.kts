@@ -12,8 +12,8 @@ dependencies {
     ksp(project(":jetlin-db-ksp"))
 
     implementation(libs.ktor.server.netty)
-    // The sample calls its stub of an external system over real HTTP. The stub runs in the same process
-    // and on the same port, but the client and requests are real, so the wiring is actually exercised.
+    // The sample calls its stub of an external system over real HTTP. The stub runs in the same
+    // process and on the same port, but the client and the requests are real, so the wiring is tested.
     implementation(libs.ktor.client.cio)
     implementation(libs.slf4j.simple)
 
@@ -27,14 +27,15 @@ application {
 
 tasks.test {
     // The sample's tests run two principals against one database, which is where a leaked reference
-    // would show up, so the leak detector is enabled here as it is for the framework's tests.
+    // would show up, so turn on the leak detector, as the framework's tests do.
     systemProperty("jetlin.db.leakDetector", "true")
 }
 
-/** Measures the retained heap per record in the in-memory graph. Per-session cost is measured by `:samples:demo:benchmark`. */
+// Measures the retained heap of each record in the in-memory graph. `:samples:demo:benchmark`
+// measures the cost of each session.
 tasks.register<JavaExec>("benchmark") {
     group = "verification"
-    description = "Measures retained heap per resident record and per live session."
+    description = "Measures retained heap per resident record."
     mainClass.set("jetlin.samples.teams.BenchmarkKt")
     classpath = sourceSets["main"].runtimeClasspath
     jvmArgs("-Xmx2g")

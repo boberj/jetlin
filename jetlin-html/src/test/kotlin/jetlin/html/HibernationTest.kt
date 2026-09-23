@@ -15,10 +15,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Tearing a session down and building it back.
+ * Tests tearing a session down and building it back.
  *
- * Hibernation is what makes an idle session cheap and a restart survivable, and its whole contract
- * is the line between what comes back and what does not. These pin that line down.
+ * Hibernation makes an idle session cheap and a restart survivable, and its whole contract is the
+ * line between what comes back and what doesn't. These tests pin that line down.
  */
 class HibernationTest {
 
@@ -29,7 +29,7 @@ class HibernationTest {
             scratch.value = "recomputable"
         }
 
-        // A different LiveView entirely, as if on another server after a deploy.
+        // A different LiveView, as if on another server after a deployment.
         var restoredDraft = ""
         var restoredScratch = ""
         LiveView(restored = saved) { _ ->
@@ -64,7 +64,7 @@ class HibernationTest {
 
     @Test
     fun `state written through the wire survives a hibernate`(): Unit = runBlocking {
-        // The full path: an event from a client mutates saved state, which then round-trips.
+        // The full path: an event from a client changes saved state, which then survives the round trip.
         val view = LiveView { _ ->
             val draft = rememberSavedField("", key = "draft")
             Input({ bind(draft) })
@@ -94,8 +94,8 @@ class HibernationTest {
         }
         view.start()
 
-        // Worth being explicit about: an empty map is the signal the registry uses to decide a
-        // session is not worth storing at all.
+        // Worth stating: an empty map is the signal the registry uses to decide that a session isn't
+        // worth storing at all.
         assertEquals(emptyMap(), view.hibernate())
     }
 
@@ -103,8 +103,8 @@ class HibernationTest {
     fun `state that no longer deserializes falls back instead of failing the session`(): Unit = runBlocking {
         val saved = firstSession { draft, _ -> draft.value = "was a string" }
 
-        // The same key, now holding a different type — what a deploy that changed a model looks
-        // like to a snapshot written by the previous version.
+        // The same key, now holding a different type. That's what a deployment that changed a model
+        // looks like to a snapshot written by the previous version.
         var restored = 0
         LiveView(restored = saved) { _ ->
             val count = rememberSaved<Int>("draft") { 42 }
@@ -154,11 +154,12 @@ class HibernationTest {
 
     @Test
     fun `two auto-keyed values side by side keep their own state`(): Unit = runBlocking {
-        // Compose derives the automatic key from the composable's position, and until 1.12 two calls
-        // sitting side by side in one composable landed on the same position — so this pair used to
-        // collide, and the collision had to be reported to stop the second silently eating the first.
-        // Newer runtimes tell them apart, so the pair round trips and the report is for the case that
-        // can still happen: a position that is not an identity, in a loop over reorderable data.
+        // Compose derives the automatic key from the composable's position, and before 1.12, two
+        // calls side by side in one composable got the same position. So this pair used to collide,
+        // and the collision had to be reported to stop the second value from overwriting the first
+        // without any error. Newer runtimes tell them apart, so the pair survives the round trip, and
+        // the report is for the case that can still happen: a position that isn't an identity, in a
+        // loop over data that can be reordered.
         val saved = LiveView { _ ->
             Div {
                 val first = rememberSaved { "a" }
@@ -197,7 +198,7 @@ private suspend fun firstSession(
     return view.hibernate()
 }
 
-/** Applies a state change the way an event handler would, and waits for it to settle. */
+/** Applies a state change as an event handler would, and waits for it to settle. */
 private suspend fun LiveView.transactMutate(block: () -> Unit) {
     Snapshot.withMutableSnapshot(block)
     awaitIdle()

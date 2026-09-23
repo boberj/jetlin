@@ -12,35 +12,46 @@ import jetlin.protocol.ROOT_ID
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 
+/** A server-side handler for a DOM event. It receives what the client read from the event. */
 public typealias EventHandler = (EventPayload) -> Unit
 
-/** DOM property carrying unescaped markup; see [jetlin.html.AttrsScope.unsafeInnerHtml]. */
+/** The DOM property that holds unescaped markup. See [AttrsScope.unsafeInnerHtml]. */
 internal const val INNER_HTML: String = "innerHTML"
 
 /**
  * A node in the server-side virtual DOM.
  *
- * Nodes only emit protocol ops once they are *attached* — reachable from the root. Compose inserts
- * subtrees bottom-up, so a node's children are populated before the node itself joins the tree;
- * suppressing ops until attachment is what lets an entire new subtree ship as a single
- * [Op.Insert] instead of a create-then-configure-then-parent chatter of dozens of ops.
+ * A node records protocol ops only once it's attached, meaning reachable from the root. Compose
+ * inserts subtrees bottom-up, so a node's children exist before the node joins the tree. Holding
+ * back ops until then lets a whole new subtree go out as one [Op.Insert], instead of dozens of ops
+ * that create, configure, and parent each node.
  */
 public sealed class HtmlNode {
+    /** The node's ID, unique within its session. */
     public abstract val id: NodeId
     internal var parent: ElementNode? = null
+
+    /** Whether the node is reachable from the root, and so records ops when it changes. */
     internal var attached: Boolean = false
 
+    /** Returns the wire form of this node and its subtree. */
     internal abstract fun toSpec(): NodeSpec
+
+    /** Marks this node and its subtree as reachable from the root. */
     internal abstract fun attach()
+
+    /** Marks this node and its subtree as no longer reachable from the root. */
     internal abstract fun detach()
 }
 
+/** A text node in the server-side virtual DOM. */
 public class TextNode internal constructor(
     override val id: NodeId,
     text: String,
     private val owner: HtmlOwner,
 ) : HtmlNode() {
 
+    /** The node's text. The `Text` composable sets it. */
     public var text: String = text
         internal set(value) {
             if (field == value) return
@@ -53,12 +64,16 @@ public class TextNode internal constructor(
     override fun detach() { attached = false }
 }
 
+/** An element in the server-side virtual DOM. */
 public class ElementNode internal constructor(
     override val id: NodeId,
+    /** The element's tag name. */
     public val tag: String,
     /**
-     * Fixed for the life of the node. An element cannot change language without being recreated,
-     * which is exactly what happens: the namespace is decided by where the composable sits.
+     * The element's namespace, which never changes.
+     *
+     * An element can't change language without being recreated, and that's what happens: where the
+     * composable sits in the tree decides the namespace.
      */
     public val namespace: Namespace,
     private val owner: HtmlOwner,
@@ -70,66 +85,71 @@ public class ElementNode internal constructor(
     internal val listeners: LinkedHashMap<String, ListenerSpec> = LinkedHashMap()
 
     /**
-     * Never serialized. When an event arrives from the client it carries only this node's id and
-     * the event name, and the matching lambda is found here, so handlers can be ordinary closures
-     * over whatever they need.
+     * The element's event handlers, by event name. They're never serialized.
+     *
+     * An event from the client carries only this node's ID and the event name, and the server finds
+     * the matching lambda here. That lets handlers be ordinary closures over whatever they need.
      */
     internal var handlers: Map<String, EventHandler> = emptyMap()
 
+    /** Whether the element's content is raw markup set with [AttrsScope.unsafeInnerHtml]. */
     internal val hasUnsafeInnerHtml: Boolean get() = properties.containsKey(INNER_HTML)
 
     /**
-     * The name this element was given for tests; see [AttrsScope.testTag].
+     * The name this element was given for tests. See [AttrsScope.testTag].
      *
-     * Held here rather than among the attributes so that it never reaches the browser, and read by
-     * whatever is inspecting the tree rather than by the page.
+     * It's stored here instead of with the attributes so that it never reaches the browser. Code
+     * that inspects the tree reads it. The page doesn't.
      */
     public var testTag: String? = null
         internal set
 
     /**
-     * Read-only views of this node, for code that inspects the tree rather than building it.
+     * The element's children, as a read-only view.
      *
-     * A server-side virtual DOM is worth being able to look at: a test asserting on what a view
-     * rendered, a debug endpoint, an alternative serializer. Reading is all that is offered, and
-     * these are unmodifiable views rather than the collections themselves: the tree is owned by the
-     * composition, and the only thing allowed to change it is the applier.
+     * This property and the others below let code inspect the tree without building it, for
+     * example a test that asserts on what a view rendered, a debug endpoint, or another serializer.
+     * They return unmodifiable views instead of the collections themselves. The composition owns the
+     * tree, and only the applier may change it.
      */
     public val childNodes: List<HtmlNode> get() = Collections.unmodifiableList(children)
 
-    /** Value of an HTML attribute, or null when the element does not carry it. */
+    /** Returns the value of the HTML attribute [name], or `null` if the element doesn't have it. */
     public fun attribute(name: String): String? = attributes[name]
 
+    /** The names of the element's HTML attributes. */
     public val attributeNames: Set<String> get() = Collections.unmodifiableSet(attributes.keys)
 
     /**
-     * Value of a DOM property, or null when unset.
+     * Returns the value of the DOM property [name], or `null` if it isn't set.
      *
-     * Distinct from [attribute] and not interchangeable with it: `value` and `checked` are written
-     * as properties, because setting the attribute only changes a control's default and stops
-     * having any effect once the user has touched it.
+     * Properties are separate from attributes, and you can't use one in place of the other. Jetlin
+     * writes `value` and `checked` as properties, because setting the attribute changes only a
+     * control's default, which stops having any effect once the user has touched the control.
      */
     public fun property(name: String): PropValue? = properties[name]
 
-    /** Events this element is listening for. Handlers themselves stay private to the composition. */
+    /** The events this element listens for. The handlers themselves stay private to the composition. */
     public val eventNames: Set<String> get() = Collections.unmodifiableSet(listeners.keys)
 
     /**
-     * What the element declared for [event]: what to extract, how to debounce, what the browser does
-     * for itself, and whether the server hears about it at all.
+     * Returns what the element declared for [event], or `null` if it doesn't listen for it.
+     *
+     * The spec says what to extract, how to debounce, what the browser does by itself, and whether
+     * the server hears about the event at all.
      */
     public fun listenerSpec(event: String): ListenerSpec? = listeners[event]
 
     /**
-     * Reconciles declared state against current state, emitting one op per actual difference.
+     * Updates the element to match [data], recording one op for each real difference.
      *
-     * Only called when the [ElementData] value differs structurally from the previous composition,
-     * so an unchanged element costs a single equality check and no traversal.
+     * The applier calls this only when [data] differs from the previous composition's, so an
+     * unchanged element costs one equality check and no traversal.
      */
     internal fun applyData(data: ElementData) {
-        // No op is recorded: the client has no use for a test tag, which is the whole point of
-        // keeping it off the attributes. When tags are exposed it is in data.attributes as well,
-        // and gets patched from there like anything else.
+        // Record no op. The client has no use for a test tag, which is why it's kept out of the
+        // attributes. When test tags are exposed, the tag is also in data.attributes and is
+        // patched from there like any other attribute.
         testTag = data.testTag
 
         for ((name, value) in data.attributes) {
@@ -162,6 +182,7 @@ public class ElementNode internal constructor(
         }
     }
 
+    /** Calls the handler for [event], and returns `false` if there isn't one. */
     internal fun handle(event: String, payload: EventPayload): Boolean {
         val handler = handlers[event] ?: return false
         handler(payload)
@@ -192,12 +213,12 @@ public class ElementNode internal constructor(
 }
 
 /**
- * The declared shape of an element for one composition pass.
+ * What a composable declared for an element in one composition pass.
  *
- * Compared against the previous pass to decide whether anything needs to be sent. Handlers are
- * deliberately excluded: lambdas get fresh identities on every recomposition, so including them
- * would make every element unequal to its previous self and cause needless work. Listener *specs*
- * are included, because a change in debounce or extraction really does need to reach the client.
+ * The applier compares it with the previous pass to decide whether anything needs sending.
+ * Handlers are deliberately left out. Lambdas get new identities on every recomposition, so
+ * including them would make every element differ from its previous pass and cause needless work.
+ * Listener specs are included, because a change to debouncing or extraction must reach the client.
  */
 internal data class ElementData(
     val attributes: Map<String, String>,
@@ -207,10 +228,10 @@ internal data class ElementData(
 )
 
 /**
- * Per-session ownership: node ids, the node registry used to route events, and the patch buffer.
+ * Owns one session's tree: it allocates node IDs, finds nodes to route events to, and buffers ops.
  *
- * Ids are session-local and monotonic, which keeps them small on the wire and makes protocol traces
- * readable.
+ * IDs are local to the session and only increase. That keeps them small on the wire and makes
+ * protocol traces readable.
  */
 public class HtmlOwner {
     private var nextId: NodeId = ROOT_ID + 1
@@ -218,12 +239,17 @@ public class HtmlOwner {
     private val ops: MutableList<Op> = mutableListOf()
 
     /**
-     * Signals that ops are waiting. Conflated, because a recomposition pass that records fifty ops
-     * should still wake the sender exactly once.
+     * Signals that something is waiting to be sent.
+     *
+     * The channel is conflated, so a recomposition pass that records fifty ops still wakes the
+     * sender once.
      */
     private val dirty = Channel<Unit>(Channel.CONFLATED)
+
+    /** Receives a signal whenever something is waiting to be sent. */
     internal val dirtySignals: ReceiveChannel<Unit> get() = dirty
 
+    /** The root of the tree. It's always attached, and the browser never sees it as an element. */
     public val root: ElementNode =
         ElementNode(ROOT_ID, "#root", Namespace.HTML, this).apply { attached = true }
 
@@ -237,25 +263,27 @@ public class HtmlOwner {
     internal fun unregister(node: ElementNode) { byId.remove(node.id) }
 
     /**
-     * Whether edits are worth writing down.
+     * Whether ops are worth recording.
      *
-     * With no client attached they are not: the composition keeps running — a timer keeps ticking,
-     * a shared store keeps changing — but whoever connects next is sent the whole tree anyway, so
-     * recording those edits would grow memory to describe a page nobody will ever be shown.
+     * They aren't when no client is connected. The composition keeps running, because a timer keeps
+     * ticking and a shared store keeps changing, but the next client to connect receives the whole
+     * tree anyway. Recording those ops would use memory to describe changes that nobody will see.
      */
     private var recording = true
 
+    /** Whether the buffer passed [maxBufferedOps] and was dropped. */
     private var overflowed = false
 
     /**
-     * Ceiling on buffered edits before falling back to resending the tree.
+     * The most ops to buffer before dropping them and resending the whole tree instead.
      *
-     * A client that stops reading, or reads far slower than the session produces updates, would
-     * otherwise pin unbounded memory. Past this point the buffer is dropped and the next message is
-     * a full snapshot: the session degrades to coarser updates rather than to an outage.
+     * Without a limit, a client that stops reading, or reads much slower than the session produces
+     * updates, would hold on to unbounded memory. Past the limit, the buffer is dropped and the next
+     * message is the full tree. The session falls back to coarser updates instead of failing.
      */
     public var maxBufferedOps: Int = 10_000
 
+    /** Buffers [op] for the next patch, unless recording is off or the buffer has overflowed. */
     internal fun record(op: Op) {
         if (!recording || overflowed) return
         if (ops.size >= maxBufferedOps) {
@@ -268,17 +296,17 @@ public class HtmlOwner {
         dirty.trySend(Unit)
     }
 
-    /** True once the buffer was dropped; the next message must be a full tree, not a patch. */
+    /** Whether the buffer was dropped. If so, the next message must be the full tree, not a patch. */
     internal val hasOverflowed: Boolean get() = overflowed
 
-    /** Starts recording edits again from a known-good baseline. */
+    /** Starts recording ops again, after the client has received a tree it can patch. */
     internal fun startRecording() {
         recording = true
         overflowed = false
         ops.clear()
     }
 
-    /** Stops recording and discards what is buffered. Called when the last client goes away. */
+    /** Stops recording and discards the buffer. The server calls this when the last client leaves. */
     internal fun stopRecording() {
         recording = false
         overflowed = false
@@ -286,19 +314,19 @@ public class HtmlOwner {
     }
 
     /**
-     * Wakes the sender when something needs transmitting that is not an op.
+     * Wakes the sender when something other than an op needs sending.
      *
-     * A navigation to a route that happens to render identically produces no tree edits, and would
-     * otherwise leave the browser's address bar stale because nothing signalled the sender.
+     * For example, navigating to a route that renders identically produces no ops. Without this
+     * signal, nothing would wake the sender, and the browser's address bar would show the old URL.
      */
     internal fun signalDirty() {
         dirty.trySend(Unit)
     }
 
-    /** True if at least one op is buffered; used to skip empty frames. */
+    /** Whether any op is buffered. The sender uses it to skip empty frames. */
     public val hasPendingOps: Boolean get() = ops.isNotEmpty()
 
-    /** Takes and clears the buffered ops. One drain per frame becomes one patch message. */
+    /** Removes and returns the buffered ops. Each drain becomes one patch message. */
     public fun drainOps(): List<Op> {
         if (ops.isEmpty()) return emptyList()
         val drained = ops.toList()
@@ -307,12 +335,14 @@ public class HtmlOwner {
     }
 
     /**
-     * Routes an inbound event to its handler. Returns false if the node or handler is gone, which
-     * is normal and benign: the user clicked something the server had already removed.
+     * Calls the handler for [event] on node [nodeId].
+     *
+     * @return `false` if the node or the handler no longer exists. That's normal and harmless: the
+     *   user clicked something that the server had already removed.
      */
     public fun dispatch(nodeId: NodeId, event: String, payload: EventPayload): Boolean =
         byId[nodeId]?.handle(event, payload) ?: false
 
-    /** The whole current tree, for a full reset after rehydration. */
+    /** Returns the whole current tree, for a message that replaces the browser's tree. */
     public fun snapshotChildren(): List<NodeSpec> = root.children.map { it.toSpec() }
 }

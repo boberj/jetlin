@@ -17,10 +17,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * The half of a client component a test without a browser can reach.
+ * Tests the half of a client component that a test without a browser can reach.
  *
- * What it draws is not testable here and is not meant to be. What the server sent it, and what the
- * server does when it reports something, are — and those are the parts an application owns.
+ * What the component draws isn't testable here, and isn't meant to be. What the server sent it, and
+ * what the server does when it reports something, are testable, and those are the parts an
+ * application owns.
  */
 class ClientComponentTest {
 

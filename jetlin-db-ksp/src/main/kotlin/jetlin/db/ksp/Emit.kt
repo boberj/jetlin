@@ -3,11 +3,11 @@ package jetlin.db.ksp
 /**
  * Generates the table file for one entity.
  *
- * The generated code uses fully qualified names and no imports. Nobody reads it for style, and each
+ * The generated code uses fully qualified names and no imports. Nobody reads it for style, and any
  * import could clash with a name declared in the entity's own file.
  *
- * Generation is plain string building so the exact output can be checked in unit tests. Compiling the
- * output would only show that it compiles, not that it is correct.
+ * Generation is plain string building, so unit tests can check the exact output. Compiling the
+ * output would only show that it compiles, not that it's correct.
  */
 internal fun emitTable(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
@@ -22,12 +22,14 @@ internal fun emitTable(entity: EntityModel): String = buildString {
     appendLine("/**")
     appendLine(" * The table for [$type], and the column objects a policy can refer to.")
     appendLine(" *")
-    appendLine(" * These are the same column instances the table writes, so `when (column)` in a policy matches them.")
+    appendLine(" * They're the same column instances that the table writes, so `when (column)` in a policy matches them.")
     appendLine(" */")
     appendLine("${entity.visibility} object ${entity.objectName} {")
     appendLine()
+    appendLine("    /** The access rules for [$type], from its companion object. */")
     appendLine("    ${entity.visibility} val policy: jetlin.db.Policy<$type, ${entity.principal}> = $type")
     appendLine()
+    appendLine("    /** How [$type] is stored. */")
     appendLine("    ${entity.visibility} val table: jetlin.db.Table<$type> =")
     appendLine("        jetlin.db.table(\"${entity.tableName}\", $type::class) {")
     entity.columns.forEach { column -> appendLine("            ${declare(column)}") }
@@ -37,6 +39,7 @@ internal fun emitTable(entity: EntityModel): String = buildString {
     appendLine("        }")
     entity.columns.forEach { column ->
         appendLine()
+        appendLine("    /** The `${column.name}` column. */")
         appendLine("    ${entity.visibility} val ${column.name}: jetlin.db.Column<$type> =")
         appendLine("        table.column(\"${column.name}\")")
     }
@@ -50,20 +53,20 @@ internal fun emitTable(entity: EntityModel): String = buildString {
 }
 
 /**
- * Generates the accessors that are application code's only way to obtain records of this entity.
+ * Generates the accessors that are application code's only way to obtain this entity's records.
  *
- * Each takes the principal as a context parameter. Code without a principal in scope fails to compile,
- * instead of running and reading records the user shouldn't see.
+ * Each takes the principal as a context parameter. Code without a principal in scope fails to
+ * compile, instead of running and reading records the user shouldn't see.
  */
 private fun emitAccessors(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
     val principal = entity.principal
-    appendLine("    /** All stored ${entity.simpleName} records that this principal may read. */")
+    appendLine("    /** Returns every stored ${entity.simpleName} that this principal can read. */")
     appendLine("    context(principal: $principal)")
     appendLine("    ${entity.visibility} fun all(db: jetlin.db.Db): jetlin.db.View<$type> =")
     appendLine("        jetlin.db.Gate.view(db, table, policy, principal)")
     appendLine()
-    appendLine("    /** The ${entity.simpleName} with this id, or null if it doesn't exist or this principal may not read it. */")
+    appendLine("    /** Returns the ${entity.simpleName} with [id], or `null` if it doesn't exist or this principal can't read it. */")
     appendLine("    context(principal: $principal)")
     appendLine("    ${entity.visibility} fun find(db: jetlin.db.Db, id: jetlin.db.Id<$type>): $type? =")
     appendLine("        jetlin.db.Gate.find(db, table, policy, principal, id)")
@@ -72,15 +75,15 @@ private fun emitAccessors(entity: EntityModel): String = buildString {
 /**
  * Generates `update { }` and `delete()` as extension functions that take the principal.
  *
- * Direct assignment such as `todo.done = true` was considered and rejected. A property setter can't
- * take a context parameter, so it could only check a thread-local principal at runtime. `update { }`
- * is slightly longer to write but keeps the check at compile time.
+ * Direct assignment, such as `todo.done = true`, was considered and rejected. A property setter
+ * can't take a context parameter, so it could only check a thread-local principal at runtime.
+ * `update { }` is slightly longer to write, but it keeps the check at compile time.
  */
 private fun emitMutators(entity: EntityModel): String = buildString {
     val type = entity.qualifiedName
     val principal = entity.principal
     appendLine("/**")
-    appendLine(" * Changes this ${entity.simpleName} in one transaction, committed to disk before any session sees the change.")
+    appendLine(" * Changes this ${entity.simpleName} in one transaction, which is committed to disk before any session sees the change.")
     appendLine(" *")
     appendLine(" * A refused write throws [jetlin.db.AccessDenied] and rolls back the whole transaction.")
     appendLine(" */")
@@ -92,12 +95,13 @@ private fun emitMutators(entity: EntityModel): String = buildString {
     appendLine("    }")
     appendLine("}")
     appendLine()
-    appendLine("/** Deletes this ${entity.simpleName} if this principal may delete it. */")
+    appendLine("/** Deletes this ${entity.simpleName}, if this principal can delete it. Otherwise, throws [jetlin.db.AccessDenied]. */")
     appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.delete(): Unit =")
     appendLine("    jetlin.db.Gate.delete(this, ${entity.objectQualified}.policy, principal)")
 }
 
+/** Returns the table builder call that declares [column]. */
 private fun declare(column: ColumnModel): String {
     val nullable = ", nullable = ${column.nullable}"
     val get = "{ it.${column.name} }"
@@ -111,7 +115,7 @@ private fun declare(column: ColumnModel): String {
     }
 }
 
-/** The expression that reads one column from a stored row. */
+/** Returns the expression that reads [column] from a stored row. */
 private fun read(column: ColumnModel): String {
     val name = "\"${column.name}\""
     return when {
@@ -139,8 +143,8 @@ private fun read(column: ColumnModel): String {
  * assignments for columns the constructor doesn't take.
  *
  * Columns with a matching constructor parameter are passed to the constructor, which is what makes
- * immutable columns and `val` cells loadable. The remaining columns must be settable; [validate] has
- * already checked that.
+ * immutable columns and `val` cells loadable. The other columns must be settable, and [validate]
+ * has already checked that.
  */
 private fun loadBody(entity: EntityModel): String = buildString {
     val byConstructor = entity.columns.filter { it.constructorParameter }
@@ -161,8 +165,8 @@ private fun loadBody(entity: EntityModel): String = buildString {
 /**
  * Generates the draft type that `update { }` passes to its block.
  *
- * Only settable columns are included. Immutable columns are written once on insert and can't be
- * changed. Each setter checks the column-level policy before writing, which is the reason drafts exist
+ * Only settable columns are included. Immutable columns are written once on insert and can't
+ * change. Each setter checks the column-level policy before writing, which is why drafts exist
  * instead of assigning to the record directly.
  */
 private fun emitDraft(entity: EntityModel): String = buildString {
@@ -176,6 +180,7 @@ private fun emitDraft(entity: EntityModel): String = buildString {
     appendLine(") {")
     settable.forEachIndexed { index, column ->
         if (index > 0) appendLine()
+        appendLine("    /** Sets `${column.name}` if this principal can write it. Otherwise, throws [jetlin.db.AccessDenied]. */")
         appendLine("    ${entity.visibility} var ${column.name}: ${column.declaredType}")
         appendLine("        get() = record.${column.name}")
         appendLine("        set(value) {")
@@ -189,7 +194,7 @@ private fun emitDraft(entity: EntityModel): String = buildString {
         appendLine("        }")
     }
     if (settable.isEmpty()) {
-        appendLine("    // ${entity.simpleName} has no settable columns; all of them are written on insert.")
+        appendLine("    // ${entity.simpleName} has no settable columns. All of them are written on insert.")
     }
     appendLine("}")
 }
@@ -197,8 +202,8 @@ private fun emitDraft(entity: EntityModel): String = buildString {
 /**
  * Generates the schema object listing every table in load order.
  *
- * Applications pass this list to `Db.open`. Because it is generated, the order required by non-null
- * references doesn't have to be maintained by hand.
+ * Applications pass this list to `Db.open`. Because it's generated, nobody has to maintain the order
+ * that non-null references require by hand.
  */
 internal fun emitSchema(entities: List<EntityModel>, packageName: String, objectName: String): String =
     buildString {
@@ -214,6 +219,7 @@ internal fun emitSchema(entities: List<EntityModel>, packageName: String, object
         appendLine(" * All stored entities, ordered so that each table is loaded after the tables it references.")
         appendLine(" */")
         appendLine("$visibility object $objectName {")
+        appendLine("    /** The tables, in load order. Pass them to [jetlin.db.Db.open]. */")
         appendLine("    $visibility val tables: List<jetlin.db.Table<out jetlin.db.Record>> = listOf(")
         entities.forEach { entity ->
             val qualifier = if (entity.packageName == packageName || entity.packageName.isEmpty()) {
@@ -238,12 +244,12 @@ internal fun emitSchema(entities: List<EntityModel>, packageName: String, object
 /**
  * Generates the collection accessor an application reads from, such as `db.todos`.
  *
- * It is generated so that the principal parameter is always present. This is the accessor shape
- * described in §4.5 of the design plan.
+ * It's generated so that the principal parameter is always present. This is the accessor shape that
+ * §4.5 of the design plan describes.
  */
 private fun emitCollection(entity: EntityModel, packageName: String): String = buildString {
     val qualifier = entity.objectQualified(packageName)
-    appendLine("/** All stored ${entity.simpleName} records that this principal may read. */")
+    appendLine("/** Every stored ${entity.simpleName} that this principal can read. */")
     appendLine("context(principal: ${entity.principal})")
     appendLine("${entity.visibility} val jetlin.db.Db.${entity.collectionName}: jetlin.db.View<${entity.qualifiedName}>")
     appendLine("    get() = $qualifier.all(this)")
@@ -252,14 +258,14 @@ private fun emitCollection(entity: EntityModel, packageName: String): String = b
 /**
  * Generates the inverse side of a reference, such as `project.tasks`.
  *
- * The collection is filtered by the policy of the *referencing* entity, on every read. That makes
- * unsharing reactive: a record that is no longer readable drops out of the collection, and pages that
+ * The collection is filtered by the policy of the referencing entity, on every read. That makes
+ * unsharing reactive: a record that's no longer readable drops out of the collection, and pages that
  * iterated it recompose without any invalidation code.
  */
 private fun emitInverse(inverse: InverseModel, packageName: String): String = buildString {
     val source = inverse.source
     val qualifier = source.objectQualified(packageName)
-    appendLine("/** The ${source.simpleName} records whose `${inverse.column}` is this record and that this principal may read. */")
+    appendLine("/** The ${source.simpleName} records whose `${inverse.column}` is this record, and that this principal can read. */")
     appendLine("context(principal: ${source.principal})")
     appendLine("${inverse.visibility} val ${inverse.targetType}.${inverse.name}: jetlin.db.View<${source.qualifiedName}>")
     appendLine("    get() {")
@@ -271,6 +277,15 @@ private fun emitInverse(inverse: InverseModel, packageName: String): String = bu
     appendLine("    }")
 }
 
+/**
+ * An inverse relation to generate.
+ *
+ * @property source the referencing entity.
+ * @property targetType the qualified name of the referenced entity, which gets the property.
+ * @property column the referencing column.
+ * @property name the property name.
+ * @property visibility the property's visibility modifier.
+ */
 internal data class InverseModel(
     val source: EntityModel,
     val targetType: String,
@@ -282,10 +297,10 @@ internal data class InverseModel(
 /**
  * Lists the inverse relations to generate.
  *
- * Each is named after the referencing entity, as in `project.tasks`. If an entity references the same
- * target through two columns, the column name is added to tell them apart. Otherwise there would be two
- * properties called `tasks`, and the generated code would fail to compile in a way that is hard for the
- * user to fix.
+ * Each is named after the referencing entity, as in `project.tasks`. If an entity references the
+ * same target through two columns, the column name is added to tell them apart. Otherwise there
+ * would be two properties called `tasks`, and the generated code would fail to compile in a way
+ * that's hard for the user to fix.
  */
 internal fun inverses(entities: List<EntityModel>): List<InverseModel> {
     val known = entities.associateBy { it.qualifiedName }
@@ -312,9 +327,9 @@ internal fun inverses(entities: List<EntityModel>): List<InverseModel> {
 /**
  * Generates the schema as JSON, which the migration tooling compares with the checked-in snapshot.
  *
- * The JSON is written by hand because this module has no serialization dependency and the structure is
- * small. Tables and columns are sorted, so reordering entity declarations doesn't appear as a schema
- * change.
+ * The JSON is written by hand, because this module has no serialization dependency, and the
+ * structure is small. Tables and columns are sorted, so reordering entity declarations doesn't show up
+ * as a schema change.
  */
 internal fun emitSnapshot(entities: List<EntityModel>): String = buildString {
     val tableNames = entities.associate { it.qualifiedName to it.tableName }

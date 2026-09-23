@@ -2,70 +2,70 @@ package jetlin.testing
 
 import jetlin.protocol.EventPayload
 
-/**
- * Doing things to a view, as a browser would.
+/*
+ * Interactions with a view, as a browser would send them.
  *
- * There is no geometry here and nothing to hit-test: an interaction names a node and an event, and
- * the server calls the lambda it is holding for that pair. That is the whole input model, and it is
- * why these read as `click()` rather than as a pointer press at a coordinate.
+ * There's no geometry and nothing to hit-test. An interaction names a node and an event, and the
+ * server calls the lambda it holds for that pair. That's the whole input model, and it's why these
+ * functions are called `click()` instead of simulating a pointer press at a coordinate.
  *
- * Each of these returns once the recomposition it caused has been applied, so an assertion on the
- * next line sees the result and no test needs to sleep.
+ * Each one returns once the recomposition it caused has been applied, so an assertion on the next
+ * line sees the result, and no test needs to sleep. Each one throws an AssertionError if nothing
+ * listens for the event.
  */
 
-/** Clicks, as a user would. */
+/** Clicks the node, as a user would. */
 public suspend fun NodeSelection.click(): NodeSelection = apply {
     send("click", EventPayload())
 }
 
 /**
- * Replaces the contents of a text input.
+ * Replaces the contents of a text input with [text].
  *
- * Sends what a client sends after its debounce has elapsed — the field's new value, not a
- * keystroke — so this is one event however long [text] is.
+ * It sends what a client sends once its debounce has elapsed: the field's new value, not a
+ * keystroke. So this is one event, however long [text] is.
  */
 public suspend fun NodeSelection.type(text: String): NodeSelection = apply {
     send("input", EventPayload(value = text))
 }
 
-/** Ticks or unticks a checkbox. */
+/** Checks a checkbox, or clears it if [checked] is `false`. */
 public suspend fun NodeSelection.check(checked: Boolean = true): NodeSelection = apply {
     send("change", EventPayload(checked = checked))
 }
 
 /**
- * Picks an option in a `<select>`, naming it by the value the option carries.
+ * Chooses an option in a `<select>` by the option's value.
  *
- * A browser reports the value that was chosen rather than which option was clicked, so there is
- * nothing to resolve against the options here — and equally nothing checking that the value named is
- * one of them. A test picking something the list no longer offers fails on its next assertion rather
- * than on this line, so assert on the options too where they are the point.
+ * A browser reports the chosen value, not which option was clicked, so this function doesn't look
+ * at the options. That also means nothing checks that [value] is one of them. A test that chooses
+ * something the list no longer offers fails on its next assertion, not on this line. If the options
+ * matter, assert on them too.
  */
 public suspend fun NodeSelection.choose(value: String): NodeSelection = apply {
     send("change", EventPayload(value = value))
 }
 
-/** Submits a form, carrying the field values the browser would have collected. */
+/** Submits a form with [fields], the values the browser would have collected, by name. */
 public suspend fun NodeSelection.submit(fields: Map<String, String> = emptyMap()): NodeSelection = apply {
     send("submit", EventPayload(form = fields))
 }
 
-/** Presses a key, e.g. `pressKey("Enter")`. */
+/** Presses a key, such as `pressKey("Enter")`. */
 public suspend fun NodeSelection.pressKey(key: String): NodeSelection = apply {
     send("keydown", EventPayload(key = key))
 }
 
 /**
- * Sends [event] to the nearest element that is listening for it, starting at the selected node and
- * working outwards.
+ * Sends [event] to the nearest element that listens for it, starting at the selected node and
+ * working outward.
  *
- * Bubbling, as a browser does it: a handler is often on a wrapper rather than on the element
- * holding the text a test matched, and clicking `Button { Span { Text("Save") } }` should work
- * whichever of the two the query picked out.
+ * This is bubbling, as a browser does it. A handler is often on a wrapper instead of on the element
+ * with the text a test matched, and clicking `Button { Span { Text("Save") } }` should work
+ * whichever of the two the query selected.
  *
- * Fails when nothing in the chain is listening. A control whose handler was never wired up is a
- * real defect, and an interaction that quietly did nothing would let a test pass while asserting on
- * a page that cannot be used.
+ * It fails when nothing in the chain listens. A control whose handler was never connected is a real
+ * defect, and an interaction that did nothing would let a test pass on a page that can't be used.
  */
 private suspend fun NodeSelection.send(event: String, payload: EventPayload) {
     val target = withPath { path ->
@@ -78,14 +78,15 @@ private suspend fun NodeSelection.send(event: String, payload: EventPayload) {
             )
 
         // The browser stops at the first element listening for an event, so a client-only listener
-        // consumes it rather than letting it reach a handler further out. Saying so beats dispatching
-        // into nothing and leaving the test to wonder why the page did not change.
+        // consumes it instead of letting it reach a handler further out. Failing here is better
+        // than dispatching to nothing and leaving the test author to wonder why the page didn't
+        // change.
         if (listening.listenerSpec(event)?.notify == false) {
             throw AssertionError(
                 "The listener for '$event' on the node matching $describedBy is client-only: it " +
                     "declares commands and no handler, so there is nothing here to dispatch to. Its " +
                     "effect happens in the browser. Pin the declaration with assertClientCommands, " +
-                    "and cover the behaviour with a browser test.\n\nThe node was:\n" +
+                    "and cover the behavior with a browser test.\n\nThe node was:\n" +
                     listening.describe(),
             )
         }

@@ -1,3 +1,5 @@
+// Runs the browser tests against a demo that's already running. Set JETLIN_URL if it isn't on
+// localhost:8080.
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
@@ -7,8 +9,8 @@ export default defineConfig({
   reporter: [["list"]],
   use: {
     baseURL: process.env.JETLIN_URL ?? "http://localhost:8080",
-    // Point at a preinstalled Chromium when one is provided, so CI images that already ship a
-    // browser do not have to download a second copy pinned to this Playwright version.
+    // Use a preinstalled Chromium when one is provided, so CI images that already include a
+    // browser don't have to download a second copy pinned to this Playwright version.
     launchOptions: process.env.CHROMIUM_PATH
       ? { executablePath: process.env.CHROMIUM_PATH }
       : {},

@@ -11,6 +11,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
+/**
+ * Tests that [CompositionHost] drives a composition over any applier, here a plain tree of
+ * [TestNode]s.
+ */
 class CompositionHostTest {
 
     @Test
@@ -73,8 +77,8 @@ class CompositionHostTest {
             host.setContent { Node(label.value) }
             assertEquals("root(before)", root.render())
 
-            // No transact: simulate a background coroutine or pub/sub listener writing to the
-            // global snapshot. This only works because GlobalSnapshotManager is pumping.
+            // No transact: simulate a background coroutine or pub/sub listener writing to the global
+            // snapshot. This works only because GlobalSnapshotManager is running.
             Snapshot.withMutableSnapshot { label.value = "after" }
             host.awaitIdle()
 

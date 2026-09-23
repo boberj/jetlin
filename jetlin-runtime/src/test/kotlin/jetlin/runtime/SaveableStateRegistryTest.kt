@@ -7,13 +7,13 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 /**
- * The registry on its own, without a composition in front of it.
+ * Tests the registry on its own, without a composition in front of it.
  *
- * Which is the only way left to reach the collision guard deliberately. Compose derives the
- * automatic key from position, and since 1.12 it tells apart the case that used to collide most
- * easily — two `rememberSaved` calls side by side. The guard still matters, because position is not
- * an identity in a loop over reorderable data, but a test that has to arrange a real collision
- * through the composer is a test pinned to one runtime's key derivation. This one is not.
+ * That's the only way left to reach the collision check deliberately. Compose derives the automatic
+ * key from position, and since 1.12 it tells apart the case that used to collide most easily: two
+ * `rememberSaved` calls side by side. The check still matters, because a position isn't an identity
+ * in a loop over data that can be reordered. But a test that arranges a real collision through the
+ * composer would depend on one runtime version's key derivation. This one doesn't.
  */
 class SaveableStateRegistryTest {
 

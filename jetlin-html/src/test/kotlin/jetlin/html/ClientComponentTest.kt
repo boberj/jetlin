@@ -18,11 +18,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
- * An element the composition creates and then stops owning.
+ * Tests an element that the composition creates and then stops owning.
  *
- * The contract is props down, events up, and a disposable DOM in between. What is pinned here is
- * the server's half of it: that the element goes out empty and named, that changed props travel as
- * one ordinary attribute write, and that a push comes back as an application-level event.
+ * The contract is props down, events up, and a disposable DOM in between. These tests cover the
+ * server's half: the element goes out empty and named, changed props travel as one ordinary
+ * attribute write, and an event from the implementation comes back as an application-level event.
  */
 class ClientComponentTest {
 
@@ -47,8 +47,8 @@ class ClientComponentTest {
             view.start()
 
             val node = view.inspect { it.root.childNodes.single() as ElementNode }
-            // Whatever the implementation renders inside is its own; Jetlin never indexes it, so it
-            // can never try to insert a sibling at an index that means nothing.
+            // Whatever the implementation renders inside belongs to it. Jetlin never indexes it, so
+            // it can never try to insert a sibling at an index that means nothing.
             assertEquals(emptyList(), node.childNodes)
         }
     }
@@ -65,8 +65,8 @@ class ClientComponentTest {
             Snapshot.withMutableSnapshot { series = 2 }
             view.awaitIdle()
 
-            // No new protocol concept: props are an attribute, so they are diffed and patched like
-            // any other, and reach nodes that arrive after first paint for free.
+            // No new protocol concept: props are an attribute, so they're compared and patched like any
+            // other, and they reach nodes that arrive after the first paint for free.
             assertEquals(
                 listOf(Op.SetAttr(1, "data-jl-props", """{"series":2}""")),
                 view.inspect { it.drainOps() },
@@ -110,8 +110,8 @@ class ClientComponentTest {
         LiveView { _ -> ClientComponent("editor") }.use { view ->
             view.start()
 
-            // A push is the implementation calling into the runtime, not a DOM event, so there is
-            // nothing for the browser to listen for and no listener spec to send it.
+            // The implementation sends an event by calling the runtime, not through a DOM event, so
+            // there's nothing for the browser to listen for and no listener spec to send it.
             val node = view.inspect { it.root.childNodes.single() as ElementNode }
             assertEquals(emptySet(), node.eventNames)
             assertTrue(view.renderHtml().let { !it.contains("data-jl-on") }, view.renderHtml())
@@ -124,7 +124,7 @@ class ClientComponentTest {
         LiveView { _ -> ClientComponent("editor", onEvent = { _, _ -> calls++ }) }.use { view ->
             view.start()
 
-            // Malformed pushes come from the browser, which is not trusted to be well behaved.
+            // Malformed events come from the browser, which isn't trusted to behave.
             view.dispatch(ClientMessage.Event(1, COMPONENT_EVENT, 1, EventPayload()))
             view.dispatch(ClientMessage.Event(1, COMPONENT_EVENT, 2, EventPayload(data = JsonObject(emptyMap()))))
 

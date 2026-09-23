@@ -55,6 +55,11 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
+/**
+ * Starts the demo on the port in the `PORT` environment variable, or on port 8080.
+ *
+ * Besides Jetlin's own endpoints, it serves the two scripts the demo's client-side code lives in.
+ */
 fun main() {
     val port = System.getenv("PORT")?.toInt() ?: 8080
     embeddedServer(Netty, port = port) {
@@ -68,24 +73,24 @@ fun main() {
         }
         jetlin {
             // This app exists to be tested, so its test tags are written into the markup for
-            // Playwright to select on. A real application would set this only outside production,
-            // where the default keeps them off the wire entirely.
+            // Playwright to select. A real application would set this only outside production. The
+            // default keeps test tags off the wire entirely.
             exposeTestTags = true
             head = STYLES
-            // Registered before the session connects, so the sparkline's implementation is there
-            // when the runtime takes up the markup it was served.
+            // Load the scripts before the session connects, so the sparkline's implementation is
+            // registered when the runtime adopts the markup it was served.
             clientSetup = """
                 <script src="/demo/sparkline.js"></script>
                 <script src="/demo/errors.js"></script>
             """.trimIndent()
-            // Where a real application would forward this to its error reporting. Printing it is
-            // the demo's version of that; the point is that the exception reaches the application
-            // rather than only a log line nobody reads.
+            // A real application would forward this to its error reporting. The demo prints it. What
+            // matters is that the exception reaches the application, not only a log line that nobody
+            // reads.
             onError = { throwable ->
                 println("[demo] a session reported: ${throwable::class.simpleName}: ${throwable.message}")
             }
-            // Composed once for the session, above whichever view is current: the nav is not
-            // rebuilt on every move, and anything remembered here would outlive one.
+            // The shell is composed once for the session, above whichever view is current. The nav
+            // isn't rebuilt on every navigation, and anything remembered here outlives one.
             app { route -> Shell(route) }
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
@@ -97,20 +102,21 @@ fun main() {
 }
 
 /**
- * The filter the nav holds, reachable from whichever view is composed under it.
+ * The filter that the nav holds, which any view composed under it can read.
  *
- * Declared here rather than by the framework: `app { }` provides somewhere for state to live, and
- * an application says what that state is and who may read it. The default is a state nobody else
- * holds, so a view composed on its own — as several tests do — reads an empty filter instead of
- * failing.
+ * The application declares it, not the framework. `app { }` provides a place for state to live, and
+ * the application decides what that state is and who can read it. The default is a state that
+ * nobody else holds, so a view composed on its own, as several tests do, reads an empty filter
+ * instead of failing.
  */
 internal val LocalTodoFilter: ProvidableCompositionLocal<MutableState<String>> =
     compositionLocalOf { mutableStateOf("") }
 
+/** The page chrome around every view: the nav, the filter, and the reset button. */
 @Composable
 internal fun Shell(content: @Composable () -> Unit) {
-    // Remembered in the container, which is composed once for the session, so it is still here
-    // after opening a todo and coming back. The same `remember` inside a view would not be.
+    // Remember the filter in the container, which is composed once for the session, so it's still
+    // here after opening a todo and coming back. The same `remember` inside a view wouldn't be.
     val filter = remember { mutableStateOf("") }
     CompositionLocalProvider(LocalTodoFilter provides filter) {
         Div({ classes("page") }) {
@@ -138,10 +144,11 @@ internal fun Shell(content: @Composable () -> Unit) {
     }
 }
 
+/** The todo list, with a field for adding a todo, and the server clock. */
 @Composable
 internal fun TodoListPage() {
-    // Saved rather than remembered: a half-typed todo is worth carrying across a dropped
-    // connection or a deploy, and it is the one piece of state on this page the user authored.
+    // Save the draft instead of remembering it. A half-typed todo is worth keeping across a dropped
+    // connection or a deployment, and it's the only state on this page that the user wrote.
     val draft = rememberSavedField("", key = "draft") {
         if (it.isBlank()) "Enter something to do" else null
     }
@@ -172,8 +179,8 @@ internal fun TodoListPage() {
         val filter = LocalTodoFilter.current.value
         Ul({ classes("todos") }) {
             TodoStore.todos.filter { it.title.contains(filter, ignoreCase = true) }.forEach { todo ->
-                // Keyed by identity, so reordering moves the existing nodes rather than rewriting
-                // every row's text.
+                // Key each row by its ID, so reordering moves the existing nodes instead of
+                // rewriting every row's text.
                 key(todo.id) { TodoRow(todo) }
             }
         }
@@ -187,6 +194,7 @@ internal fun TodoListPage() {
     ServerClock()
 }
 
+/** One todo: its checkbox, a link to its detail page, and its buttons. */
 @Composable
 internal fun TodoRow(todo: Todo) {
     Li({ testTag("todo") }) {
@@ -203,6 +211,7 @@ internal fun TodoRow(todo: Todo) {
     }
 }
 
+/** The page for editing one todo, with validation that runs on the server. */
 @Composable
 internal fun TodoDetailPage() {
     val id = pathParam("id").toIntOrNull()
@@ -218,8 +227,8 @@ internal fun TodoDetailPage() {
         return
     }
 
-    // Keyed on the item, so moving between /todo/1 and /todo/2 refills the fields rather than
-    // carrying one item's edits over to the next.
+    // Key the fields on the todo, so moving from /todo/1 to /todo/2 refills them instead of carrying
+    // one todo's edits over to the next.
     key(todo.id) {
         val title = rememberField(todo.title) {
             when {
@@ -275,16 +284,15 @@ internal fun TodoDetailPage() {
 }
 
 /**
- * What happens when the server-side code goes wrong.
+ * Shows what happens when server-side code fails.
  *
- * Two failures that look identical from the outside — an exception reaching the transport — and are
- * not the same thing at all. A handler that throws leaves the composition untouched, so one
- * interaction did not happen and everything else still works. A composable that throws stops the
- * recomposer for good, so the session can only be abandoned.
+ * From the outside, two failures look the same: an exception reaches the transport. They're
+ * different. A handler that throws leaves the composition intact, so one interaction didn't happen,
+ * and everything else still works. A composable that throws stops the recomposer for good, so the
+ * session can only be abandoned.
  *
- * Telling them apart is worth the trouble: treating every failure as fatal throws away sessions that
- * were fine, and treating none of them as fatal leaves a page that looks live and can never change
- * again.
+ * Telling them apart is worth the trouble. Treating every failure as fatal throws away sessions that
+ * were fine, and treating none as fatal leaves a page that looks live but can never change again.
  */
 @Composable
 internal fun ErrorsPage() {
@@ -351,19 +359,18 @@ internal fun ErrorsPage() {
         }
     }
 
-    // Composed fine the first time and fatal on the next pass, which is exactly the shape of a real
-    // one: a view that was correct until some state made it not.
+    // This composes fine the first time and fails on the next pass, like a real failure: a view that
+    // was correct until some state made it wrong.
     if (broken) error("this view cannot render in this state")
 }
 
 /**
- * Markup that is awkward to hand back to a browser and take up again.
+ * Shows markup that's awkward to send to a browser and adopt again.
  *
- * Every shape here is one the HTML parser would blur: two text nodes it would merge into one, a text
- * node with nothing in it to produce, text sitting either side of an element, markup that is not the
- * composition's to touch, and a subtree it hands to another language entirely. The page exists so
- * those cases are exercised rather than reasoned about, since a mistake in any of them shows up not
- * on load but several interactions later.
+ * The HTML parser would blur every case here: two text nodes it would merge into one, an empty text
+ * node it wouldn't produce, text on either side of an element, markup the composition doesn't own,
+ * and a subtree in another language. The page exists so these cases are exercised instead of
+ * reasoned about, because a mistake in any of them shows up several interactions later, not on load.
  */
 @Composable
 internal fun ShapesPage() {
@@ -427,25 +434,24 @@ internal fun ShapesPage() {
     Chart()
 }
 
-/** The readings each series starts with. Two of the same length, so switching only moves the line. */
+/** The readings each series starts with. Both have the same length, so switching only moves the line. */
 private val SERIES = mapOf(
     "speed" to listOf(6, 9, 5, 12, 8),
     "fuel" to listOf(11, 7, 13, 6, 9),
 )
 
 /**
- * A chart the server draws, in the other language a browser understands.
+ * A chart that the server draws in SVG.
  *
- * Nothing here is a picture the server produced — it is a tree of elements like any other, patched
- * the same way. What makes it worth a page of its own is that the browser will not accept those
- * elements from the usual door: a `<circle>` created as HTML is a real element that occupies no
- * space and reports no error, so getting this wrong shows up as an empty rectangle rather than as
- * anything anybody could debug. The composition says which language it meant, and each node carries
- * that to the browser on both paths — the markup served for first paint, and the ops that patch it
- * afterwards.
+ * The server doesn't produce a picture here. The chart is a tree of elements like any other, patched
+ * the same way. It's worth its own demo because the browser doesn't accept SVG elements the usual
+ * way: a `<circle>` created as HTML is a real element that takes up no space and reports no error,
+ * so a mistake shows up as an empty rectangle that's hard to debug. The composition says which
+ * language it meant, and each node carries that to the browser on both paths: in the markup for the
+ * first paint, and in the ops that patch it afterward.
  *
- * The caption sits in a `<foreignObject>`, which hands the browser back to HTML in the middle of the
- * drawing, so text wraps the way text does.
+ * The caption is in a `<foreignObject>`, which switches the browser back to HTML in the middle of the
+ * drawing, so the text wraps like normal text.
  */
 @Composable
 internal fun Chart() {
@@ -468,8 +474,8 @@ internal fun Chart() {
             Span({ classes("label") }) { Text("Series") }
             Select({
                 classes("input"); testTag("chart-series")
-                // A dropdown commits a choice rather than reporting a keystroke, so it listens for
-                // "change" and not "input".
+                // A dropdown commits a choice instead of reporting a keystroke, so it listens for
+                // "change", not "input".
                 onChange { series = it }
             }) {
                 for (name in SERIES.keys) {
@@ -482,8 +488,8 @@ internal fun Chart() {
 
         Svg({
             classes("chart"); testTag("chart")
-            // Mixed case, and it has to survive the serializer, the HTML parser and setAttribute:
-            // "viewbox" is silently not the same attribute at all.
+            // The name is mixed case, and it has to survive the serializer, the HTML parser, and
+            // setAttribute. "viewbox" is a different attribute, and the browser ignores it.
             attr("viewBox", "0 0 $VIEW_WIDTH $VIEW_HEIGHT")
             attr("role", "img")
         }) {
@@ -514,8 +520,8 @@ internal fun Chart() {
         Div({ classes("row") }) {
             Button({
                 classes("btn"); testTag("chart-add")
-                // Appends a shape to a subtree the browser has already parsed, which is the other
-                // path into the DOM: an insert op, built by the client rather than by the parser.
+                // Append a shape to a subtree the browser already parsed. That's the other path into
+                // the DOM: an insert op that the client builds, instead of the parser.
                 onClick { added = added + ((added.size * 5 + 4) % 11 + 3) }
             }) { Text("Another reading") }
             Span({ classes("count"); testTag("chart-values") }) { Text(readings.joinToString(",")) }
@@ -523,6 +529,7 @@ internal fun Chart() {
     }
 }
 
+// The chart's coordinate system, and the plot area inside it.
 private const val VIEW_WIDTH = 220
 private const val VIEW_HEIGHT = 80
 private const val LEFT = 10.0
@@ -530,6 +537,7 @@ private const val RIGHT = 210.0
 private const val TOP = 20.0
 private const val BOTTOM = 72.0
 
+/** The about page, with the client-only disclosure and the sparkline. */
 @Composable
 internal fun AboutPage() {
     Div({ classes("card") }) {
@@ -550,15 +558,15 @@ internal fun AboutPage() {
 }
 
 /**
- * A canvas the server cannot draw, fed by state the server owns.
+ * A chart that the browser draws, from state that the server owns.
  *
- * Everything else on these pages is markup a composition can produce. A chart is not: it is pixels,
- * drawn by code that has to run where the canvas is. So the composition renders an empty element,
- * names an implementation for it, and passes the numbers down as props.
+ * Everything else on these pages is markup that a composition can produce. This chart isn't: it's
+ * drawn by code that has to run in the browser. So the composition renders an empty element, names
+ * an implementation for it, and passes the numbers down as props.
  *
- * Nothing is preserved if the connection drops long enough to need the tree resent — the canvas is
- * rebuilt and redrawn from these same props, which is exactly why they live here and not in the
- * browser.
+ * If the connection drops long enough that the tree has to be resent, nothing in the element is
+ * kept. The chart is rebuilt and redrawn from the same props, which is why the numbers live here and
+ * not in the browser.
  */
 @Composable
 internal fun Sparkline() {
@@ -573,7 +581,7 @@ internal fun Sparkline() {
             },
             attrs = { classes("sparkline"); testTag("sparkline") },
             onEvent = { event, payload ->
-                // The chart reports which bar was clicked; the server decides what that means.
+                // The chart reports which bar was clicked, and the server decides what that means.
                 if (event == "picked") {
                     val index = payload["index"]!!.jsonPrimitive.int
                     points = points.toMutableList().also { it[index] = (it[index] % 9) + 1 }
@@ -592,10 +600,10 @@ internal fun Sparkline() {
 /**
  * A panel that opens without asking the server.
  *
- * Everything else on these pages is a round trip, which is right when the server has an opinion —
- * it owns the todos, the validation and the routing. It has no opinion about whether a panel is
- * open, so paying a network hop to find out would be latency spent on nothing. The button declares
- * what the browser should do and the browser does it, with the socket idle or even disconnected.
+ * Everything else on these pages is a round trip, which is right when the server cares, because it
+ * owns the todos, the validation, and the routing. The server doesn't care whether a panel is open,
+ * so a network round trip for it would only add latency. The button declares what the browser
+ * should do, and the browser does it, even while the socket is idle or disconnected.
  */
 @Composable
 internal fun Disclosure() {
@@ -618,10 +626,10 @@ internal fun Disclosure() {
 }
 
 /**
- * An update the client never asked for.
+ * Shows an update that the client never asked for.
  *
- * The effect runs on the server for as long as the session lives. Each tick writes state this
- * composable reads, which recomposes it, which produces a patch.
+ * The effect runs on the server for as long as the session lives. Each tick writes state that this
+ * composable reads, which recomposes it and produces a patch.
  */
 @Composable
 internal fun ServerClock() {
@@ -644,6 +652,7 @@ internal fun ServerClock() {
     }
 }
 
+/** The demo's style sheet, added to every page's `<head>`. */
 private val STYLES = """
     <style>
       :root { color-scheme: light dark; }

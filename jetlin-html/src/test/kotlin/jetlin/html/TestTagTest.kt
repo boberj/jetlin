@@ -15,11 +15,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 /**
- * A test tag names an element for whoever is testing it, and costs the browser nothing.
+ * Tests that a test tag names an element for tests, and costs the browser nothing.
  *
- * The tag lives on the node rather than among the attributes, so it is never serialized and never
- * sent. Browser tests are the exception — Playwright can only select on what is really in the DOM —
- * so a server can be configured to write tags out as well, and these pin down both halves.
+ * The tag is stored on the node instead of with the attributes, so it's never serialized or sent.
+ * Browser tests are the exception, because Playwright can select only what's in the DOM, so a server
+ * can be configured to write tags out too. These tests cover both halves.
  */
 class TestTagTest {
 
@@ -46,8 +46,8 @@ class TestTagTest {
 
     @Test
     fun `an exposed tag also reaches nodes that arrive after first paint`(): Unit = runBlocking {
-        // The case that rules out adding the attribute at serialization time: a row inserted later
-        // never goes through the HTML serializer at all, it travels as a NodeSpec.
+        // This case rules out adding the attribute at serialization time. A row inserted later never
+        // goes through the HTML serializer. It travels as a NodeSpec.
         var shown by mutableStateOf(false)
         LiveView(exposeTestTags = true) { _ ->
             Div { if (shown) Span({ testTag("late") }) { Text("here") } }
@@ -74,7 +74,7 @@ class TestTagTest {
             Snapshot.withMutableSnapshot { name = "second" }
             view.awaitIdle()
 
-            // The node knows its new name; the client is told nothing, because it has no use for it.
+            // The node knows its new name, and the client is told nothing, because it has no use for it.
             assertEquals(emptyList(), view.inspect { it.drainOps() })
             assertEquals(
                 "second",

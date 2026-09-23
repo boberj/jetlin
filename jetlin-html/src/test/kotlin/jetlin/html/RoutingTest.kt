@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
+/** Tests how [RoutePattern] matches paths and extracts parameters. */
 class RoutePatternTest {
 
     @Test
@@ -46,6 +47,7 @@ class RoutePatternTest {
     }
 }
 
+/** Tests that [Router] prefers literal segments over parameters, whatever the registration order. */
 class RouterTest {
 
     private val router = Router(
@@ -64,7 +66,7 @@ class RouterTest {
 
     @Test
     fun `a literal segment wins over a parameter regardless of declaration order`() {
-        // /todo/new was registered last but must not be swallowed by /todo/{id}.
+        // /todo/new was registered last, but /todo/{id} must not swallow it.
         assertEquals("create", router.resolve("/todo/new")?.value)
     }
 
@@ -79,6 +81,7 @@ class RouterTest {
     }
 }
 
+/** Tests [RequestContext]: query parsing, URLs, and what survives a change of location. */
 class RequestContextTest {
 
     @Test

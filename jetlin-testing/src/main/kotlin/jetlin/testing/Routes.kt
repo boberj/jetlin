@@ -12,29 +12,30 @@ import jetlin.html.Router
 import jetlin.html.Subject
 import jetlin.html.LocalRouteGuards
 
-/** Collects the routes a test makes available. */
+/** Collects the routes that a test makes available. See [setRoutes]. */
 public class RoutesBuilder internal constructor() {
     internal val routes: MutableList<Pair<RoutePattern, TestRoute>> = mutableListOf()
 
+    /** The container that [app] set, or `null` for none. */
     internal var container: (@Composable (route: @Composable () -> Unit) -> Unit)? = null
 
     /**
-     * Registers [content] at [pattern], e.g. `view("/todo/{id}") { TodoDetailPage() }`.
+     * Registers [content] at [pattern], such as `view("/todo/{id}") { TodoDetailPage() }`.
      *
-     * [requires] is the route's guard, declared the same way as in the application. As in the real
-     * server, the guard runs inside the composition, so revocation and hibernation can be tested without
-     * a browser.
+     * @param requires the route's guard, declared the same way as in the application. As on the
+     *   real server, the guard runs inside the composition, so you can test revocation and
+     *   hibernation without a browser.
      */
     public fun view(pattern: String, requires: Guard? = null, content: @Composable () -> Unit) {
         routes += RoutePattern(pattern) to TestRoute(requires, content)
     }
 
     /**
-     * Registers a view for a single record that the route looks up itself, like the equivalent
+     * Registers a view for a single record that the route looks up itself, like the matching
      * `JetlinConfig.view` overload.
      *
-     * Check the title with [ViewTest.title]. A title computed from a record the principal may not read
-     * would leak it through `<head>`, and assertions on the body wouldn't catch that.
+     * Check the title with [ViewTest.title]. A title computed from a record that the principal can't
+     * read would leak it through `<head>`, and assertions on the body wouldn't catch that.
      */
     public fun <T : Any> view(
         pattern: String,
@@ -49,9 +50,10 @@ public class RoutesBuilder internal constructor() {
     }
 
     /**
-     * Wraps every view in a container composed once for the session, as `JetlinConfig.app` does.
+     * Wraps every view in a container that's composed once for the session, as `JetlinConfig.app`
+     * does.
      *
-     * Needed to test anything that outlives a navigation, since a `remember` in a view does not.
+     * You need it to test anything that outlives a navigation, because a `remember` in a view doesn't.
      */
     public fun app(content: @Composable (route: @Composable () -> Unit) -> Unit) {
         container = content
@@ -59,13 +61,13 @@ public class RoutesBuilder internal constructor() {
 }
 
 /**
- * Composes whichever of [block]'s routes matches the session's current location, and follows it as
- * the session navigates.
+ * Composes whichever route from [block] matches the session's location, and follows the session as
+ * it navigates.
  *
- * The alternative, [ViewTest.setContent], pins one view in place. That is right for testing a view
- * on its own and wrong the moment anything calls `LocalNavigator.push`: the session moves, the
- * pinned view stays composed at a location it was never written for, and a page reading a path
- * parameter that no longer exists fails inside the composition rather than in the assertion.
+ * The alternative, [ViewTest.setContent], keeps one view in place. That's right for testing a view on
+ * its own, but wrong as soon as anything calls `LocalNavigator.push`. The session moves, the view
+ * stays composed at a location it wasn't written for, and a page that reads a path parameter that no
+ * longer exists fails inside the composition instead of in an assertion.
  *
  * ```kotlin
  * runViewTest(url = "/todo/1") {
@@ -80,8 +82,8 @@ public class RoutesBuilder internal constructor() {
  * }
  * ```
  *
- * Path parameters are resolved by the route that matched, so `pathParam("id")` works exactly as it
- * does when the application is served.
+ * The matched route extracts the path parameters, so `pathParam("id")` works exactly as it does
+ * when the application is served. Navigating to a path that no route matches fails the composition.
  */
 public suspend fun ViewTest.setRoutes(block: RoutesBuilder.() -> Unit) {
     val builder = RoutesBuilder().apply(block)
@@ -90,8 +92,8 @@ public suspend fun ViewTest.setRoutes(block: RoutesBuilder.() -> Unit) {
     val patterns = builder.routes.joinToString { it.first.pattern }
 
     setRoutedContent { request ->
-        // The same host the server composes, so a test drives what an application runs: the
-        // container above, the matched view keyed below it, saved state restored on the way back.
+        // Use the same host the server composes, so a test drives what an application runs: the
+        // container above, the matched view keyed below it, and saved state restored on return.
         CompositionLocalProvider(LocalRouteGuards provides guards) {
             RouteHost(
                 router = router,

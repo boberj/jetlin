@@ -11,11 +11,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * When the application's `attributes` factory runs.
+ * Tests when the application's `attributes` factory runs.
  *
- * It is the hook where a principal, a tenant or a locale enters a session, so it is somewhere an
- * application reasonably does real work — a directory lookup, a database read. How often it runs is
- * therefore part of its contract rather than an implementation detail.
+ * The factory is where a principal, a tenant, or a locale enters a session, so an application can
+ * reasonably do real work there, such as a directory lookup or a database read. How often it runs is
+ * part of its contract, not an implementation detail.
  */
 class AttributesTest {
 
@@ -42,8 +42,8 @@ class AttributesTest {
                 awaitMessage<ServerMessage.Reset>()
             }
 
-            // The composition this socket attached to already has its context. Recomputing one to
-            // throw away would charge every reconnect for whatever the factory does.
+            // The composition this socket attached to already has its context. Computing a new one only
+            // to discard it would charge every reconnect for whatever the factory does.
             assertEquals(1, runs.get(), "a socket claiming a live composition inherits its context")
         }
 }

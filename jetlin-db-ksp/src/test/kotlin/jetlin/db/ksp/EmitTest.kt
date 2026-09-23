@@ -7,11 +7,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Tests the source code the processor generates.
+ * Tests the source code that the processor generates.
  *
  * Generated code can compile and still be wrong. For example, a loader that assigns a column after
- * construction instead of passing it to the constructor still compiles, but can't restore a `val`.
- * These tests check the generated code itself, not just that it compiles.
+ * construction, instead of passing it to the constructor, still compiles, but can't restore a
+ * `val`. These tests check the generated code itself, not only that it compiles.
  */
 class EmitTest {
 
@@ -139,7 +139,7 @@ class EmitTest {
         assertContains(snapshot, "{ \"name\": \"id\", \"type\": \"INTEGER\", \"nullable\": false, \"primaryKey\": true },")
         assertContains(snapshot, "\"references\": \"users\"")
         assertContains(snapshot, "\"owner\": true")
-        // Sorted, so that reordering entity declarations doesn't change the schema file.
+        // Sorted, so reordering entity declarations doesn't change the schema file.
         assertTrue(snapshot.indexOf("\"todos\"") < snapshot.indexOf("\"users\""), snapshot)
     }
 }

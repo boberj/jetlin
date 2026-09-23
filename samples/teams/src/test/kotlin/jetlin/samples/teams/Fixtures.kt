@@ -6,7 +6,7 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteRecursively
 
-/** A newly seeded database for each test, so tests don't share state. */
+/** Runs [block] against a newly seeded database, so tests don't share state. */
 @OptIn(ExperimentalPathApi::class)
 internal fun withSample(block: (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-teams-test")
@@ -17,5 +17,6 @@ internal fun withSample(block: (Db) -> Unit) {
     }
 }
 
+/** Returns the seeded user with [email], without a policy check. Tests use it to pick a principal. */
 internal fun Db.user(email: String): User =
     checkNotNull(authenticate(User::class) { it.email == email }) { "no seeded user $email" }

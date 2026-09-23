@@ -12,10 +12,10 @@ import kotlin.test.assertTrue
 /**
  * Tests generated migrations by applying them to a real database.
  *
- * Checking that the generated SQL looks right isn't enough. Migrations usually fail because of SQLite's
- * own limitations, which only show up when the SQL runs. Each test creates a database with the old
- * schema, inserts a row, applies the generated migration, then reads back the schema and checks that
- * the row survived.
+ * Checking that the generated SQL looks right isn't enough. Migrations usually fail because of
+ * SQLite's own limitations, which show up only when the SQL runs. Each test creates a database with
+ * the old schema, inserts a row, applies the generated migration, then reads back the schema and
+ * checks that the row survived.
  */
 class MigrationTest {
 
@@ -38,7 +38,7 @@ class MigrationTest {
         val after = schema(table("tasks", id(), text("title"), integer("done", nullable = false)))
         val sql = migrationFor(before, after)
 
-        // The backfill value appears in the SQL for the author to review, not hidden inside the tool.
+        // The backfill value appears in the SQL for the author to review, instead of hidden in the tool.
         assertContains(sql, "ADD COLUMN done INTEGER NOT NULL DEFAULT 0")
 
         val database = migrated(before, after) { connection ->
@@ -130,7 +130,8 @@ class MigrationTest {
         create(database, before)
         DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
             connection.createStatement().use {
-                // A row referencing a user that doesn't exist. Valid before the constraint is added, not after.
+                // A row that references a user that doesn't exist. It's valid before the constraint
+                // is added, not after.
                 it.execute("INSERT INTO tasks (id, owner) VALUES (1, 404)")
             }
         }
@@ -158,8 +159,8 @@ class MigrationTest {
         val sql = migrationFor(before, after).replace("$ACKNOWLEDGEMENT_MARKER\n", "")
         store.write(file, sql)
 
-        // The generator can't see which objects a particular database has, so the runner has to detect
-        // the loss. Views are the most common case; an index is the simplest to demonstrate.
+        // The generator can't see which objects a particular database has, so the runner has to
+        // detect the loss. Views are the most common case, and an index is the simplest to demonstrate.
         val failure = assertFailsWith<IllegalStateException> { applyMigrations(database, store) }
         assertContains(failure.message.orEmpty(), "index tasks_by_rank")
 
@@ -224,7 +225,10 @@ private fun integer(name: String, nullable: Boolean = false, references: String?
 private fun migrationFor(before: SchemaFile, after: SchemaFile): String =
     migrationSql(before, after, diff(before, after))
 
-/** Creates a database with schema [before], lets [seed] insert rows, then applies the generated migration. */
+/**
+ * Creates a database with the schema [before], lets [seed] insert rows, then applies the generated
+ * migration.
+ */
 private fun migrated(
     before: SchemaFile,
     after: SchemaFile,
@@ -253,7 +257,7 @@ private fun create(database: File, schema: SchemaFile) {
     }
 }
 
-/** Reads the database's current schema, in the same format as the schema snapshot. */
+/** Reads the database's current schema for [table], in the same format as the schema snapshot. */
 private fun columnsOf(database: File, table: String): List<ColumnSchema> =
     DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
         val references = mutableMapOf<String, String>()
@@ -272,9 +276,10 @@ private fun columnsOf(database: File, table: String): List<ColumnSchema> =
                             ColumnSchema(
                                 name = name,
                                 type = results.getString("type"),
-                                // SQLite reports `notnull = 0` for an INTEGER PRIMARY KEY because it aliases
-                                // the rowid, where inserting NULL means "allocate an id". The column is never
-                                // null, so treating it as optional would report a difference that isn't real.
+                                // SQLite reports `notnull = 0` for an INTEGER PRIMARY KEY because
+                                // it's an alias for the rowid, where inserting NULL means "allocate
+                                // an ID." The column is never null, so treating it as optional
+                                // would report a difference that isn't real.
                                 nullable = !primaryKey && results.getInt("notnull") == 0,
                                 references = references[name],
                                 primaryKey = primaryKey,

@@ -11,10 +11,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * Which node a query resolves to, and what it says when it cannot decide.
+ * Tests which node a query finds, and what it reports when it can't decide.
  *
- * A query that silently picks one of several matches is worse than one that fails, because the test
- * it produces passes for the wrong reason. These pin the failures down as carefully as the successes.
+ * A query that picks one of several matches without saying so is worse than one that fails, because
+ * the test passes for the wrong reason. These tests check the failures as carefully as the successes.
  */
 class SelectionTest {
 
@@ -28,7 +28,7 @@ class SelectionTest {
             }
         }
 
-        // Both the <li> and the <span> render exactly "Buy milk"; the inner one is what was meant.
+        // Both the <li> and the <span> render exactly "Buy milk", and the inner one is what was meant.
         assertEquals("span", onNode(hasText("Buy milk")).fetch().tag)
     }
 

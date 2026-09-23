@@ -27,14 +27,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Tests the sample against its stub external system over real HTTP.
+ * Tests the sample against its stub of an external system, over real HTTP.
  *
- * The stub runs in this process on a port chosen by the operating system, and is called through a real
- * HTTP client. That is as close to a real external system as a reliable test can get. The tests check two
- * caching properties from the page's point of view: each principal's data is fetched with that
- * principal's own credential, and data that is the same for everyone is fetched only once.
+ * The stub runs in this process on a port that the operating system chooses, and the tests call it
+ * through a real HTTP client. That's as close to a real external system as a reliable test can get.
+ * The tests check two caching properties from the page's point of view: each principal's data is
+ * fetched with that principal's own credential, and data that's the same for everyone is fetched
+ * only once.
  *
- * Both properties are about requests that were *not* made, which is why the stub records every call.
+ * Both properties are about requests that weren't made, which is why the stub records every call.
  */
 class HubTest {
 
@@ -59,8 +60,8 @@ class HubTest {
             }
         }
 
-        // One request per principal, each using that principal's own token. There is no shared profile
-        // object that the wrong principal could reach.
+        // One request per principal, each with that principal's own token. There's no shared
+        // profile object that the wrong principal could reach.
         assertEquals(
             listOf("me:alice@example.com", "me:bob@example.com"),
             data.calls.filter { it.startsWith("me:") },
@@ -77,7 +78,7 @@ class HubTest {
                     signedInToHub(db, hub, if (session == 0) "alice@example.com" else "bob@example.com")
 
                     eventually { onNode(hasTestTag("announcement")).assertText("Deploy freeze on Friday") }
-                    // Also shown in the chrome, a second reader of the same value.
+                    // The chrome shows it too, so it's a second reader of the same value.
                     onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday")
                 }
             }
@@ -115,8 +116,8 @@ class HubTest {
                     signedInToHub(db, hub, "alice@example.com")
                     eventually { onNode(hasTestTag("banner")).assertText("Deploy freeze on Friday") }
 
-                    // The announcement changes on the external system. Nothing notifies the application
-                    // and nobody interacts with the page; the watch picks up the change and its write
+                    // The announcement changes on the external system. Nothing notifies the application,
+                    // and nobody interacts with the page. The watch picks up the change, and its write
                     // redraws the banner.
                     data.announcement = "All clear"
 
@@ -158,7 +159,7 @@ class HubTest {
                     onNode(hasTestTag("status-error"))
                         .assertText("a status has to fit in $STATUS_LIMIT characters")
                 }
-                // Nothing was saved, and the session still works: the only effect is an error message.
+                // Nothing was saved, and the session still works. The only effect is an error message.
                 onNode(hasTestTag("status")).assertText("no status · 0 updates")
                 onNode(hasTestTag("save-status")).assertExists()
             }
@@ -177,20 +178,21 @@ private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
 }
 
 /**
- * Test setup: the stub, a hub client pointed at it, and a way to wait for the page to react.
+ * The test setup: the stub, a hub client pointed at it, and a way to wait for the page to react.
  *
- * Tests wait using [eventually] instead of joining coroutines. An earlier version joined the fetch
+ * Tests wait with [eventually] instead of joining coroutines. An earlier version joined the fetch
  * scope's children, which worked until watched values added a polling loop to that scope. The loop
  * never finishes, so joining it would never return.
  */
 private class HubFixture(val data: HubData) {
     /**
-     * Retries [assertion] until it passes, for work started by the session that `awaitIdle` can't see.
+     * Retries [assertion] until it passes, for work that the session started and `awaitIdle` can't
+     * see.
      *
-     * A command waits on a network socket rather than queuing work on the session's dispatcher, so a
-     * session with a request in flight really is idle and can handle other events. A test that needs
-     * the outcome has to wait for the outcome itself. This is the only real-time wait in these tests, so
-     * it has a time limit and reports the last failure it saw.
+     * A command waits on a network socket instead of queuing work on the session's dispatcher, so a
+     * session with a request in progress really is idle, and can handle other events. A test that
+     * needs the outcome has to wait for the outcome itself. This is the only real-time wait in these
+     * tests, so it has a time limit, and it reports the last failure it saw.
      */
     suspend fun ViewTest.eventually(assertion: suspend () -> Unit) {
         var last: AssertionError? = null

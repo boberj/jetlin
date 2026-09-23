@@ -20,12 +20,12 @@ import kotlin.test.assertEquals
 /**
  * Tests routes that look up their own record.
  *
- * This design prevents insecure direct object references, such as requesting `/todo/42` when todo 42
- * belongs to someone else. The route performs the policy-checked lookup itself, and the view never
- * receives the raw path parameter, so it can't look up an arbitrary id.
+ * This design prevents insecure direct object references, such as requesting `/todo/42` when todo
+ * 42 belongs to someone else. The route performs the policy-checked lookup itself, and the view
+ * never receives the raw path parameter, so it can't look up an arbitrary ID.
  *
- * Every test checks the title separately. `<head>` is rendered before the body, so a title computed from
- * a record would reveal it even if the body refused to show it.
+ * Every test checks the title separately. `<head>` is rendered before the body, so a title computed
+ * from a record would reveal it even if the body refused to show it.
  */
 class EntityRouteTest {
 
@@ -83,7 +83,7 @@ class EntityRouteTest {
                 setTaskRoutes(db)
                 onNode(hasTag("h1")).assertText("shared plan")
 
-                // Alice unshares the project. Nothing notifies Bob's session directly: resolving the
+                // Alice unshares the project. Nothing notifies Bob's session directly. Looking up the
                 // route's subject read `project.shared` through the policy, so the write invalidates it.
                 with(alice) { project.update { shared = false } }
                 awaitIdle()
@@ -98,7 +98,7 @@ private val PrincipalKey = AttributeKey<User?>("principal")
 
 private val Principals = Principals(PrincipalKey, signIn = "/login")
 
-/** The routes under test, declared the same way an application would declare them. */
+/** Sets up the routes under test, declared as an application would declare them. */
 private suspend fun ViewTest.setTaskRoutes(db: Db) {
     setRoutes {
         view("/login") { Page("Sign in") }
@@ -112,7 +112,8 @@ private suspend fun ViewTest.setTaskRoutes(db: Db) {
 }
 
 /**
- * The route's lookup. It is policy-checked, so it returns null for a record this principal may not read.
+ * Looks up the route's record. The lookup is policy-checked, so it returns `null` for a record that
+ * this principal can't read.
  *
  * The view only ever receives the result of this lookup, never the path parameter itself.
  */

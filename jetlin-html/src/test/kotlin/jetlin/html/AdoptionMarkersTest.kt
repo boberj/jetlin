@@ -6,11 +6,11 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.runBlocking
 
 /**
- * The markers that let the client index server-rendered markup instead of being sent the tree.
+ * Tests the markers that let the client index server-rendered markup instead of receiving the tree.
  *
- * All of these are about text. Elements name themselves with `data-jl`, but a text node carries no
- * attributes of its own, an HTML parser merges two adjacent ones into a single node, and one with no
- * content produces no node at all — so the markup has to state what the parser cannot.
+ * All of them concern text. Elements identify themselves with `data-jl`, but a text node has no
+ * attributes, an HTML parser merges two adjacent text nodes into one, and an empty one produces no
+ * node at all. So the markup has to state what the parser can't.
  */
 class AdoptionMarkersTest {
 
@@ -21,8 +21,8 @@ class AdoptionMarkersTest {
         Div { Text("hello") }
     }
 
-    // Without a separator the parser produces one "onetwo" node, leaving the client a child short
-    // and every index after it wrong.
+    // Without a separator, the parser produces one "onetwo" node, which leaves the client a child
+    // short and every later index wrong.
     @Test
     fun `adjacent text children are kept apart`(): Unit = assertRenders(
         """<div data-jl="1" data-jl-t="0:2,1:3">one<!--|-->two</div>""",
@@ -43,7 +43,7 @@ class AdoptionMarkersTest {
         }
     }
 
-    // The empty marker is itself a boundary, so no separator is needed beside it.
+    // The empty marker is itself a boundary, so no separator is needed next to it.
     @Test
     fun `an empty marker separates the text either side of it`(): Unit = assertRenders(
         """<div data-jl="1" data-jl-t="0:2,1:3,2:4">before<!--0-->after</div>""",
@@ -55,7 +55,7 @@ class AdoptionMarkersTest {
         }
     }
 
-    // Indices 0 and 2 are text; index 1 is the span, which names itself.
+    // Indexes 0 and 2 are text. Index 1 is the span, which identifies itself.
     @Test
     fun `text interleaved with elements is indexed by logical position`(): Unit = assertRenders(
         """<div data-jl="1" data-jl-t="0:2,2:5">start""" +
@@ -75,8 +75,8 @@ class AdoptionMarkersTest {
         Div { Span() }
     }
 
-    // data-jl-raw tells the client to stop here: those nodes belong to whoever wrote the markup, and
-    // walking in would have it claim nodes the server has never heard of.
+    // data-jl-raw tells the client to stop here. Those nodes belong to whoever wrote the markup, and
+    // walking into them would claim nodes the server has never heard of.
     @Test
     fun `raw markup is flagged and its content is not indexed`(): Unit = assertRenders(
         """<div data-jl="1" data-jl-raw><b>not ours</b></div>""",
@@ -86,8 +86,8 @@ class AdoptionMarkersTest {
 
     @Test
     fun `the container gets its identity and markers separately`(): Unit = runBlocking {
-        // renderToHtml emits the root's children; the root element itself is written by the page
-        // shell, so what the client needs to know about it has to travel another way.
+        // renderToHtml writes the root's children, and the page shell writes the root element itself,
+        // so what the client needs to know about the root has to travel another way.
         val view = LiveView { _ ->
             Text("loose text")
             Div()
@@ -108,7 +108,7 @@ class AdoptionMarkersTest {
     }
 }
 
-/** Renders [content] once and compares the markup against [expected]. */
+/** Renders [content] once and compares the markup with [expected]. */
 private fun assertRenders(expected: String, content: @Composable () -> Unit): Unit = runBlocking {
     val view = LiveView { _ -> content() }
     view.use {

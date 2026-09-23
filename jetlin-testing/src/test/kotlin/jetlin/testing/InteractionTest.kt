@@ -22,9 +22,7 @@ import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/**
- * Sending events the way a browser would, and what happens when there is nothing to send them to.
- */
+/** Tests sending events as a browser would, and what happens when nothing is there to receive them. */
 class InteractionTest {
 
     @Test
@@ -32,8 +30,8 @@ class InteractionTest {
         setContent {
             var clicks by remember { mutableStateOf(0) }
             Div {
-                // The text lives in a span, so a text query resolves to the span rather than to the
-                // button holding the handler. A browser would bubble; so does this.
+                // The text is in a span, so a text query finds the span instead of the button with the
+                // handler. A browser would bubble the event, and so does this.
                 Button({ onClick { clicks++ } }) { Span { Text("Save") } }
                 P({ testTag("count") }) { Text("$clicks") }
             }
@@ -61,8 +59,8 @@ class InteractionTest {
             }
         }
 
-        // It really does listen, so "nothing listens for click" would be a lie. What it does happens
-        // in the browser, and a headless test has to be told that rather than left wondering.
+        // It does listen, so "nothing listens for click" would be wrong. What it does happens in the
+        // browser, and a headless test has to say so, instead of leaving the author wondering.
         val error = assertFailsWith<AssertionError> { onNode(hasTestTag("toggle")).click() }
         val message = error.message.orEmpty()
         assertTrue(message.contains("client-only"), message)

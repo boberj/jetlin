@@ -16,12 +16,12 @@ import jetlin.html.rememberSavedField
 import kotlin.test.Test
 
 /**
- * What outlives a navigation, and what does not.
+ * Tests what outlives a navigation, and what doesn't.
  *
- * Three lifetimes meet here and an application has to be able to tell them apart. A `remember` in a
- * view lasts until the view is navigated away from. A `rememberSaved` in a view comes back when the
- * view does. A `remember` in the container lasts as long as the session, because the container is
- * composed once above the route and never torn down.
+ * Three lifetimes meet here, and an application has to be able to tell them apart. A `remember` in a
+ * view lasts until the user navigates away from the view. A `rememberSaved` in a view comes back when
+ * the view does. A `remember` in the container lasts as long as the session, because the container
+ * is composed once, above the route, and never torn down.
  */
 class AppContainerTest {
 
@@ -33,7 +33,7 @@ class AppContainerTest {
         navigate("/item/7")
 
         onNode(hasTag("h1")).assertText("Item 7")
-        // Readable from the other page, not merely restored on returning to this one.
+        // Another page can read it, not only this page when the user returns.
         onNode(hasTestTag("search")).assertValue("tug")
 
         navigate("/")
@@ -91,9 +91,9 @@ class AppContainerTest {
                 app { route -> Chrome(route) }
                 view("/") {
                     val draft = rememberSavedField("", key = "draft")
-                    // A view disposing its own effects is ordinary, and the order those run in
-                    // relative to the router's own teardown is the runtime's business. Saving must
-                    // not depend on winning that race.
+                    // A view disposing its own effects is normal, and the order they run in relative to
+                    // the router's own teardown is up to the runtime. Saving must not depend on
+                    // winning that race.
                     DisposableEffect(Unit) { onDispose { } }
                     Div { Input({ testTag("draft"); bind(draft) }) }
                 }
@@ -123,8 +123,8 @@ class AppContainerTest {
         onNode(hasTestTag("search")).type("tug")
         hibernateAndRestore()
 
-        // The container is never disposed, so its providers are still registered when the session
-        // is asked what it wants to keep.
+        // The container is never disposed, so its providers are still registered when the session is
+        // asked what it wants to keep.
         onNode(hasTestTag("search")).assertValue("tug")
     }
 
@@ -152,9 +152,9 @@ class AppContainerTest {
 
         val update = recordUpdate { navigate("/item/7") }
 
-        // Composed once above the route, so a move recomposes it to the same markup and the applier
-        // has nothing to record. Composed inside each view instead, all of this would be torn out
-        // and re-inserted on every navigation.
+        // The chrome is composed once, above the route, so a navigation recomposes it to the same
+        // markup, and the applier has nothing to record. Composed inside each view instead, all of this
+        // would be removed and inserted again on every navigation.
         update.assertUntouched(hasTestTag("nav"), hasTestTag("search"), hasTestTag("brand"))
     }
 
@@ -168,7 +168,7 @@ class AppContainerTest {
 
         runViewTest(url = "/") {
             setRoutes { app { route -> Chrome(route) }; items() }
-            // A second visitor arrives at an empty search box, not the first one's.
+            // A second visitor gets an empty search box, not the first visitor's.
             onNode(hasTestTag("search")).assertValue("")
         }
     }
@@ -191,16 +191,16 @@ class AppContainerTest {
         navigate("/")
         navigate("/item/2")
 
-        // Follows the rule the router already applies while composed: moving between two locations
-        // of one pattern re-runs the view rather than rebuilding it, so they share its state. Saved
-        // state is keyed the same way, because keying it any other way would restore one location's
-        // values into a view that had kept another's.
+        // This follows the rule the router already applies while composed: moving between two
+        // locations of one pattern runs the view again instead of rebuilding it, so they share its
+        // state. Saved state is keyed the same way, because keying it any other way would restore one
+        // location's values into a view that had kept another's.
         onNode(hasTag("h1")).assertText("Item 2")
         onNode(hasTestTag("draft")).assertValue("typed on item 1")
     }
 }
 
-/** A container in the shape an application would write: state above the route, then the chrome. */
+/** A container shaped the way an application would write one: state above the route, then the chrome. */
 @Composable
 private fun Chrome(route: @Composable () -> Unit) {
     val search = rememberField("")

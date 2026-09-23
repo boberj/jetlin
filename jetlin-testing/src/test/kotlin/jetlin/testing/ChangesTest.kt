@@ -16,17 +16,17 @@ import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** A row with an identity of its own, so its key does not change when its text does. */
+/** A row with its own identity, so its key doesn't change when its text does. */
 private class Row(val id: Int, text: String) {
     var text: String by mutableStateOf(text)
 }
 
 /**
- * Asserting on how much of the page an interaction disturbed.
+ * Tests assertions on how much of the page an interaction changed.
  *
- * The point of these is that the page looks right either way. A list that rebuilds itself on every
- * change renders exactly the same HTML as one that patches a single row, so nothing asserting on
- * contents can tell them apart — and the difference is the whole cost model of a server-driven UI.
+ * The page looks right either way, which is the point. A list that rebuilds itself on every change
+ * renders exactly the same HTML as one that patches a single row, so no assertion on contents can
+ * tell them apart, and the difference is the whole cost model of a server-driven UI.
  */
 class ChangesTest {
 
@@ -42,8 +42,8 @@ class ChangesTest {
 
     @Test
     fun `keying a list by its content rebuilds the row instead of patching it`(): Unit = runViewTest {
-        // The bug this whole facility exists to catch. The page renders identically either way, so
-        // every assertion about contents still passes; only the traffic gives it away.
+        // The bug that these assertions exist to catch. The page renders identically either way, so
+        // every assertion about contents still passes. Only the traffic gives it away.
         setContent { RowList(keyByText = true) }
 
         val update = recordUpdate { onNode(hasTestTag("edit-2")).click() }
@@ -68,7 +68,7 @@ class ChangesTest {
         val update = recordUpdate { onNode(hasTestTag("add")).click() }
 
         // Both the list and the row that arrived: a structural change belongs to the parent, and the
-        // new subtree is named too so it can be asserted on directly.
+        // new subtree is named too, so a test can assert on it directly.
         update.assertOnly(hasTestTag("list"), hasText("two"))
     }
 
@@ -77,7 +77,7 @@ class ChangesTest {
         setContent {
             val items = remember { mutableStateListOf("one") }
             Div {
-                // Writes the value it already holds, so the runtime has nothing to send.
+                // Write the value it already holds, so the runtime has nothing to send.
                 Button({ testTag("noop"); onClick { items[0] = "one" } }) { Text("noop") }
                 Span { Text(items[0]) }
             }
@@ -98,7 +98,7 @@ class ChangesTest {
         val error = assertFailsWith<AssertionError> { update.assertOnly(hasText("ONE")) }
         val message = error.message.orEmpty()
         assertTrue(message.contains("Unexpectedly changed"), message)
-        // Naming the surplus node is the whole value of the failure.
+        // Naming the extra node is what makes the failure useful.
         assertTrue(message.contains("<span>"), message)
     }
 }

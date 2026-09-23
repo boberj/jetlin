@@ -6,14 +6,15 @@ import jetlin.db.unsafe
 import kotlin.io.path.createTempDirectory
 
 /**
- * Measures the retained heap per record held in memory, using a table large enough to give a stable
- * figure.
+ * Measures the retained heap of each record held in memory, with a table large enough to give a
+ * stable figure.
  *
- * Keeping every record in memory makes reads cheap and relations a field access, but it costs memory,
- * which is shared with the compositions of all connected users. This benchmark measures the records'
- * share. The per-session share is measured by `samples/demo:benchmark`.
+ * Keeping every record in memory makes reads cheap and relations a field access, but it costs
+ * memory, which the compositions of all connected users share. This benchmark measures the records'
+ * share. `:samples:demo:benchmark` measures the sessions' share.
  *
- * Run with: ./gradlew :samples:teams:benchmark
+ * Set the environment variable `RECORDS` to change the number of records, which defaults to 20,000.
+ * To run it, use `./gradlew :samples:teams:benchmark`.
  */
 fun main() {
     val recordCount = System.getenv("RECORDS")?.toInt() ?: 20_000
@@ -22,7 +23,7 @@ fun main() {
     val db = openSeeded(directory.resolve("benchmark.db"))
     val alice = checkNotNull(db.authenticate(User::class) { it.email == "alice@example.com" })
 
-    // Warm up first, so class loading, JIT compilation and SQLite's internal structures aren't counted.
+    // Warm up first, so class loading, JIT compilation, and SQLite's internal structures aren't counted.
     unsafe("benchmark warm-up") {
         db.transact { repeat(200) { db.insertUnchecked(Todo(alice, "warm up $it")) } }
     }
@@ -30,8 +31,8 @@ fun main() {
     val before = usedHeap()
     unsafe("benchmark records") {
         // Insert everything in one transaction, so the result measures the objects and not whatever
-        // SQLite retains per commit. A real application commits once per user action, but the point here
-        // is the cost of keeping records in memory, not the cost of commits.
+        // SQLite keeps for each commit. A real application commits once per user action, but this
+        // measures the cost of keeping records in memory, not the cost of commits.
         db.transact {
             val bulk = db.insertUnchecked(User("Bulk", "bulk@example.com"))
             repeat(recordCount) { index ->
@@ -50,11 +51,12 @@ fun main() {
     println("Should barely move as RECORDS changes. If it does, something is being counted that is not")
     println("the records — SQLite's cache, or garbage the measurement itself made.")
 
-    // Keeps the graph reachable until after the measurement; otherwise it could be collected first.
+    // Keep the graph reachable until after the measurement. Otherwise, it could be collected first.
     check(db.resident.recordCount > recordCount)
     db.close()
 }
 
+/** Returns the heap in use after several rounds of garbage collection. */
 private fun usedHeap(): Long {
     val runtime = Runtime.getRuntime()
     repeat(4) {

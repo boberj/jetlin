@@ -11,12 +11,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * What the matchers pick out, and — more usefully — what they hide.
+ * Tests what the matchers find, and, more usefully, what they don't.
  *
- * Two of these exist because HTML is inconsistent about where state lives: `value` and `checked`
- * are DOM properties while `disabled` is an attribute. A test author should never have to know
- * that, so the cases below pin down that the right matcher works and the plausible wrong one is
- * not quietly equivalent.
+ * Two of these tests exist because HTML is inconsistent about where state lives: `value` and
+ * `checked` are DOM properties, while `disabled` is an attribute. A test author should never need to
+ * know that, so the cases below check that the right matcher works and that the plausible wrong one
+ * doesn't match the same thing without anyone noticing.
  */
 class MatcherTest {
 
@@ -25,8 +25,8 @@ class MatcherTest {
         setContent { Input({ value("typed") }) }
 
         onNode(hasValue("typed")).assertExists()
-        // Setting the attribute instead would only change the control's default, so the framework
-        // does not write one; a test reaching for it has to fail rather than silently match.
+        // Setting the attribute instead would change only the control's default, so the framework
+        // doesn't write one. A test that looks for it has to fail, not match by accident.
         onNode(hasAttr("value", "typed")).assertDoesNotExist()
     }
 
@@ -57,7 +57,7 @@ class MatcherTest {
 
         onNode(hasClass("done")).assertExists()
         onNode(hasClass("todo-text")).assertExists()
-        // Not a substring match: "don" is not one of the classes.
+        // It isn't a substring match: "don" isn't one of the classes.
         onNode(hasClass("don")).assertDoesNotExist()
     }
 
@@ -65,7 +65,7 @@ class MatcherTest {
     fun `hasText matches the whole subtree so a wrapper is addressable`(): Unit = runViewTest {
         setContent { Button({ id("save") }) { Span { Text("Save") } } }
 
-        // The button renders "Save" even though the text node is two levels down.
+        // The button renders "Save", even though the text node is two levels down.
         assertTrue(hasText("Save").matches(onNode(hasId("save")).fetch()))
     }
 

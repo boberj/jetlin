@@ -14,16 +14,16 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Navigation seen from the outside: what a connected browser would actually receive.
+ * Tests navigation from the outside: what a connected browser receives.
  *
- * These use `runBlocking` rather than `runTest` because a LiveView runs on real dispatchers, and
- * virtual time would skip straight past the waiting these need to do.
+ * These tests use `runBlocking` instead of `runTest`, because a LiveView runs on real dispatchers,
+ * and virtual time would skip the waiting they need to do.
  */
 class LiveViewTest {
 
     @Test
     fun `navigating swaps the view and tells the browser where it went`(): Unit = withNavigatingView { view, received ->
-        // Node 1 is the button; clicking it calls navigator.push("/b").
+        // Node 1 is the button. Clicking it calls navigator.push("/b").
         view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1))
         received.awaitAtLeast(2)
 
@@ -41,17 +41,17 @@ class LiveViewTest {
         view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1))
         received.awaitAtLeast(2)
 
-        // Otherwise the browser would briefly show the new URL alongside the old content.
+        // Otherwise, the browser would briefly show the new URL with the old content.
         assertTrue(received[0] is ServerMessage.Patch, "expected the patch first, got $received")
         assertTrue(received[1] is ServerMessage.Navigate)
     }
 
     @Test
     fun `a browser-initiated navigation is followed, not echoed back`(): Unit = withNavigatingView { view, received ->
-        // The user pressed back, so the address bar has already moved.
+        // The user pressed back, so the address bar has already changed.
         view.dispatch(ClientMessage.Navigate("/b"))
         received.awaitAtLeast(1)
-        delay(150) // give a spurious echo a chance to show up
+        delay(150) // give an unwanted echo a chance to show up
 
         assertEquals("/b", view.currentUrl)
         assertTrue(
@@ -86,8 +86,8 @@ class LiveViewTest {
 }
 
 /**
- * Runs [block] against a view holding a button that navigates to `/b`, with a collector attached to
- * its outgoing messages.
+ * Runs [block] against a view with a button that navigates to `/b`, with a collector attached to its
+ * outgoing messages.
  */
 private fun withNavigatingView(
     start: String = "/a",

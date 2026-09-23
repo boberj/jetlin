@@ -5,11 +5,11 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.compositionLocalOf
 
 /**
- * Typed key for a value the application attaches to a session.
+ * A typed key for a value that the application attaches to a session.
  *
- * Jetlin knows about paths and query strings but nothing about authentication, tenancy or locale.
- * Rather than push a type parameter through the whole configuration DSL, an application declares its
- * own keys and reads them back with the right type:
+ * Jetlin knows about paths and query strings, but nothing about authentication, tenancy, or locale.
+ * Instead of a type parameter on the whole configuration DSL, an application declares its own keys
+ * and reads the values back with the right type:
  *
  * ```kotlin
  * val CurrentUser = AttributeKey<User>("user")
@@ -23,17 +23,25 @@ import androidx.compose.runtime.compositionLocalOf
  * }
  * ```
  *
- * Identity, not [name], distinguishes keys; the name only makes debugging readable.
+ * Keys are compared by identity, not by [name]. The name only makes debugging easier.
+ *
+ * @property name a name for debugging output.
  */
 public class AttributeKey<T>(public val name: String) {
     override fun toString(): String = name
 }
 
 /**
- * What the browser asked for, and whatever the application chose to attach to the session.
+ * What the browser asked for, and whatever the application attached to the session.
  *
- * Resolved once when the session is created and updated on navigation, so a composable can read the
- * current path or a path parameter at any depth without it being threaded through as arguments.
+ * It's created with the session and updated on navigation, so a composable at any depth can read
+ * the current path or a path parameter without it being passed down as an argument.
+ *
+ * @property path the path, without the query string.
+ * @property pathParams the parameters that the matched route extracted from [path], by name.
+ * @property queryParams the query parameters, by name. A name can appear more than once.
+ * @property headers the headers of the HTTP request that created the session.
+ * @param attributes the values that the application attached, by key.
  */
 public class RequestContext(
     public val path: String,
@@ -42,10 +50,11 @@ public class RequestContext(
     public val headers: Map<String, List<String>> = emptyMap(),
     private val attributes: Map<AttributeKey<*>, Any?> = emptyMap(),
 ) {
+    /** Returns the value attached under [key], or `null` if there isn't one. */
     @Suppress("UNCHECKED_CAST")
     public operator fun <T> get(key: AttributeKey<T>): T? = attributes[key] as T?
 
-    /** Path plus query string, as it should appear in the address bar. */
+    /** The path and the query string, as the address bar shows them. */
     public val url: String
         get() = if (queryParams.isEmpty()) path else "$path?" + queryParams.entries
             .flatMap { (name, values) -> values.map { "$name=$it" } }
@@ -54,17 +63,22 @@ public class RequestContext(
     /**
      * Returns a copy with one attribute set.
      *
-     * Tests use this to supply a principal. Applications can use it when a value only becomes known after
-     * the context was created.
+     * Tests use this to supply a principal. Applications can use it for a value that's known only
+     * after the context was created.
      */
     public fun <T> with(key: AttributeKey<T>, value: T?): RequestContext =
         RequestContext(path, pathParams, queryParams, headers, attributes + (key to value))
 
-    /** Copy carrying the parameters a route match extracted. Attributes and query are preserved. */
+    /** Returns a copy with the path parameters [params]. It keeps the attributes and the query. */
     public fun withPathParams(params: Map<String, String>): RequestContext =
         RequestContext(path, params, queryParams, headers, attributes)
 
-    /** Copy for a new location, keeping the attributes that belong to the session rather than the request. */
+    /**
+     * Returns a copy for the location [url].
+     *
+     * It keeps the headers and attributes, which belong to the session, and replaces the path and
+     * the query. The path parameters are cleared until the router matches the new path.
+     */
     public fun forUrl(url: String): RequestContext {
         val path = url.substringBefore('?')
         val query = url.substringAfter('?', missingDelimiterValue = "")
@@ -72,6 +86,7 @@ public class RequestContext(
     }
 }
 
+/** Parses a query string, without the leading `?`, into values by name. It doesn't decode them. */
 internal fun parseQuery(query: String): Map<String, List<String>> {
     if (query.isEmpty()) return emptyMap()
     return query.split('&')
@@ -81,18 +96,24 @@ internal fun parseQuery(query: String): Map<String, List<String>> {
 }
 
 /**
- * The current request. Dynamic rather than static, so that a navigation invalidates only the
- * composables that actually read it.
+ * The current request.
+ *
+ * It's a dynamic local, not a static one, so a navigation invalidates only the composables that
+ * read it.
  */
 public val LocalRequest: ProvidableCompositionLocal<RequestContext> =
     compositionLocalOf { error("No RequestContext in composition; content must be hosted by a LiveView") }
 
-/** Value of a path parameter declared by the matched route, e.g. `id` for `/todo/{id}`. */
+/**
+ * Returns the value of a path parameter of the matched route, such as `id` for `/todo/{id}`.
+ *
+ * @throws IllegalStateException if the route has no parameter called [name].
+ */
 @Composable
 public fun pathParam(name: String): String =
     LocalRequest.current.pathParams[name]
         ?: error("No path parameter '$name' in route '${LocalRequest.current.path}'")
 
-/** First value of a query parameter, or null when absent. */
+/** Returns the first value of the query parameter [name], or `null` if it's missing. */
 @Composable
 public fun queryParam(name: String): String? = LocalRequest.current.queryParams[name]?.firstOrNull()

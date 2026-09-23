@@ -19,25 +19,26 @@ import jetlin.runtime.rememberSaved
 import kotlinx.coroutines.runBlocking
 
 /**
- * Measures retained heap per live session.
+ * Measures the retained heap of each live session, and of each hibernated one.
  *
- * Holding UI state on the server means memory scales with the number of connected users, so this
- * number sets the practical ceiling on how many sessions a node can carry. It works by creating
- * many sessions, keeping them all reachable, and comparing heap usage before and after.
+ * With UI state on the server, memory grows with the number of connected users, so this number sets
+ * the practical limit on how many sessions a node can hold. The benchmark creates many sessions,
+ * keeps them all reachable, and compares heap usage before and after.
  *
- * `PAGE=real` measures the application's own todo list page instead of the synthetic page below. The
- * two numbers show that a session's cost depends mostly on the size of its page: the synthetic page has
- * 113 nodes and costs about 130 kB, the todo list has 42 nodes and costs about 65 kB, which is roughly
- * 1.5 kB per node in both cases.
+ * Set the environment variable `SESSIONS` to change the number of sessions, which defaults to 1,000.
+ * Set `PAGE=real` to measure the application's todo list page instead of the synthetic page below.
+ * The two results show that a session's cost depends mostly on the size of its page: the synthetic
+ * page has 113 nodes and costs about 130 kB, and the todo list has 42 nodes and costs about 65 kB.
+ * That's roughly 1.5 kB per node in both cases.
  *
- * Run with: ./gradlew :samples:demo:benchmark
+ * To run it, use `./gradlew :samples:demo:benchmark`.
  */
 fun main() = runBlocking {
     val sessionCount = System.getenv("SESSIONS")?.toInt() ?: 1000
     val real = System.getenv("PAGE") == "real"
     val page: @Composable () -> Unit = if (real) ({ TodoListPage() }) else ({ BenchmarkView() })
 
-    // Warm up the runtime so class loading and JIT are not counted as session cost.
+    // Warm up the runtime, so class loading and JIT compilation don't count as session cost.
     repeat(20) { LiveView(content = { _ -> page() }).also { it.start() }.close() }
 
     val before = usedHeap()
@@ -52,13 +53,12 @@ fun main() = runBlocking {
     val perSession = (after - before) / sessionCount
     val nodes = countNodes(views.first().owner.snapshotChildren())
 
-    // Now hibernate every one of them and measure what an idle session actually costs. This is the
-    // whole argument for hibernation: a session nobody is looking at should stop costing what a
-    // live one costs.
+    // Now hibernate every session and measure what an idle session costs. This is the whole case
+    // for hibernation: a session that nobody is looking at shouldn't cost what a live one costs.
     val snapshots = views.map { it.hibernate() }
-    // Dropping the references is part of what hibernation is: in production the registry forgets
-    // the session and only the snapshot stays reachable. Measuring with the closed views still held
-    // would report the cost of the composition we just destroyed.
+    // Dropping the references is part of hibernation. In production, the registry forgets the
+    // session, and only the snapshot stays reachable. Measuring with the closed views still held
+    // would report the cost of the compositions that were just destroyed.
     views.clear()
     val hibernated = usedHeap()
     val perHibernated = (hibernated - before) / sessionCount
@@ -72,10 +72,11 @@ fun main() = runBlocking {
     println("ratio:              ${perSession / perHibernated.coerceAtLeast(1)}x cheaper idle")
     println("saved keys:         ${snapshots.first().keys}")
 
-    // Keep them reachable until after the measurement.
+    // Keep the snapshots reachable until after the measurement.
     check(snapshots.size == sessionCount)
 }
 
+/** Returns the number of nodes in [specs] and their subtrees. */
 private fun countNodes(specs: List<jetlin.protocol.NodeSpec>): Int = specs.sumOf { spec ->
     1 + when (spec) {
         is jetlin.protocol.NodeSpec.Element -> countNodes(spec.children)
@@ -83,6 +84,7 @@ private fun countNodes(specs: List<jetlin.protocol.NodeSpec>): Int = specs.sumOf
     }
 }
 
+/** Returns the heap in use after several rounds of garbage collection. */
 private fun usedHeap(): Long {
     val runtime = Runtime.getRuntime()
     repeat(4) {
@@ -95,7 +97,7 @@ private fun usedHeap(): Long {
 /** A deliberately unremarkable page: a header, some state, and a 20-row list. */
 @Composable
 private fun BenchmarkView() {
-    // One saved value, as a realistic page would have; the rest is recomputable.
+    // Save one value, as a realistic page would. Everything else can be recomputed.
     val draft = rememberSaved(key = "draft") { "a half-typed line of user input" }
     var count by remember { mutableStateOf(0) }
     val rows = remember { mutableStateListOf(*Array(20) { "Row $it" }) }

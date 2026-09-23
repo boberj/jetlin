@@ -11,11 +11,11 @@ import jetlin.html.rememberSavedField
 import kotlin.test.Test
 
 /**
- * What survives a session being torn down and rebuilt.
+ * Tests what survives a session being torn down and rebuilt.
  *
- * Which values are declared saveable is an application decision, not a framework one — saving too
- * little throws away the user's typing, saving too much makes idle sessions expensive. This is how
- * an author checks they drew the line where they meant to.
+ * The application decides which values are saved, not the framework. Saving too little throws away
+ * what the user typed, and saving too much makes idle sessions expensive. These assertions are how an
+ * author checks that they drew the line where they meant to.
  */
 class RestoreTest {
 
@@ -35,7 +35,7 @@ class RestoreTest {
         hibernateAndRestore()
 
         onNode(hasTestTag("draft")).assertValue("half-typed message")
-        // remember is scratch space; recomputing it is the point, and it is what keeps a hibernated
+        // `remember` is scratch space. Recomputing it is the point, and it's what keeps a hibernated
         // session small.
         onNode(hasTestTag("scratch")).assertText("recomputed")
     }

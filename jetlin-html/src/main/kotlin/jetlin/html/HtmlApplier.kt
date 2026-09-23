@@ -4,15 +4,16 @@ import androidx.compose.runtime.AbstractApplier
 import jetlin.protocol.Op
 
 /**
- * Turns Compose's tree mutations into wire ops.
+ * Turns Compose's changes to the tree into ops for the browser.
  *
- * An [AbstractApplier] is how the Compose runtime edits whatever tree a composition describes: as
- * it recomposes, it calls insert / remove / move on the applier. Each of those calls updates the
- * server-side tree and records the equivalent op for the browser, so the two stay in step without
- * either side comparing trees.
+ * The Compose runtime edits a composition's tree through an [AbstractApplier]. As it recomposes, it
+ * calls insert, remove, and move on the applier. Each call updates the server-side tree and records
+ * the matching op for the browser, so the two trees stay in step without either side comparing them.
  *
- * Insertion is handled bottom-up: Compose finishes building a subtree before parenting it, so an
- * inserted subtree is complete at the moment it becomes visible to the client and ships as one op.
+ * Nodes are inserted bottom-up. Compose finishes building a subtree before it adds the subtree to
+ * its parent, so the subtree is complete when the client first sees it, and it goes out as one op.
+ *
+ * @param owner the session's tree. The applier records its ops there.
  */
 public class HtmlApplier(private val owner: HtmlOwner) : AbstractApplier<HtmlNode>(owner.root) {
 
@@ -21,7 +22,7 @@ public class HtmlApplier(private val owner: HtmlOwner) : AbstractApplier<HtmlNod
             ?: error("Cannot add children to a text node (current node is ${current::class.simpleName})")
 
     override fun insertTopDown(index: Int, instance: HtmlNode) {
-        // Intentionally empty; see insertBottomUp.
+        // Deliberately empty. See insertBottomUp.
     }
 
     override fun insertBottomUp(index: Int, instance: HtmlNode) {
@@ -56,6 +57,7 @@ public class HtmlApplier(private val owner: HtmlOwner) : AbstractApplier<HtmlNod
         }
     }
 
+    /** Removes every node from the root. */
     override fun onClear() {
         owner.root.children.forEach { it.detach() }
         owner.root.children.clear()

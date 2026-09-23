@@ -24,16 +24,17 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
 /**
- * Views that use `movableContentOf`, which used to be able to stop a session for good.
+ * Tests views that use `movableContentOf`, which could once stop a session for good.
  *
- * The Recomposer publishes its state as a cached value, and two paths involving movable content
+ * The Recomposer publishes its state as a cached value, and two paths that involve movable content
  * leave that value at `PendingWork` after the work is done: composing movable content in the first
  * frame, and removing it. A host that waited for `Idle` waited until something unrelated happened.
- * In a live session nothing unrelated need ever happen — the inbound loop handles one event at a
- * time and the sender waits before every patch — so the page stopped responding. The first two tests
- * reproduce exactly those two paths; see `SessionActivity` for the mechanism and the fix.
+ * In a live session, nothing unrelated has to happen, because the inbound loop handles one event at
+ * a time, and the sender waits before every patch. So the page stopped responding. The first two
+ * tests reproduce exactly those two paths. See `SessionActivity` for the mechanism and the fix.
  *
- * Every wait runs under a timeout, so a regression fails with a message instead of hanging the build.
+ * Every wait runs under a timeout, so a regression fails with a message instead of hanging the
+ * build.
  */
 class MovableContentTest {
 
@@ -56,22 +57,23 @@ class MovableContentTest {
         val items = mutableStateListOf<Int>()
         val view = LiveView { _ -> MovableList(items) { items.remove(2) } }
         view.use {
-            // Rows added after the first frame rather than present in it, so that this test reaches
-            // the removal path on its own instead of stopping at the first-frame one above.
+            // Add the rows after the first frame instead of in it, so this test reaches the removal
+            // path on its own, instead of stopping at the first-frame path above.
             within("starting a view with no rows yet") { it.start() }
             Snapshot.withMutableSnapshot { items.addAll(listOf(1, 2, 3)) }
             within("adding movable rows") { it.awaitIdle() }
-            it.inspect { owner -> owner.drainOps() } // the additions went out already; only the removal is of interest
+            // The additions already went out. Only the removal matters here.
+            it.inspect { owner -> owner.drainOps() }
             val button = it.inspect { owner -> owner.root.find("button").id }
 
             // The removal path: the frame derives its final state before the removed content is
-            // discarded, which is what used to leave the recomposer reporting work it did not have.
+            // discarded, which used to leave the recomposer reporting work it didn't have.
             within("the click that removes a movable row") {
                 it.dispatch(ClientMessage.Event(node = button, event = "click", seq = 1))
             }
 
-            // And the session is still sending. The sender waits before every message, so a stuck
-            // wait would stop this too — and a page that does not update is the symptom a user sees.
+            // And the session is still sending. The sender waits before every message, so a stuck wait
+            // would stop this too, and a page that doesn't update is the symptom a user sees.
             val patch = within("the patch for the removal") { it.messages.first() }
             val removal = assertIs<Op.Remove>(assertIs<ServerMessage.Patch>(patch).ops.single())
             assertEquals(1, removal.count)
@@ -89,9 +91,9 @@ class MovableContentTest {
         view.use {
             within("starting a view whose effect writes immediately") { it.start() }
 
-            // The page is rendered after start returns, and a socket adopting it keeps every op
-            // recorded after start's drain. Had this effect's recomposition landed after the drain it
-            // would sit in the buffer while also being in the markup, and adoption would apply it twice.
+            // The page is rendered after start() returns, and a socket that adopts it keeps every op
+            // recorded after start()'s drain. If this effect's recomposition had landed after the drain,
+            // it would be in the buffer and also in the markup, and adoption would apply it twice.
             assertTrue("loaded" in it.renderHtml(), "the render should include what the effect wrote")
             assertFalse(it.owner.hasPendingOps, "nothing the effect caused should be left to send again")
         }
@@ -105,7 +107,7 @@ class MovableContentTest {
         }
 }
 
-/** A button, then one row per item, each row movable content keyed by its item. */
+/** A button, then one row for each item. Each row is movable content keyed by its item. */
 @Composable
 private fun MovableList(items: List<Int>, onRemove: () -> Unit) {
     val rows = remember { HashMap<Int, @Composable () -> Unit>() }
