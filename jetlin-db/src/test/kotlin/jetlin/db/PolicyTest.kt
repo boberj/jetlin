@@ -67,9 +67,10 @@ class PolicyTest {
         val policy = owned(Task::owner)
         val task = Task(alice, "Read the plan")
 
-        assertTrue(policy.canRead(task, alice))
+        assertTrue(policy.canWrite(task, alice))
+        assertFalse(policy.canWrite(task, bob))
+        assertTrue(policy.canRead(task, alice), "canRead defaults to canWrite")
         assertFalse(policy.canRead(task, bob))
-        assertTrue(policy.canWrite(task, alice), "canWrite defaults to canRead")
     }
 
     // ---- Obtaining records -----------------------------------------------------------------------
@@ -167,6 +168,18 @@ class PolicyTest {
     }
 
     @Test
+    fun `an admin may archive a task they do not own, and its owner may not`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val root = db.store(User("Root", admin = true))
+        val task = db.store(Task(alice, "Read the plan"))
+
+        assertFailsWith<AccessDenied> { with(alice) { task.update { archived = true } } }
+        with(root) { task.update { archived = true } }
+
+        assertTrue(task.archived)
+    }
+
+    @Test
     fun `add and delete are gated too`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
@@ -192,6 +205,195 @@ class PolicyTest {
         }
 
         assertContains(failure.message.orEmpty(), "derived")
+    }
+
+    @Test
+    fun `a block reads back its own writes`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val task = db.store(Task(alice, "Read"))
+
+        with(alice) {
+            task.update {
+                title = "$title the plan"
+                title = "$title twice"
+            }
+        }
+
+        assertEquals("Read the plan twice", task.title)
+    }
+
+    @Test
+    fun `columns are checked against the record as it was, whatever the order of assignments`(): Unit =
+        withDb { db ->
+            val alice = db.store(User("Alice"))
+            // A column rule that reads another column: a done task can't be renamed.
+            val policy = object : Policy<Task, User> {
+                override fun canWrite(record: Task, principal: User): Boolean = record.owner == principal
+                override fun canWrite(record: Task, column: Column<Task>, principal: User): Boolean =
+                    column != Tasks.title || !record.done
+            }
+            val first = db.store(Task(alice, "One"))
+            val second = db.store(Task(alice, "Two"))
+
+            // Both were not done when the block started, so both orders are allowed.
+            Gate.update(first, policy, alice, TaskDraft(first)) { done = true; title = "One, done" }
+            Gate.update(second, policy, alice, TaskDraft(second)) { title = "Two, done"; done = true }
+
+            assertEquals("One, done", first.title)
+            assertEquals("Two, done", second.title)
+            // Now they're done, and renaming is refused whatever else the block does.
+            assertFailsWith<AccessDenied> {
+                Gate.update(first, policy, alice, TaskDraft(first)) { done = false; title = "One again" }
+            }
+            assertEquals("One, done", first.title)
+            assertTrue(first.done, "the whole block rolled back")
+        }
+
+    @Test
+    fun `an update cannot leave a record in a state that adding it would refuse`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val bob = db.store(User("Bob"))
+        val alices = db.store(Project(alice, "Alice's"))
+        val bobs = db.store(Project(bob, "Bob's"))
+        // Anyone can change their own task, but a task can only be filed in a project its creator owns.
+        val policy = object : Policy<Task, User> {
+            override fun canWrite(record: Task, principal: User): Boolean = record.owner == principal
+            override fun canCreate(record: Task, principal: User): Boolean =
+                canWrite(record, principal) && (record.project == null || record.project?.owner == principal)
+        }
+        val task = db.store(Task(alice, "Read the plan"))
+
+        // Adding it straight into Bob's project is refused...
+        assertFailsWith<AccessDenied> {
+            Gate.add(db, policy, alice, Task(alice, "Spam").also { it.project = bobs })
+        }
+        // ...and so is getting there in two steps. Every check before the change passes: alice owns
+        // the task, and the default column rule only asks that. Only the finished record is wrong.
+        val failure = assertFailsWith<AccessDenied> {
+            Gate.update(task, policy, alice, TaskDraft(task)) { project = bobs }
+        }
+
+        assertContains(failure.message.orEmpty(), "couldn't create")
+        assertNull(task.project, "the block rolled back")
+        Gate.update(task, policy, alice, TaskDraft(task)) { project = alices }
+        assertEquals(alices, task.project)
+    }
+
+    @Test
+    fun `a user can rename themselves but can't make themselves an admin`(): Unit = withDb { db ->
+        val bob = db.store(User("Bob"))
+        val root = db.store(User("Root", admin = true))
+
+        with(bob) {
+            bob.update { name = "Robert" }
+            assertFailsWith<AccessDenied> { bob.update { admin = true } }
+        }
+        assertEquals("Robert", bob.name)
+        assertFalse(bob.admin)
+
+        with(root) { bob.update { admin = true } }
+        assertTrue(bob.admin, "an admin can grant it")
+    }
+
+    // ---- Transferring ----------------------------------------------------------------------------
+
+    @Test
+    fun `an offered record changes hands when its recipient takes it`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val bob = db.store(User("Bob"))
+        val doc = db.store(Doc(alice, "The plan"))
+
+        with(alice) { doc.update { offeredTo = bob } }
+        with(bob) {
+            assertTrue(doc.canTransferTo(bob))
+            doc.transferTo(bob)
+        }
+
+        assertEquals(bob, doc.owner)
+        assertTrue(Doc.canWrite(doc, bob))
+        assertFalse(Doc.canRead(doc, alice), "alice gave it away")
+    }
+
+    @Test
+    fun `a record can't be pushed onto someone, or taken without an offer`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val mallory = db.store(User("Mallory"))
+        val bob = db.store(User("Bob"))
+        val doc = db.store(Doc(alice, "The plan"))
+        val spam = db.store(Doc(mallory, "Spam"))
+
+        // Mallory can't hand her record to alice, by transfer or by update.
+        with(mallory) {
+            assertFalse(spam.canTransferTo(alice))
+            assertFailsWith<AccessDenied> { spam.transferTo(alice) }
+            assertFailsWith<AccessDenied> { spam.update { owner = alice } }
+        }
+        // Nor can she take alice's record, which isn't offered to anyone.
+        with(mallory) { assertFailsWith<AccessDenied> { doc.transferTo(mallory) } }
+        // An offer to bob is for bob only.
+        with(alice) { doc.update { offeredTo = bob } }
+        with(mallory) { assertFailsWith<AccessDenied> { doc.transferTo(mallory) } }
+
+        assertEquals(mallory, spam.owner)
+        assertEquals(alice, doc.owner)
+    }
+
+    @Test
+    fun `withdrawing an offer revokes the transfer it allowed`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val bob = db.store(User("Bob"))
+        val doc = db.store(Doc(alice, "The plan"))
+
+        with(alice) { doc.update { offeredTo = bob } }
+        with(alice) { doc.update { offeredTo = null } }
+
+        with(bob) {
+            assertFalse(doc.canTransferTo(bob))
+            assertFailsWith<AccessDenied> { doc.transferTo(bob) }
+        }
+    }
+
+    // ---- Asking before writing -------------------------------------------------------------------
+
+    @Test
+    fun `a page can ask what a write would do, and gets the same answer`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val bob = db.store(User("Bob"))
+        val root = db.store(User("Root", admin = true))
+        val task = db.store(Task(alice, "Read the plan"))
+
+        with(alice) {
+            assertTrue(task.canUpdate())
+            assertTrue(task.canUpdate(Tasks.title))
+            assertFalse(task.canUpdate(Tasks.archived), "only an admin can archive, owner or not")
+            assertTrue(task.canDelete())
+        }
+        with(bob) {
+            assertFalse(task.canUpdate())
+            assertFalse(task.canUpdate(Tasks.title))
+            assertFalse(task.canDelete())
+        }
+        with(root) {
+            assertTrue(task.canUpdate(Tasks.archived))
+            assertTrue(task.canDelete())
+        }
+    }
+
+    @Test
+    fun `asking about a column takes the record-level check too, as update does`(): Unit = withDb { db ->
+        val alice = db.store(User("Alice"))
+        val bob = db.store(User("Bob"))
+        val task = db.store(Task(alice, "Read the plan"))
+        // A column rule broader than the record rule. It can't widen anything, so asking the column
+        // rule alone would give a page the wrong answer.
+        val policy = object : Policy<Task, User> {
+            override fun canWrite(record: Task, principal: User): Boolean = record.owner == principal
+            override fun canWrite(record: Task, column: Column<Task>, principal: User): Boolean = true
+        }
+
+        assertTrue(policy.canWrite(task, Tasks.title, bob))
+        assertFalse(Gate.canUpdate(task, Tasks.title, policy, bob))
+        assertFailsWith<AccessDenied> { Gate.update(task, policy, bob, TaskDraft(task)) {} }
     }
 
     // ---- Reactive authorization ------------------------------------------------------------------

@@ -5,6 +5,7 @@ import jetlin.db.Id
 import jetlin.db.unsafe
 import jetlin.testing.ViewTest
 import jetlin.testing.assertNotDisclosed
+import jetlin.testing.check
 import jetlin.testing.click
 import jetlin.testing.hasTestTag
 import jetlin.testing.hasText
@@ -179,6 +180,111 @@ class TeamsAppTest {
             assertFailsWith<jetlin.db.AccessDenied> { with(alice) { own.update { archived = true } } }
             assertTrue(!own.archived)
         }
+    }
+
+    @Test
+    fun `an admin sees every todo and can change one they do not own`(): Unit = withSample { db ->
+        val carol = db.user("carol@example.com")
+        val carols = with(carol) { Todos.all(db).single() }
+
+        runViewTest {
+            signedInAs(db, "root@example.com")
+
+            // Root is on no team, so this is the policy admitting admins, not sharing.
+            onAll(hasTestTag("todo")).assertCount(4)
+            within(onNode(hasTestTag("todo") and hasText("Nothing to do with Acme", substring = true))) {
+                onNode(hasTestTag("done")).assertEnabled().check()
+            }
+            assertTrue(carols.done)
+        }
+    }
+
+    @Test
+    fun `an admin can archive a todo they do not own`(): Unit = withSample { db ->
+        val carol = db.user("carol@example.com")
+        val carols = with(carol) { Todos.all(db).single() }
+
+        runViewTest(url = "/todo/${carols.id}") {
+            signedInAs(db, "root@example.com")
+
+            onNode(hasTestTag("archived")).assertEnabled().check()
+            assertTrue(carols.archived)
+        }
+    }
+
+    @Test
+    fun `losing admin disables archiving on a page that is already open`(): Unit = withSample { db ->
+        val root = db.user("root@example.com")
+        val bob = db.user("bob@example.com")
+        val shared = with(bob) { Todos.all(db).single { it.title == "Write the team sample" } }
+        // Bob can read Alice's todo through the team, so he can still see it after losing admin.
+        // An admin reading through the admin rule alone would see the page become "Not found".
+        with(root) { bob.update { admin = true } }
+
+        runViewTest(url = "/todo/${shared.id}") {
+            signedInAs(db, "bob@example.com")
+            onNode(hasTestTag("archived")).assertEnabled()
+
+            // The page asked `canUpdate`, which ran the policy, which read `admin`. So this write
+            // recomposes the checkbox with nothing notifying the page.
+            with(root) { bob.update { admin = false } }
+
+            onNode(hasTestTag("archived")).assertDisabled()
+        }
+    }
+
+    @Test
+    fun `a todo can't be shared with a team its owner isn't on`(): Unit = withSample { db ->
+        val root = db.user("root@example.com")
+        val alice = db.user("alice@example.com")
+        val globex = with(root) { Teams.all(db).add(Team("Globex")) }
+        val rehearse = with(alice) { Todos.all(db).single { it.title == "Rehearse the demo" } }
+
+        // Alice can change her todo, and sharing only sets a column, so every check before the write
+        // passes. The todo as it would end up is one she couldn't have created, so it's refused.
+        assertFailsWith<jetlin.db.AccessDenied> { with(alice) { rehearse.update { team = globex } } }
+        assertEquals(null, rehearse.team)
+
+        // Her own team is fine.
+        with(alice) { rehearse.update { team = alice.team } }
+        assertEquals(alice.team, rehearse.team)
+    }
+
+    @Test
+    fun `a user can't make themselves an admin`(): Unit = withSample { db ->
+        val bob = db.user("bob@example.com")
+
+        assertFailsWith<jetlin.db.AccessDenied> { with(bob) { bob.update { admin = true } } }
+
+        assertTrue(!bob.admin)
+        assertEquals(2, with(bob) { Todos.all(db).size }, "still only his own todo and the one shared with Acme")
+    }
+
+    @Test
+    fun `a user can't join a team by reaching its record through someone else`(): Unit = withSample { db ->
+        val alice = db.user("alice@example.com")
+        val carol = db.user("carol@example.com")
+
+        // Every user is readable, and a reference isn't checked when it's followed, so Carol can get
+        // hold of Acme through Alice. Holding it doesn't let her join it.
+        val acme = with(carol) { Users.all(db).single { it == alice }.team }
+        assertFailsWith<jetlin.db.AccessDenied> { with(carol) { carol.update { team = acme } } }
+
+        assertEquals(null, carol.team)
+        assertEquals(listOf("Nothing to do with Acme"), with(carol) { Todos.all(db).map { it.title } })
+    }
+
+    @Test
+    fun `a user can rename themselves, and an admin can change what they may do`(): Unit = withSample { db ->
+        val root = db.user("root@example.com")
+        val carol = db.user("carol@example.com")
+        val acme = db.user("alice@example.com").team
+
+        with(carol) { carol.update { name = "Caroline" } }
+        with(root) { carol.update { team = acme } }
+
+        assertEquals("Caroline", carol.name)
+        assertEquals(acme, carol.team)
     }
 
     @Test

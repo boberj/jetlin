@@ -63,7 +63,8 @@ class GeneratedSchemaTest {
             "a task's owner resolves against what is already resident, so users load first; got $names",
         )
         assertTrue(names.indexOf("projects") < names.indexOf("tasks"), "got $names")
-        assertEquals(3, names.size)
+        assertTrue(names.indexOf("users") < names.indexOf("docs"), "got $names")
+        assertEquals(4, names.size)
     }
 
     @Test
@@ -74,14 +75,19 @@ class GeneratedSchemaTest {
     }
 
     @Test
-    fun `a generated draft writes through to the record`(): Unit {
+    fun `a generated draft holds its writes until they are stored`(): Unit {
         val alice = User("Alice")
         val task = Task(alice, "Read the plan")
 
-        TaskDraft(task, alice).apply {
+        val draft = TaskDraft(task).apply {
             title = "Read it twice"
             done = true
+            assertEquals("Read it twice", title, "a block sees its own writes")
         }
+        assertEquals("Read the plan", task.title, "the record is unchanged until the writes are stored")
+        assertEquals(listOf(Tasks.title, Tasks.done), draft.pendingColumns.toList())
+
+        draft.storePending()
 
         assertEquals("Read it twice", task.title)
         assertTrue(task.done)

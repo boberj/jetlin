@@ -94,12 +94,12 @@ migration tooling. An `@Entity` without a policy fails the build.
 // 1. Owner only.
 companion object : Policy<Note, User> by owned(Note::owner)
 
-// 2. Shared through a related record, and writable by the owner.
+// 2. Shared through a related record, and writable by the owner or an admin.
+override fun canWrite(record: Todo, principal: User): Boolean = record.owner == principal || principal.admin
 override fun canRead(record: Todo, principal: User): Boolean =
-    record.owner == principal || (record.team != null && record.team == principal.team)
-override fun canWrite(record: Todo, principal: User): Boolean = record.owner == principal
+    canWrite(record, principal) || (record.team != null && record.team == principal.team)
 
-// 3. Widely readable, with one restricted column.
+// 3. One admin-only column.
 override fun canWrite(record: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
     Todos.archived -> principal.admin
     else -> canWrite(record, principal)
@@ -239,8 +239,77 @@ which is what `PolicyTest` does.
 
 A property setter can't take a context parameter, so plain assignment could only check a
 thread-local principal at runtime. `update { }` is slightly longer to write, but it keeps the check
-at compile time. The draft also makes column-level policies possible, because each assignment in the
-block is checked separately: `title = "x"` can be allowed while `archived = true` is refused.
+at compile time. The draft also makes column-level policies possible, because each column the
+block sets is checked separately: `title = "x"` can be allowed while `archived = true` is refused.
+
+The draft holds the writes back until the block finishes. Reading a field in the block returns what
+the block set, but the record itself doesn't change until three checks pass:
+
+1. Before the block, the principal must be able to change the record (`canWrite`).
+2. After the block, each column it set must pass the column rule, checked against the record as it
+   was before the block. The order of the assignments doesn't matter.
+3. After the values are stored, the principal must be able to create the record as it now is
+   (`canCreate`).
+
+The third check closes a gap the first two leave open. They only ask "may you change this record as
+it is?", never "may it end up like this?". Without it, you could create a record you're allowed to,
+then change its owner to someone else, which is exactly what `add` would refuse. The column rule
+can't catch that, because it doesn't see the new value. Rules about *values*, such as "a todo can
+only be shared with your own team", go in `canCreate`, and every write path enforces them.
+
+A column rule only narrows access. `update { }` checks the record-level `canWrite` before the block
+runs, so a column rule is only asked about principals who can already change the record. That's why
+the sample's `Todo.canWrite` admits admins for the whole record: with `record.owner == principal`
+alone, `Todos.archived -> principal.admin` would only let an admin archive their own todos. To let
+someone change one column of a record they otherwise can't, widen the record-level `canWrite` and
+narrow the other columns in the column rule.
+
+### Transferring ownership
+
+Because of the third check, `update { owner = bob }` is always refused: a record owned by someone
+else is one you couldn't create. Transfers have their own operation. When the `@Owner` column is a
+`var` of the principal type, KSP generates `transferTo(to)` and `canTransferTo(to)`, and the policy
+decides with `canTransfer`, which refuses everyone by default:
+
+```kotlin
+@Entity
+class Doc(@Owner owner: User, text: String) : Record() {
+    var owner: User by reference(owner)
+    var offeredTo: User? by reference()
+    var text: String by column(text)
+
+    companion object : Policy<Doc, User> {
+        override fun canWrite(record: Doc, principal: User) = record.owner == principal
+        override fun canRead(record: Doc, principal: User) =
+            canWrite(record, principal) || record.offeredTo == principal
+        // Only the person it's offered to can take it, and only for themselves.
+        override fun canTransfer(record: Doc, to: User, principal: User) =
+            to == principal && record.offeredTo == principal
+    }
+}
+
+with(alice) { doc.update { offeredTo = bob } }   // an ordinary update: alice still owns it
+with(bob) { if (doc.canTransferTo(bob)) doc.transferTo(bob) }
+```
+
+`canTransfer` is the whole rule for a transfer. It doesn't also require `canWrite`, so a policy can
+let a recipient pull a record, as above, or let an owner push one, with
+`record.owner == principal && to.team == principal.team`. With the offer-and-accept rule, someone
+can offer you a record, but only you can make it yours.
+
+To decide what a page offers, ask the same checks instead of repeating the policy's logic. Next to
+`update { }` and `delete()`, KSP generates `canUpdate()`, `canUpdate(column)`, and `canDelete()`,
+which take the principal from context and go through the same gate as the writes:
+
+```kotlin
+disabled(!todo.canUpdate(Todos.archived))   // the record-level check, then the column's
+if (todo.canDelete()) Button({ onClick { todo.delete() } }) { Text("Delete") }
+```
+
+`canUpdate(column)` makes the first two checks `update { }` makes, so it never says yes to a write
+those would refuse. It can't foresee the third, because that depends on the value being written. The
+answers are reactive like everything else: they read the same cells as the policy, so revoking a role
+updates the controls on pages that are already open.
 
 A refused column throws and rolls back the whole transaction, instead of skipping only that column. A
 write that's skipped without an error, shown on screen but not saved, is exactly the failure this

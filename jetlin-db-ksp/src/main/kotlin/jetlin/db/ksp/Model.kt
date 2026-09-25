@@ -101,6 +101,15 @@ internal data class EntityModel(
      */
     val principal: String get() = principalType ?: "jetlin.db.Principal"
 
+    /**
+     * The column `transferTo` writes, or `null` if the entity has no transfer functions.
+     *
+     * That's the `@Owner` column, if it's a settable `var` and holds the principal type: a transfer
+     * sets it to a principal. An owner that's a `val` can't change hands.
+     */
+    val transferableOwner: ColumnModel?
+        get() = columns.singleOrNull { it.owner }?.takeIf { it.settable && it.reference == principalType }
+
     /** The visibility modifier for the generated declarations. */
     val visibility: String get() = if (isInternal) "internal" else "public"
 

@@ -92,9 +92,18 @@ public object Gate {
         return db.transact { db.insert(record) }
     }
 
+    /**
+     * Returns whether [delete] would let [principal] delete [record].
+     *
+     * The generated `canDelete()` calls this so a page can hide a control that would be refused.
+     * [delete] makes the same check, so the page and the enforcement can't disagree.
+     */
+    public fun <T : Record, P : Principal> canDelete(record: T, policy: Policy<T, P>, principal: P): Boolean =
+        unsafeInEffect || policy.canDelete(record, principal)
+
     /** Deletes [record] if [principal] can delete it, and throws [AccessDenied] otherwise. */
     public fun <T : Record, P : Principal> delete(record: T, policy: Policy<T, P>, principal: P) {
-        if (!unsafeInEffect && !policy.canDelete(record, principal)) {
+        if (!canDelete(record, policy, principal)) {
             throw AccessDenied("$principal may not delete $record")
         }
         val db = record.database ?: return // It isn't stored, so there's nothing to delete.
@@ -102,39 +111,133 @@ public object Gate {
     }
 
     /**
-     * Checks that [principal] can write [record], then runs a draft block as one transaction.
+     * Runs an `update { }` block for [principal] as one transaction, and checks it three ways.
      *
-     * This function performs the record-level check. Column-level checks happen in the draft's
-     * setters, so one block can be allowed to set `title` and refused for `archived`. A refused column
-     * throws [AccessDenied] and rolls back the whole block.
+     * 1. Before the block runs, [principal] must be able to change [record] at all
+     *    ([Policy.canWrite] for the whole record). A column rule can narrow what a writer may change,
+     *    but can't grant anything to someone who fails this check.
+     * 2. After the block runs, every column it set must pass [Policy.canWrite] for that column. The
+     *    [draft] holds the writes back until then, so each column is checked against the record as it
+     *    was before the block, and the order of the assignments doesn't matter.
+     * 3. After the values are stored, [principal] must be able to create the record as it now is
+     *    ([Policy.canCreate]). An update can't leave a record in a state that [add] would refuse, such
+     *    as one owned by someone else, however each column check went.
+     *
+     * Any refusal throws [AccessDenied] and rolls back the whole block.
+     *
+     * A record that isn't stored yet gets checks 1 and 2 only, and has no transaction to roll back.
+     * That's what lets you set up a new record's fields before storing it: [add] makes check 3 then.
      */
-    public fun <T : Record, P : Principal> update(
+    public fun <T : Record, P : Principal, D : Draft<T>> update(
         record: T,
         policy: Policy<T, P>,
         principal: P,
-        block: () -> Unit,
+        draft: D,
+        block: D.() -> Unit,
     ) {
-        if (!unsafeInEffect && !policy.canWrite(record, principal)) {
+        if (!canUpdate(record, policy, principal)) {
             throw AccessDenied("$principal may not change $record")
         }
-        // A record that isn't stored has nothing to commit, so it needs no transaction. That's also
-        // what lets you set up a new record's fields before storing it.
         val db = record.database
-        if (db == null) block() else db.transact(block)
+        if (db == null) {
+            applyDraft(record, policy, principal, draft, block)
+            return
+        }
+        db.transact {
+            applyDraft(record, policy, principal, draft, block)
+            if (!unsafeInEffect && !policy.canCreate(record, principal)) {
+                throw AccessDenied("$principal may not leave $record in a state they couldn't create")
+            }
+        }
+    }
+
+    /** Runs [block], checks each column it set against the unchanged [record], then stores them. */
+    private fun <T : Record, P : Principal, D : Draft<T>> applyDraft(
+        record: T,
+        policy: Policy<T, P>,
+        principal: P,
+        draft: D,
+        block: D.() -> Unit,
+    ) {
+        draft.block()
+        for (column in draft.pendingColumns) requireWrite(record, column, policy, principal)
+        draft.storePending()
     }
 
     /**
-     * Checks that [principal] can write [column] of [record]. A draft's setter calls this first.
+     * Returns whether [transfer] would let [principal] make [to] the owner of [record].
      *
-     * @throws AccessDenied if the write isn't allowed.
+     * The generated `canTransferTo(to)` calls this, and [transfer] makes the same check.
      */
-    public fun <T : Record, P : Principal> requireWrite(
+    public fun <T : Record, P : Principal> canTransfer(record: T, to: P, policy: Policy<T, P>, principal: P): Boolean =
+        unsafeInEffect || policy.canTransfer(record, to, principal)
+
+    /**
+     * Makes [to] the owner of [record] if [Policy.canTransfer] allows it, and throws [AccessDenied]
+     * otherwise.
+     *
+     * [store] writes the owner column. The generated `transferTo(to)` passes it, because only the
+     * generated code knows which column that is. Unlike [update], this doesn't check the finished
+     * record with [Policy.canCreate]: the new owner is exactly what that check would refuse, and
+     * [Policy.canTransfer] is the rule that allows it instead.
+     */
+    public fun <T : Record, P : Principal> transfer(
+        record: T,
+        to: P,
+        policy: Policy<T, P>,
+        principal: P,
+        store: (P) -> Unit,
+    ) {
+        if (!canTransfer(record, to, policy, principal)) {
+            throw AccessDenied("$principal may not transfer $record to $to")
+        }
+        // A record that isn't stored yet has nothing to commit. [add] checks it with canCreate later.
+        val db = record.database
+        if (db == null) store(to) else db.transact { store(to) }
+    }
+
+    /**
+     * Returns whether [update] would let [principal] start changing [record].
+     *
+     * The generated `canUpdate()` calls this so a page can disable a control that would be refused.
+     * [update] makes the same check, so the page and the enforcement can't disagree.
+     */
+    public fun <T : Record, P : Principal> canUpdate(record: T, policy: Policy<T, P>, principal: P): Boolean =
+        unsafeInEffect || policy.canWrite(record, principal)
+
+    /**
+     * Returns whether `update { }` would let [principal] set [column] of [record].
+     *
+     * That takes both checks `update { }` makes: the record-level one, then the column's own. Asking
+     * the policy's column rule alone would say yes to a principal that [update] refuses before the
+     * column is ever checked.
+     *
+     * It can't foresee the check [update] makes on the finished record, because that one depends on
+     * the values the block sets. A `true` here means the write gets past every check that doesn't
+     * depend on its value.
+     */
+    public fun <T : Record, P : Principal> canUpdate(
+        record: T,
+        column: Column<T>,
+        policy: Policy<T, P>,
+        principal: P,
+    ): Boolean = canUpdate(record, policy, principal) && canWriteColumn(record, column, policy, principal)
+
+    private fun <T : Record, P : Principal> canWriteColumn(
+        record: T,
+        column: Column<T>,
+        policy: Policy<T, P>,
+        principal: P,
+    ): Boolean = unsafeInEffect || policy.canWrite(record, column, principal)
+
+    /** Throws [AccessDenied] unless [principal] can write [column] of [record]. */
+    private fun <T : Record, P : Principal> requireWrite(
         record: T,
         column: Column<T>,
         policy: Policy<T, P>,
         principal: P,
     ) {
-        if (!unsafeInEffect && !policy.canWrite(record, column, principal)) {
+        if (!canWriteColumn(record, column, policy, principal)) {
             throw AccessDenied(
                 "$principal may not change ${record::class.simpleName}.${column.name} on $record",
             )

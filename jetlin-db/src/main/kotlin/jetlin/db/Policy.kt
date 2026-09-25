@@ -21,15 +21,16 @@ public interface Principal
  *
  * // Shared by team, written by the owner.
  * companion object : Policy<Todo, User> {
- *     override fun canRead(record: Todo, principal: User) =
- *         record.owner == principal || record.project?.team in principal.teams
  *     override fun canWrite(record: Todo, principal: User) = record.owner == principal
+ *     override fun canRead(record: Todo, principal: User) =
+ *         canWrite(record, principal) || record.project?.team in principal.teams
  * }
  *
- * // Read by the team, one column admin-only.
+ * // Written by the owner or an admin, one column admin-only.
+ * override fun canWrite(record: Todo, principal: User) = record.owner == principal || principal.isAdmin
  * override fun canWrite(record: Todo, column: Column<Todo>, principal: User) = when (column) {
  *     Todos.archived -> principal.isAdmin
- *     else -> record.project?.team in principal.teams
+ *     else -> canWrite(record, principal)
  * }
  * ```
  *
@@ -51,30 +52,73 @@ public interface Principal
  */
 public interface Policy<T : Record, P : Principal> {
 
-    /** Returns whether [principal] can obtain and read [record]. */
-    public fun canRead(record: T, principal: P): Boolean
+    /** Returns whether [principal] can change [record]. */
+    public fun canWrite(record: T, principal: P): Boolean
 
     /**
-     * Returns whether [principal] can change [record]. By default, anyone who can read it can
-     * change it.
+     * Returns whether [principal] can obtain and read [record]. By default, only those who can
+     * change it can read it.
+     *
+     * Override this to share a record more widely than who can change it. The default keeps
+     * access as narrow as possible, so sharing is always an explicit choice.
      */
-    public fun canWrite(record: T, principal: P): Boolean = canRead(record, principal)
+    public fun canRead(record: T, principal: P): Boolean = canWrite(record, principal)
 
     /**
      * Returns whether [principal] can change [column] of [record]. By default, it's [canWrite] for
      * the whole record.
      *
      * This per-column check is why `update { }` takes a block instead of allowing direct assignment.
-     * Each assignment in the block is checked separately, so `title = "x"` can be allowed while
-     * `archived = true` is refused.
+     * Each column the block sets is checked separately, so `title = "x"` can be allowed while
+     * `archived = true` is refused. [record] is always the record as it was before the block, so the
+     * order of the assignments doesn't matter. This check can't see the new value: to restrict
+     * *what* a column is set to, use [canCreate].
+     *
+     * A column rule can only narrow access, never widen it. `update { }` checks [canWrite] for the
+     * whole record before the block runs, so this is only asked of principals who can already change
+     * the record. Returning `true` here for anyone else has no effect. That's why the admin-only
+     * example above also admits admins in [canWrite] for the whole record: without that, only an
+     * admin who owned the todo could archive it. To let a principal change a column of a record they
+     * otherwise can't, widen [canWrite] for the whole record and narrow the other columns here.
      */
     public fun canWrite(record: T, column: Column<T>, principal: P): Boolean = canWrite(record, principal)
 
-    /** Returns whether [principal] can store the new [record]. By default, it's [canWrite]. */
+    /**
+     * Returns whether [principal] can store [record] as it is. By default, it's [canWrite].
+     *
+     * This is checked when a record is added, and again on the finished record after every
+     * `update { }`. An update can't leave a record in a state its principal couldn't have created,
+     * so this is where rules about values belong, such as "a todo can only be shared with your own
+     * team". Without it, a principal could create a record that's allowed and then change it into
+     * one that isn't, such as handing it to another owner.
+     */
     public fun canCreate(record: T, principal: P): Boolean = canWrite(record, principal)
 
     /** Returns whether [principal] can delete [record]. By default, it's [canWrite]. */
     public fun canDelete(record: T, principal: P): Boolean = canWrite(record, principal)
+
+    /**
+     * Returns whether [principal] can make [to] the owner of [record]. By default, nobody can.
+     *
+     * A transfer is the one write that's meant to leave a record in a state its principal couldn't
+     * have created, so `update { }` refuses it: it checks the finished record with [canCreate]. The
+     * generated `transferTo(to)` is the explicit path instead, and this is its whole rule. It doesn't
+     * also require [canWrite], so a policy can decide who may pull a record as well as who may give
+     * one away:
+     *
+     * ```kotlin
+     * // The owner can hand it to a teammate.
+     * override fun canTransfer(record: Doc, to: User, principal: User) =
+     *     record.owner == principal && to.team == principal.team
+     *
+     * // The owner offers it with `update { offeredTo = bob }`, and only Bob can take it.
+     * override fun canTransfer(record: Doc, to: User, principal: User) =
+     *     to == principal && record.offeredTo == principal
+     * ```
+     *
+     * `transferTo` exists only for an entity whose `@Owner` column is a `var` of the principal type.
+     */
+    public fun canTransfer(record: T, to: P, principal: P): Boolean = false
 }
 
 /**
@@ -91,7 +135,7 @@ public interface Policy<T : Record, P : Principal> {
  */
 public fun <T : Record, P : Principal> owned(owner: (T) -> P): Policy<T, P> =
     object : Policy<T, P> {
-        override fun canRead(record: T, principal: P): Boolean = owner(record) == principal
+        override fun canWrite(record: T, principal: P): Boolean = owner(record) == principal
     }
 
 /**

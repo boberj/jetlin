@@ -154,7 +154,7 @@ fun TodoListPage(db: Db) {
     }
 }
 
-/** One todo, with the controls its owner can use. */
+/** One todo, with the controls its owner or an admin can use. */
 @Composable
 context(principal: User)
 private fun TodoRow(db: Db, todo: Todo) {
@@ -165,19 +165,22 @@ private fun TodoRow(db: Db, todo: Todo) {
             testTag("done")
             // A teammate can see the todo but not change it, so disable the checkbox instead of letting
             // the write fail.
-            disabled(!mine)
+            disabled(!todo.canUpdate(Todos.done))
             if (todo.done) attr("checked", "")
-            onChange { if (mine) todo.update { done = !done } }
+            onChange { todo.update { done = !done } }
         })
         Link("/todo/${todo.id}", { classes("todo-text") }) { Text(todo.title) }
         if (!mine) Span({ classes("muted"); testTag("owner") }) { Text("· ${todo.owner.name}") }
         if (todo.team != null) Span({ classes("badge"); testTag("shared") }) { Text(todo.team?.name ?: "") }
+        // Sharing goes to the principal's own team, so it's only offered to the owner.
         if (mine) {
             Button({
                 classes("link")
                 testTag("share")
                 onClick { todo.update { team = if (team == null) principal.team else null } }
             }) { Text(if (todo.team == null) "Share with team" else "Unshare") }
+        }
+        if (todo.canDelete()) {
             Button({ classes("link"); testTag("delete"); onClick { todo.delete() } }) { Text("Delete") }
         }
     }
@@ -187,11 +190,10 @@ private fun TodoRow(db: Db, todo: Todo) {
 @Composable
 context(principal: User)
 fun TodoDetailPage(db: Db, todo: Todo) {
-    val mine = todo.owner == principal
     Div({ classes("card") }) {
         H1({ testTag("title") }) { Text(todo.title) }
         P({ classes("muted") }) { Text("Owned by ${todo.owner.name}") }
-        if (mine) {
+        if (todo.canUpdate(Todos.title)) {
             Div({ classes("row") }) {
                 Button({
                     classes("btn")
@@ -206,8 +208,9 @@ fun TodoDetailPage(db: Db, todo: Todo) {
                 testTag("archived")
                 if (todo.archived) attr("checked", "")
                 // The column-level policy: the checkbox is disabled for anyone but an admin, and the
-                // server would refuse the write even if the event were sent anyway.
-                disabled(!principal.admin)
+                // server would refuse the write even if the event were sent anyway. `canUpdate` asks
+                // the same gate `update` goes through, so the two can't disagree.
+                disabled(!todo.canUpdate(Todos.archived))
                 onChange { todo.update { archived = !archived } }
             })
             Span { Text("Archived (admins only)") }

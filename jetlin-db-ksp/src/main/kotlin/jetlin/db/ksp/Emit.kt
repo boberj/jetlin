@@ -88,17 +88,40 @@ private fun emitMutators(entity: EntityModel): String = buildString {
     appendLine(" * A refused write throws [jetlin.db.AccessDenied] and rolls back the whole transaction.")
     appendLine(" */")
     appendLine("context(principal: $principal)")
-    appendLine("${entity.visibility} fun $type.update(block: ${entity.draftQualified}.() -> Unit) {")
-    appendLine("    val record = this")
-    appendLine("    jetlin.db.Gate.update(record, ${entity.objectQualified}.policy, principal) {")
-    appendLine("        ${entity.draftQualified}(record, principal).block()")
-    appendLine("    }")
-    appendLine("}")
+    appendLine("${entity.visibility} fun $type.update(block: ${entity.draftQualified}.() -> Unit): Unit =")
+    appendLine("    jetlin.db.Gate.update(this, ${entity.objectQualified}.policy, principal, ${entity.draftQualified}(this), block)")
     appendLine()
     appendLine("/** Deletes this ${entity.simpleName}, if this principal can delete it. Otherwise, throws [jetlin.db.AccessDenied]. */")
     appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.delete(): Unit =")
     appendLine("    jetlin.db.Gate.delete(this, ${entity.objectQualified}.policy, principal)")
+    appendLine()
+    appendLine("/** Returns whether this principal can change this ${entity.simpleName}: whether [update] gets past its record-level check. */")
+    appendLine("context(principal: $principal)")
+    appendLine("${entity.visibility} fun $type.canUpdate(): Boolean =")
+    appendLine("    jetlin.db.Gate.canUpdate(this, ${entity.objectQualified}.policy, principal)")
+    appendLine()
+    appendLine("/** Returns whether this principal can set [column] of this ${entity.simpleName} in [update]. */")
+    appendLine("context(principal: $principal)")
+    appendLine("${entity.visibility} fun $type.canUpdate(column: jetlin.db.Column<$type>): Boolean =")
+    appendLine("    jetlin.db.Gate.canUpdate(this, column, ${entity.objectQualified}.policy, principal)")
+    appendLine()
+    appendLine("/** Returns whether this principal can delete this ${entity.simpleName}: whether [delete] would succeed. */")
+    appendLine("context(principal: $principal)")
+    appendLine("${entity.visibility} fun $type.canDelete(): Boolean =")
+    appendLine("    jetlin.db.Gate.canDelete(this, ${entity.objectQualified}.policy, principal)")
+    entity.transferableOwner?.let { owner ->
+        appendLine()
+        appendLine("/** Makes [to] the owner of this ${entity.simpleName}, if the policy's `canTransfer` allows it. Otherwise, throws [jetlin.db.AccessDenied]. */")
+        appendLine("context(principal: $principal)")
+        appendLine("${entity.visibility} fun $type.transferTo(to: $principal): Unit =")
+        appendLine("    jetlin.db.Gate.transfer(this, to, ${entity.objectQualified}.policy, principal) { ${owner.name} = it }")
+        appendLine()
+        appendLine("/** Returns whether this principal can make [to] the owner of this ${entity.simpleName}: whether [transferTo] would succeed. */")
+        appendLine("context(principal: $principal)")
+        appendLine("${entity.visibility} fun $type.canTransferTo(to: $principal): Boolean =")
+        appendLine("    jetlin.db.Gate.canTransfer(this, to, ${entity.objectQualified}.policy, principal)")
+    }
 }
 
 /** Returns the table builder call that declares [column]. */
@@ -166,31 +189,28 @@ private fun loadBody(entity: EntityModel): String = buildString {
  * Generates the draft type that `update { }` passes to its block.
  *
  * Only settable columns are included. Immutable columns are written once on insert and can't
- * change. Each setter checks the column-level policy before writing, which is why drafts exist
- * instead of assigning to the record directly.
+ * change. Each setter records its value in the `Draft` base class instead of writing the record, so
+ * `Gate.update` can check every column against the record as it was before the block, and then
+ * check the finished record. That's why drafts exist instead of assigning to the record directly.
  */
 private fun emitDraft(entity: EntityModel): String = buildString {
     val settable = entity.columns.filter { it.settable }
     appendLine("/**")
     appendLine(" * The fields of a [${entity.qualifiedName}] that `update { }` can set.")
+    appendLine(" *")
+    appendLine(" * Setting a field records the value, and reading it back returns what was set. The record itself")
+    appendLine(" * changes only after the whole block has been checked.")
     appendLine(" */")
     appendLine("${entity.visibility} class ${entity.draftName} internal constructor(")
     appendLine("    private val record: ${entity.qualifiedName},")
-    appendLine("    private val principal: ${entity.principal},")
-    appendLine(") {")
+    appendLine(") : jetlin.db.Draft<${entity.qualifiedName}>() {")
     settable.forEachIndexed { index, column ->
         if (index > 0) appendLine()
-        appendLine("    /** Sets `${column.name}` if this principal can write it. Otherwise, throws [jetlin.db.AccessDenied]. */")
+        appendLine("    /** Sets `${column.name}` once the block is done, if this principal can write it. Otherwise, the update throws [jetlin.db.AccessDenied]. */")
         appendLine("    ${entity.visibility} var ${column.name}: ${column.declaredType}")
-        appendLine("        get() = record.${column.name}")
+        appendLine("        get() = read(${entity.objectName}.${column.name}, record.${column.name})")
         appendLine("        set(value) {")
-        appendLine("            jetlin.db.Gate.requireWrite(")
-        appendLine("                record,")
-        appendLine("                ${entity.objectName}.${column.name},")
-        appendLine("                ${entity.objectName}.policy,")
-        appendLine("                principal,")
-        appendLine("            )")
-        appendLine("            record.${column.name} = value")
+        appendLine("            write(${entity.objectName}.${column.name}, value) { record.${column.name} = it }")
         appendLine("        }")
     }
     if (settable.isEmpty()) {
