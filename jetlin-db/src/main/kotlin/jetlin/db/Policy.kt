@@ -1,137 +1,235 @@
 package jetlin.db
 
 /**
- * The identity the framework acts on behalf of, usually a `User` entity.
+ * The user, or other identity, that the application acts for. Usually a `User` entity.
  *
- * This marker interface keeps a policy's principal type from accidentally being a string or an ID.
- * The principal should be a live record, not a copy taken at sign-in. A policy that reads
- * `principal.isAdmin` then reads a cell, so revoking the role takes effect immediately.
+ * Every read and write in `jetlin-db` happens on behalf of a principal, and every access rule is a
+ * question about one: "is the principal the owner?", "is the principal an admin?". The framework
+ * never guesses who that is. Your application finds the signed-in user and passes it in.
+ *
+ * ```kotlin
+ * @Entity
+ * class User(name: String, admin: Boolean = false) : Record(), Principal {
+ *     var name: String by column(name)
+ *     var admin: Boolean by column(admin)
+ *     // ...
+ * }
+ * ```
+ *
+ * Implementing this interface is all it takes. It exists so that a policy's principal type can't
+ * accidentally be a `String` or an ID. Use the stored record itself, not a copy taken at sign-in.
+ * Then a rule that reads `principal.admin` sees the current value, and removing someone's admin role
+ * takes effect on their open pages right away.
  */
 public interface Principal
 
 /**
- * The access rules for an entity: who can read, change, create, and delete its records.
+ * The access rules for one entity: who can see its records, and who can create, change, and delete
+ * them.
  *
- * The entity's companion object implements its policy. The KSP processor fails the build for any
- * entity without one, so every entity has access rules.
+ * Every entity needs a policy. Declare it on the entity's companion object. The KSP processor fails
+ * the build for an entity without one.
+ *
+ * ## Choose how to write it
+ *
+ * Most policies are built from conditions and grants with [policy]. Each grant reads like a
+ * sentence, and the framework checks each one at every point it matters:
  *
  * ```kotlin
- * // Owner only.
- * companion object : Policy<Todo, User> by owned(Todo::owner)
+ * companion object : Policy<Todo, User> by policy({
+ *     principal() equalTo record(Todo::owner) implies canEdit()
+ *     principal() map User::team equalTo record(Todo::team) implies canRead()
+ * })
+ * ```
  *
- * // Shared by team, written by the owner.
- * companion object : Policy<Todo, User> {
- *     override fun canWrite(record: Todo, principal: User) = record.owner == principal
- *     override fun canRead(record: Todo, principal: User) =
- *         canWrite(record, principal) || record.project?.team in principal.teams
- * }
+ * If only the owner can do anything with a record, use [owned]:
  *
- * // Written by the owner or an admin, one column admin-only.
- * override fun canWrite(record: Todo, principal: User) = record.owner == principal || principal.isAdmin
- * override fun canWrite(record: Todo, column: Column<Todo>, principal: User) = when (column) {
- *     Todos.archived -> principal.isAdmin
- *     else -> canWrite(record, principal)
+ * ```kotlin
+ * companion object : Policy<Note, User> by owned(Note::owner)
+ * ```
+ *
+ * If neither fits, implement this interface yourself. Only [canWrite] is required. Every other
+ * method has a default that builds on it:
+ *
+ * ```kotlin
+ * companion object : Policy<User, User> {
+ *     // Users can change their own record, and admins can change anyone's.
+ *     override fun canWrite(record: User, principal: User) = record == principal || principal.admin
+ *
+ *     // Everyone can see every user.
+ *     override fun canRead(record: User, principal: User) = true
  * }
  * ```
  *
- * Because all records are in memory, a policy is ordinary Kotlin code that works on live objects.
- * It doesn't have to be translated to SQL, so there's no expression tree and no second
- * representation to keep consistent with the schema. That's the main benefit of keeping the data in
- * memory.
+ * ## When each method runs
  *
- * ## Before you write a policy
+ * | You do this                     | The framework asks                                   |
+ * |---------------------------------|------------------------------------------------------|
+ * | Read a collection or look up    | [canRead], for each record                           |
+ * | `db.todos.add(todo)`            | [canCreate]                                          |
+ * | `todo.update { title = "x" }`   | [canChange], which by default asks [canWrite], then  |
+ * |                                 | [canWrite] for each changed column, then [canCreate] |
+ * |                                 | on the todo as it would be afterwards                |
+ * | `todo.delete()`                 | [canDelete]                                          |
  *
- * Policies run during recomposition. Reading a policy-filtered collection runs the policy for each
- * record on every read. Results aren't cached, because a cached decision can outlive the state it
- * was based on, which would break reactive revocation. So a policy must be cheap, pure, and free of
- * side effects: no I/O and no suspending calls.
+ * A record the principal can't read is left out of collections, and a lookup returns `null`, as if
+ * the record didn't exist. A refused create, change, or delete throws [AccessDenied].
  *
- * The principal is a normal parameter, not a context parameter. Only the framework calls policies,
- * so there's nothing to enforce here. The application-facing API uses context parameters instead,
- * where they make a change without a principal in scope a compile error.
+ * ## Keep policies fast and free of side effects
+ *
+ * Policies run while pages render. Reading a collection runs [canRead] for every record in it, every
+ * time the page reads it. The framework doesn't cache the answers, because a cached answer could
+ * outlive the data it was based on: someone who just lost access would keep seeing the record. So a
+ * policy must be quick, and must only read. Don't do I/O, don't call suspending functions, and don't
+ * change any state. Everything a policy needs is already in memory.
+ *
+ * The principal is a normal parameter, not a context parameter, because only the framework calls
+ * these methods. The functions your application calls, such as `update { }`, take the principal
+ * from context instead, so calling them without a principal in scope doesn't compile.
  */
 public interface Policy<T : Record, P : Principal> {
 
-    /** Returns whether [principal] can change [record]. */
+    /**
+     * Checks whether [principal] can change [record].
+     *
+     * This is the one method you have to write. Everything else builds on it by default: someone who
+     * can change a record can also read it, delete it, and create one like it.
+     *
+     * ```kotlin
+     * override fun canWrite(record: Todo, principal: User) = record.owner == principal
+     * ```
+     *
+     * @param record The record as it is now.
+     * @param principal The principal that wants to change it.
+     * @return True if [principal] can change [record]; false otherwise.
+     */
     public fun canWrite(record: T, principal: P): Boolean
 
     /**
-     * Returns whether [principal] can obtain and read [record]. By default, only those who can
-     * change it can read it.
+     * Checks whether [principal] can see [record].
      *
-     * Override this to share a record more widely than who can change it. The default keeps
-     * access as narrow as possible, so sharing is always an explicit choice.
+     * By default, only someone who can change a record can see it. Override this to show a record
+     * to more people than can change it:
+     *
+     * ```kotlin
+     * // Teammates can see a shared todo, but only its owner can change it.
+     * override fun canRead(record: Todo, principal: User) =
+     *     canWrite(record, principal) || (record.team != null && record.team == principal.team)
+     * ```
+     *
+     * @return True if [principal] can see [record]; false otherwise.
      */
     public fun canRead(record: T, principal: P): Boolean = canWrite(record, principal)
 
     /**
-     * Returns whether [principal] can change [column] of [record]. By default, it's [canWrite] for
-     * the whole record.
+     * Checks whether [principal] can change [column] of [record].
      *
-     * This per-column check is why `update { }` takes a block instead of allowing direct assignment.
-     * Each column the block sets is checked separately, so `title = "x"` can be allowed while
-     * `archived = true` is refused. [record] is always the record as it was before the block, so the
-     * order of the assignments doesn't matter. This check can't see the new value: to restrict
-     * *what* a column is set to, use [canCreate].
+     * By default, anyone who can change the record can change every column of it. Override this to
+     * protect one column more than the rest:
      *
-     * A column rule can only narrow access, never widen it. `update { }` checks [canWrite] for the
-     * whole record before the block runs, so this is only asked of principals who can already change
-     * the record. Returning `true` here for anyone else has no effect. That's why the admin-only
-     * example above also admits admins in [canWrite] for the whole record: without that, only an
-     * admin who owned the todo could archive it. To let a principal change a column of a record they
-     * otherwise can't, widen [canWrite] for the whole record and narrow the other columns here.
+     * ```kotlin
+     * // Owners can edit their todos, but only admins can archive them.
+     * override fun canWrite(record: Todo, column: Column<Todo>, principal: User) = when (column) {
+     *     Todos.archived -> principal.admin
+     *     else -> canWrite(record, principal)
+     * }
+     * ```
+     *
+     * The default [canChange] asks this only for principals who passed [canWrite] for the whole
+     * record, so this rule can only take permissions away. In the example above, an admin who can't
+     * change the todo still can't archive it. If admins should be able to archive anyone's todo, let
+     * them pass [canWrite] too.
+     *
+     * [record] is the record as it was before the change, so this rule can't see the new value. To
+     * limit the values a column can take, use [canCreate].
+     *
+     * @return True if [principal] can change [column]; false otherwise.
      */
     public fun canWrite(record: T, column: Column<T>, principal: P): Boolean = canWrite(record, principal)
 
     /**
-     * Returns whether [principal] can store [record] as it is. By default, it's [canWrite].
+     * Checks whether [principal] can store [record] with the values it has.
      *
-     * This is checked when a record is added, and again on the finished record after every
-     * `update { }`. An update can't leave a record in a state its principal couldn't have created,
-     * so this is where rules about values belong, such as "a todo can only be shared with your own
-     * team". Without it, a principal could create a record that's allowed and then change it into
-     * one that isn't, such as handing it to another owner.
+     * The framework asks this when a record is added, and, by default, again after every change, on
+     * the record as it would be afterwards. So an update can never produce a record that adding it
+     * would have refused. Without that second check, someone could create a record they're allowed
+     * to, then change its owner to someone else.
+     *
+     * This makes it the place for rules about values:
+     *
+     * ```kotlin
+     * // A todo can only be shared with the principal's own team.
+     * override fun canCreate(record: Todo, principal: User) =
+     *     canWrite(record, principal) && (record.team == null || record.team == principal.team)
+     * ```
+     *
+     * By default, it's [canWrite].
+     *
+     * @return True if [principal] can store [record]; false otherwise.
      */
     public fun canCreate(record: T, principal: P): Boolean = canWrite(record, principal)
 
-    /** Returns whether [principal] can delete [record]. By default, it's [canWrite]. */
+    /**
+     * Checks whether [principal] can delete [record]. By default, it's [canWrite].
+     *
+     * @return True if [principal] can delete [record]; false otherwise.
+     */
     public fun canDelete(record: T, principal: P): Boolean = canWrite(record, principal)
 
     /**
-     * Returns whether [principal] can make [to] the owner of [record]. By default, nobody can.
+     * Checks whether [principal] can make [change], and decides every `update { }`.
      *
-     * A transfer is the one write that's meant to leave a record in a state its principal couldn't
-     * have created, so `update { }` refuses it: it checks the finished record with [canCreate]. The
-     * generated `transferTo(to)` is the explicit path instead, and this is its whole rule. It doesn't
-     * also require [canWrite], so a policy can decide who may pull a record as well as who may give
-     * one away:
+     * [change] holds the record as it is now, the values the update wants to set, and a way to look
+     * at the record as it would be afterwards. By default, a change is allowed if all of these hold:
+     *
+     * 1. [principal] can change the record as it is now ([canWrite]).
+     * 2. [principal] can change each column whose value changes ([canWrite] for that column).
+     * 3. [principal] could store the record as it would be afterwards ([canCreate]).
+     *
+     * Override this only when a rule needs the old and the new values together, and [policy] has no
+     * grant for it. For example, to let the person a document is offered to accept it:
      *
      * ```kotlin
-     * // The owner can hand it to a teammate.
-     * override fun canTransfer(record: Doc, to: User, principal: User) =
-     *     record.owner == principal && to.team == principal.team
-     *
-     * // The owner offers it with `update { offeredTo = bob }`, and only Bob can take it.
-     * override fun canTransfer(record: Doc, to: User, principal: User) =
-     *     to == principal && record.offeredTo == principal
+     * override fun canChange(change: Change<Doc>, principal: User): Boolean {
+     *     val doc = change.record
+     *     val accepting = doc.offeredTo == principal &&
+     *         change.columns == setOf(Docs.owner, Docs.offeredTo) &&
+     *         change.newValue(Doc::owner) == principal &&
+     *         change.newValue(Doc::offeredTo) == null
+     *     return accepting || super.canChange(change, principal)
+     * }
      * ```
      *
-     * `transferTo` exists only for an entity whose `@Owner` column is a `var` of the principal type.
+     * When you override it, check both sides. A rule that only looks at the new values lets anyone
+     * who holds a record rewrite it into one they're allowed to have: for example, by setting its
+     * owner to themselves.
+     *
+     * @return True if [principal] can make [change]; false otherwise.
      */
-    public fun canTransfer(record: T, to: P, principal: P): Boolean = false
+    public fun canChange(change: Change<T>, principal: P): Boolean {
+        val record = change.record
+        return canWrite(record, principal) &&
+            change.columns.all { column -> canWrite(record, column, principal) } &&
+            change.afterwards { changed -> canCreate(changed, principal) }
+    }
 }
 
 /**
- * Returns a policy for records that only their owner can access.
+ * Returns a policy for records that only their owner can see or change.
  *
  * ```kotlin
- * companion object : Policy<Todo, User> by owned(Todo::owner)
+ * @Entity
+ * class Note(@Owner val owner: User, text: String) : Record() {
+ *     var text: String by column(text)
+ *
+ *     companion object : Policy<Note, User> by owned(Note::owner)
+ * }
  * ```
  *
- * This is by far the most common policy. A ready-made version avoids mistakes in hand-written ones,
- * such as `||` where `&&` was meant, which would expose records without any error.
+ * This is the most common policy. Using it avoids the small mistakes that hand-written rules are
+ * prone to, such as writing `||` where `&&` was meant, which exposes records without any error.
  *
- * @param owner returns the record's owner.
+ * @param owner Returns the record's owner.
  */
 public fun <T : Record, P : Principal> owned(owner: (T) -> P): Policy<T, P> =
     object : Policy<T, P> {
@@ -139,14 +237,21 @@ public fun <T : Record, P : Principal> owned(owner: (T) -> P): Policy<T, P> =
     }
 
 /**
- * Thrown when a policy refuses a write, a create, or a delete.
+ * Thrown when a policy refuses to let a principal create, change, or delete a record.
  *
- * Reads never throw this. A record the principal can't read is absent: it's missing from collections,
- * and lookups return `null`, because an error would reveal that the record exists. A refused write
- * does throw, because it means a bug or an attack. The caller asked to do something it isn't allowed
- * to do, instead of asking about something it can't see.
+ * The message says who was refused, what they tried, and, for policies built with [policy], which
+ * grant they were missing:
  *
- * Thrown inside a transaction, it rolls back the whole transaction. Nothing is committed or applied,
- * so no patch is sent.
+ * ```
+ * User#2 may not change Todo#7: archived can only be changed by admins
+ * ```
+ *
+ * Reading never throws this. A record the principal can't see is left out, as if it didn't exist,
+ * because an error would tell them that it does. A refused write throws, because it means the
+ * application offered something it shouldn't have, or someone is sending events the page never
+ * showed them.
+ *
+ * Throwing it inside a transaction rolls back the whole transaction, so nothing is saved, and no
+ * page sees any of the changes.
  */
 public class AccessDenied internal constructor(message: String) : RuntimeException(message)

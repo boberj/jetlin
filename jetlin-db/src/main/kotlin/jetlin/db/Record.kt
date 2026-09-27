@@ -176,11 +176,12 @@ public abstract class Record {
      * If no transaction is open, the write is refused. Allowing it would change the field in memory
      * and on screen but not on disk, and nobody would notice until a restart lost the value. Records
      * that aren't stored yet are exempt, because there's nothing on disk for them to disagree with.
+     * So are writes inside a [Trials] run, because they're discarded.
      *
      * @throws IllegalStateException if the record is stored and no transaction is open.
      */
     internal fun recordWrite(cell: Cell<*>) {
-        if (database == null) return
+        if (database == null || Trials.active) return
         val writes = Transactions.current ?: error(
             "$cell was written outside a transaction. A change to stored state has to go through " +
                 "db.transact { }, so that it is committed before any session can see it.",

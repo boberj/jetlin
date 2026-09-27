@@ -82,6 +82,14 @@ class DbConventionsTest {
             !function.hasSuspendModifier &&
                 BLOCKING.none { blocking -> blocking in function.text }
         }
+
+        // A policy built with `policy { }` keeps its rules in a lambda, not in functions, so the check
+        // above never sees them. Check the whole declaration instead.
+        val built = policies.filter { "by policy(" in it.text }
+        assertTrueKotlin(built.isNotEmpty(), "expected to find some policies built with policy { }")
+        built.assertTrue(additionalMessage = POLICIES_ARE_PURE) { policy ->
+            "suspend" !in policy.text && BLOCKING.none { blocking -> blocking in policy.text }
+        }
     }
 
     /**

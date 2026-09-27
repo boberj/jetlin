@@ -6,7 +6,11 @@ import jetlin.db.Owner
 import jetlin.db.Policy
 import jetlin.db.Principal
 import jetlin.db.Record
+import jetlin.db.describedAs
+import jetlin.db.equalTo
+import jetlin.db.map
 import jetlin.db.owned
+import jetlin.db.policy
 
 /**
  * The sample's entities and their access policies.
@@ -17,6 +21,9 @@ import jetlin.db.owned
  * 2. Shared through a related record: its owner or an admin can read and change a [Todo], and
  *    anyone on the team it's shared with can read it.
  * 3. One restricted column: only an admin can change [Todo.archived].
+ *
+ * [Todo]'s policy is built from conditions and grants with `policy { }`. [Team] and [User] implement
+ * `Policy` directly, which shows the lower-level interface the rules are built on.
  *
  * Each policy is ordinary Kotlin code over live objects, and reads state that can change while a page
  * is open. That's what makes revocation reactive. When a todo is unshared from a team, it disappears
@@ -106,36 +113,24 @@ class Todo(
     /** Whether the todo is archived. Only an admin can change it. */
     var archived: Boolean by column(false)
 
-    companion object : Policy<Todo, User> {
-        /** The owner can change it, and so can an admin, whoever owns it. */
-        override fun canWrite(record: Todo, principal: User): Boolean = record.owner == principal || principal.admin
+    /**
+     * The todo's grants, read aloud: "If the principal is its owner, they can edit it. If the
+     * principal is an admin, they can edit it. If the principal's team is its team, they can read
+     * it. If the principal is an admin, they can change archived."
+     */
+    companion object : Policy<Todo, User> by policy({
+        val admin = (principal() map User::admin) describedAs "the principal is an admin"
 
-        /**
-         * Pattern 2: anyone who can change it can read it, and so can members of the team it's shared
-         * with. Sharing only grants read access, so teammates can see the todo but can't change it.
-         */
-        override fun canRead(record: Todo, principal: User): Boolean =
-            canWrite(record, principal) || (record.team != null && record.team == principal.team)
-
-        /**
-         * A todo can only be shared with the principal's own team, unless they're an admin.
-         *
-         * This is checked when a todo is added and again after every update, so a todo can't be shared
-         * with a stranger's team either way.
-         */
-        override fun canCreate(record: Todo, principal: User): Boolean =
-            canWrite(record, principal) && (record.team == null || record.team == principal.team || principal.admin)
-
-        /**
-         * Pattern 3: only an admin can change `archived`. An owner who isn't an admin can change every
-         * other column, but not this one.
-         *
-         * A column rule only narrows the record-level [canWrite], which is why that one admits admins.
-         * Every other column falls back to it.
-         */
-        override fun canWrite(record: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
-            Todos.archived -> principal.admin
-            else -> canWrite(record, principal)
+        principal() equalTo record(Todo::owner) implies canEdit()
+        admin implies canEdit()
+        // Pattern 2: sharing a todo with a team lets its members see it, not change it.
+        principal() map User::team equalTo record(Todo::team) implies canRead()
+        // Pattern 3: with its own grant, archived is no longer covered by the owner's canEdit().
+        admin implies canChange(Todo::archived)
+        // Without this, an owner could share a todo with a team they aren't on. Unsharing, by
+        // setting team to null, is never checked here: a value rule is only asked about values.
+        Todo::team.onlyAllows("the principal's own team") { team, principal ->
+            team == principal.team || principal.admin
         }
-    }
+    })
 }

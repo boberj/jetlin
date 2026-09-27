@@ -295,62 +295,59 @@ class PolicyTest {
         assertTrue(bob.admin, "an admin can grant it")
     }
 
-    // ---- Transferring ----------------------------------------------------------------------------
+    // ---- Deciding a whole change ------------------------------------------------------------------
 
     @Test
-    fun `an offered record changes hands when its recipient takes it`(): Unit = withDb { db ->
+    fun `a policy sees the record before and after a change, and nothing is kept`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
-        val bob = db.store(User("Bob"))
-        val doc = db.store(Doc(alice, "The plan"))
+        val project = db.store(Project(alice, "Inbox"))
+        val task = db.store(Task(alice, "Read"))
+        var seen: List<Any?> = emptyList()
+        val policy = object : Policy<Task, User> {
+            override fun canWrite(record: Task, principal: User): Boolean = true
 
-        with(alice) { doc.update { offeredTo = bob } }
-        with(bob) {
-            assertTrue(doc.canTransferTo(bob))
-            doc.transferTo(bob)
+            override fun canChange(change: Change<Task>, principal: User): Boolean {
+                seen = listOf(
+                    change.record.title,
+                    change.newValue(Task::title),
+                    change.columns.map { it.name },
+                    change.changes(Task::done),
+                    // Afterwards, the relation sees the change too: the task is in the project.
+                    change.afterwards { changed -> changed.title to (changed in with(principal) { project.tasks }) },
+                )
+                return true
+            }
         }
 
-        assertEquals(bob, doc.owner)
-        assertTrue(Doc.canWrite(doc, bob))
-        assertFalse(Doc.canRead(doc, alice), "alice gave it away")
+        // A dry run needs no transaction. `done` is set to the value it already has.
+        Gate.canUpdate(task, policy, alice, TaskDraft(task)) { title = "Read twice"; done = false; this.project = project }
+
+        assertEquals(
+            listOf("Read", "Read twice", listOf("title", "project"), false, "Read twice" to true),
+            seen,
+        )
+        assertEquals("Read", task.title, "a dry run keeps nothing")
+        assertNull(task.project)
     }
 
     @Test
-    fun `a record can't be pushed onto someone, or taken without an offer`(): Unit = withDb { db ->
-        val alice = db.store(User("Alice"))
-        val mallory = db.store(User("Mallory"))
-        val bob = db.store(User("Bob"))
-        val doc = db.store(Doc(alice, "The plan"))
-        val spam = db.store(Doc(mallory, "Spam"))
-
-        // Mallory can't hand her record to alice, by transfer or by update.
-        with(mallory) {
-            assertFalse(spam.canTransferTo(alice))
-            assertFailsWith<AccessDenied> { spam.transferTo(alice) }
-            assertFailsWith<AccessDenied> { spam.update { owner = alice } }
-        }
-        // Nor can she take alice's record, which isn't offered to anyone.
-        with(mallory) { assertFailsWith<AccessDenied> { doc.transferTo(mallory) } }
-        // An offer to bob is for bob only.
-        with(alice) { doc.update { offeredTo = bob } }
-        with(mallory) { assertFailsWith<AccessDenied> { doc.transferTo(mallory) } }
-
-        assertEquals(mallory, spam.owner)
-        assertEquals(alice, doc.owner)
-    }
-
-    @Test
-    fun `withdrawing an offer revokes the transfer it allowed`(): Unit = withDb { db ->
+    fun `a hand-written canChange can compare the old and new values`(): Unit = withDb { db ->
         val alice = db.store(User("Alice"))
         val bob = db.store(User("Bob"))
-        val doc = db.store(Doc(alice, "The plan"))
+        val task = db.store(Task(alice, "Read"))
+        // Tasks can be marked done, but never undone.
+        val policy = object : Policy<Task, User> {
+            override fun canWrite(record: Task, principal: User): Boolean = record.owner == principal
 
-        with(alice) { doc.update { offeredTo = bob } }
-        with(alice) { doc.update { offeredTo = null } }
-
-        with(bob) {
-            assertFalse(doc.canTransferTo(bob))
-            assertFailsWith<AccessDenied> { doc.transferTo(bob) }
+            override fun canChange(change: Change<Task>, principal: User): Boolean =
+                !(change.record.done && !change.newValue(Task::done)) && super.canChange(change, principal)
         }
+
+        Gate.update(task, policy, alice, TaskDraft(task)) { done = true }
+        assertFailsWith<AccessDenied> { Gate.update(task, policy, alice, TaskDraft(task)) { done = false } }
+        assertFailsWith<AccessDenied> { Gate.update(task, policy, bob, TaskDraft(task)) { title = "Bob's" } }
+
+        assertTrue(task.done)
     }
 
     // ---- Asking before writing -------------------------------------------------------------------

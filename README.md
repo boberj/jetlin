@@ -275,12 +275,11 @@ class Todo(@Owner val owner: User, title: String, done: Boolean = false) : Recor
     var done: Boolean by column(done)
     var team: Team? by reference()
 
-    companion object : Policy<Todo, User> {
-        // The owner and the owner's team can read it. Plain Kotlin over live objects, with no query language.
-        override fun canRead(record: Todo, principal: User) =
-            record.owner == principal || (record.team != null && record.team == principal.team)
-        override fun canWrite(record: Todo, principal: User) = record.owner == principal
-    }
+    // "If the principal is its owner, they can edit it. If the principal's team is its team, they can read it."
+    companion object : Policy<Todo, User> by policy({
+        principal() equalTo record(Todo::owner) implies canEdit()
+        principal() map User::team equalTo record(Todo::team) implies canRead()
+    })
 }
 
 // `update` takes the principal as a context parameter, so a write without one in scope doesn't compile.

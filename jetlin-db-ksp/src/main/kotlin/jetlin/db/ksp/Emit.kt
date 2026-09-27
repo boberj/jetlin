@@ -110,18 +110,16 @@ private fun emitMutators(entity: EntityModel): String = buildString {
     appendLine("context(principal: $principal)")
     appendLine("${entity.visibility} fun $type.canDelete(): Boolean =")
     appendLine("    jetlin.db.Gate.canDelete(this, ${entity.objectQualified}.policy, principal)")
-    entity.transferableOwner?.let { owner ->
-        appendLine()
-        appendLine("/** Makes [to] the owner of this ${entity.simpleName}, if the policy's `canTransfer` allows it. Otherwise, throws [jetlin.db.AccessDenied]. */")
-        appendLine("context(principal: $principal)")
-        appendLine("${entity.visibility} fun $type.transferTo(to: $principal): Unit =")
-        appendLine("    jetlin.db.Gate.transfer(this, to, ${entity.objectQualified}.policy, principal) { ${owner.name} = it }")
-        appendLine()
-        appendLine("/** Returns whether this principal can make [to] the owner of this ${entity.simpleName}: whether [transferTo] would succeed. */")
-        appendLine("context(principal: $principal)")
-        appendLine("${entity.visibility} fun $type.canTransferTo(to: $principal): Boolean =")
-        appendLine("    jetlin.db.Gate.canTransfer(this, to, ${entity.objectQualified}.policy, principal)")
-    }
+    appendLine()
+    appendLine("/**")
+    appendLine(" * Returns whether [update] would allow the change that [block] describes, without making it.")
+    appendLine(" *")
+    appendLine(" * For example, `task.canUpdate { assignee = bob }` asks whether this principal can assign the task to Bob.")
+    appendLine(" * The block only records what it sets. Nothing is stored.")
+    appendLine(" */")
+    appendLine("context(principal: $principal)")
+    appendLine("${entity.visibility} fun $type.canUpdate(block: ${entity.draftQualified}.() -> Unit): Boolean =")
+    appendLine("    jetlin.db.Gate.canUpdate(this, ${entity.objectQualified}.policy, principal, ${entity.draftQualified}(this), block)")
 }
 
 /** Returns the table builder call that declares [column]. */
@@ -190,8 +188,8 @@ private fun loadBody(entity: EntityModel): String = buildString {
  *
  * Only settable columns are included. Immutable columns are written once on insert and can't
  * change. Each setter records its value in the `Draft` base class instead of writing the record, so
- * `Gate.update` can check every column against the record as it was before the block, and then
- * check the finished record. That's why drafts exist instead of assigning to the record directly.
+ * `Gate.update` can show the policy the whole change at once, and store nothing if it's refused.
+ * That's why drafts exist instead of assigning to the record directly.
  */
 private fun emitDraft(entity: EntityModel): String = buildString {
     val settable = entity.columns.filter { it.settable }

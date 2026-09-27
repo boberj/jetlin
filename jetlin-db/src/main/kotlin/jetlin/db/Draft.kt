@@ -5,9 +5,9 @@ package jetlin.db
  *
  * Each entity's generated draft extends this. Its setters record a value here instead of writing the
  * record, and its getters read the recorded value back, so a block sees its own writes. The record
- * itself doesn't change while the block runs. That's what lets [Gate.update] check every column
- * against the record as it was before the block, whatever order the assignments come in, and then
- * check the finished record as a whole.
+ * itself doesn't change while the block runs. That's what lets [Gate.update] show the policy the
+ * whole change at once, as a [Change], whatever order the assignments come in, and store nothing if
+ * the policy refuses it.
  */
 public abstract class Draft<T : Record> protected constructor() {
     private val pending = LinkedHashMap<Column<T>, Pending<*>>()
@@ -28,9 +28,14 @@ public abstract class Draft<T : Record> protected constructor() {
     /** The columns this block set, in the order it first set them. */
     internal val pendingColumns: Set<Column<T>> get() = pending.keys
 
-    /** Writes every recorded value to the record. */
-    internal fun storePending() {
-        for (write in pending.values) write.store()
+    /** Returns the value this block set for [column]. [column] must be one of [pendingColumns]. */
+    internal fun pendingValue(column: Column<T>): Any? = pending.getValue(column).value
+
+    /** Writes every recorded value to the record, except for the columns named in [except]. */
+    internal fun storePending(except: Set<String> = emptySet()) {
+        for ((column, write) in pending) {
+            if (column.name !in except) write.store()
+        }
     }
 
     private class Pending<V>(val value: V, private val storeValue: (V) -> Unit) {

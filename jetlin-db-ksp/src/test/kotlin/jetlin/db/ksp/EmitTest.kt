@@ -122,33 +122,14 @@ class EmitTest {
     }
 
     @Test
-    fun `an owner that can change hands gets transfer functions`() {
-        val generated = emitTable(
-            entity("Doc", columns = listOf(column("owner", reference = "app.User", owner = true), column("text"))),
-        )
+    fun `a page can ask about a whole change without making it`() {
+        val generated = emitTable(entity("Todo", columns = listOf(column("title"))))
 
         assertContains(
             generated,
-            "fun app.Doc.transferTo(to: app.User): Unit =\n" +
-                "    jetlin.db.Gate.transfer(this, to, app.Docs.policy, principal) { owner = it }",
+            "fun app.Todo.canUpdate(block: app.TodoDraft.() -> Unit): Boolean =\n" +
+                "    jetlin.db.Gate.canUpdate(this, app.Todos.policy, principal, app.TodoDraft(this), block)",
         )
-        assertContains(
-            generated,
-            "fun app.Doc.canTransferTo(to: app.User): Boolean =\n" +
-                "    jetlin.db.Gate.canTransfer(this, to, app.Docs.policy, principal)",
-        )
-    }
-
-    @Test
-    fun `an owner that can't change hands, or isn't a principal, gets none`() {
-        val fixed = column("owner", reference = "app.User", owner = true, settable = false)
-        val team = column("owner", reference = "app.Team", owner = true)
-
-        for (owner in listOf(fixed, team)) {
-            val generated = emitTable(entity("Doc", columns = listOf(owner, column("text"))))
-            assertFalse("transferTo" in generated, "no transfer for $owner:\n$generated")
-        }
-        assertFalse("transferTo" in emitTable(entity("Doc", columns = listOf(column("text")))))
     }
 
     @Test

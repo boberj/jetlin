@@ -14,6 +14,9 @@ internal class User(name: String, admin: Boolean = false) : Record(), Principal 
     var name: String by column(name)
     var admin: Boolean by column(admin)
 
+    /** The user's team, or `null`. `PolicyRulesTest` uses it for rules about groups. */
+    var team: String? by column<String?>(null)
+
     companion object : Policy<User, User> {
         override fun canRead(record: User, principal: User): Boolean = true
 
@@ -81,28 +84,25 @@ internal class Task(
 }
 
 /**
- * A record whose owner can change hands, by offer and acceptance.
+ * A document whose owner can change hands, with a policy built from grants.
  *
- * Its owner is a `var`, so KSP generates `transferTo`. The owner offers it with
- * `update { offeredTo = bob }`, and only Bob can then take it.
+ * Its own policy lets the owner edit it and offer it to someone, who can then accept it.
+ * `PolicyRulesTest` also checks it against other policies built with `policy { }`, which is why it
+ * has a column for each kind of grant: [team] for groups, and [locked] for a column grant.
  */
 @Entity
 internal class Doc(@Owner owner: User, text: String) : Record() {
     var owner: User by reference(owner)
     var offeredTo: User? by reference()
     var text: String by column(text)
+    var team: String? by column<String?>(null)
+    var locked: Boolean by column(false)
 
-    companion object : Policy<Doc, User> {
-        override fun canWrite(record: Doc, principal: User): Boolean = record.owner == principal
-
-        /** Whoever it's offered to can see it, so they can decide whether to take it. */
-        override fun canRead(record: Doc, principal: User): Boolean =
-            canWrite(record, principal) || record.offeredTo == principal
-
-        /** Only the person it's offered to can take it, and only for themselves. */
-        override fun canTransfer(record: Doc, to: User, principal: User): Boolean =
-            to == principal && record.offeredTo == principal
-    }
+    // Written as grants. PolicyRulesTest checks that grants and conditions build the same policy.
+    companion object : Policy<Doc, User> by policy({
+        userIn(Doc::owner).canEdit()
+        userIn(Doc::owner).canOffer(Doc::owner, via = Doc::offeredTo)
+    })
 }
 
 /** Returns the generated list of tables, in load order. */

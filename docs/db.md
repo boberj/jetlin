@@ -3,8 +3,8 @@
 `jetlin-db` is the storage layer for Jetlin applications. Entities are ordinary Kotlin objects kept in
 memory, backed by Compose snapshot state, and stored in SQLite. Reading a field subscribes the
 composable that read it. Writing a field commits the change to disk, then recomposes every session
-that read it. You declare access control for each entity as Kotlin functions, and the framework
-enforces it whenever application code obtains a record.
+that read it. You declare who can see and change each entity's records, usually with rules that
+read like sentences, and the framework enforces them whenever application code reads or writes.
 
 `jetlin-db` is built and tested, but no production application uses it yet. `samples/teams` shows it
 in use. [§8](#8-whats-missing) lists what's missing, in order of how likely each gap is to block a
@@ -62,6 +62,10 @@ an exception from your own code all discard the snapshot, and none of them produ
 
 ## 2. Entities and policies
 
+An entity is a Kotlin class whose objects are stored in the database. Each stored object is a
+*record*. Every entity also declares a *policy*: the rules that decide who can see its records and
+who can change them.
+
 ```kotlin
 @Entity
 class Todo(
@@ -74,7 +78,9 @@ class Todo(
     var team: Team? by reference()
     var archived: Boolean by column(false)
 
-    companion object : Policy<Todo, User> { /* … */ }
+    companion object : Policy<Todo, User> by policy({
+        principal() equalTo record(Todo::owner) implies canEdit()
+    })
 }
 ```
 
@@ -86,39 +92,570 @@ From this declaration, KSP generates the table definition, a `Todos` object that
 objects, a `TodoDraft` type for writes, the policy-checked accessors, and a schema snapshot for the
 migration tooling. An `@Entity` without a policy fails the build.
 
-### The three access patterns
+### What a policy does
 
-`samples/teams` uses all three, so you can see them working:
+Most applications show different data to different people. Alice sees her own todos, not Bob's. Bob
+can see a todo that Alice shared with his team, but he can't edit it. Only an admin can archive one.
+Rules like these are called *access control*, and a policy is where an entity's access control lives.
+
+You write the rules once, on the entity, and the framework applies them everywhere. You don't check
+permissions in your pages. Every way of getting records goes through the policy, and so does every
+write:
+
+| When your code…                          | the policy decides…                                     |
+|------------------------------------------|---------------------------------------------------------|
+| reads `db.todos` or follows a relation   | which records it contains                               |
+| looks up a record by ID                  | whether it finds the record or gets `null`              |
+| calls `db.todos.add(todo)`               | whether the new record can be stored                    |
+| calls `todo.update { … }`                | whether the change is allowed                           |
+| calls `todo.delete()`                    | whether the record can be deleted                       |
+
+The rules are always about a *principal*: the signed-in user that the code is acting for. §3 shows
+how the principal gets into a page. In the rules, "the principal" always means that user.
+
+When a policy refuses something, two different things happen:
+
+- **A refused read hides the record.** A record the principal can't see is missing from every list,
+  and a lookup returns `null`, exactly as if it didn't exist. An error would tell them that it does.
+- **A refused write throws `AccessDenied`.** Nothing is saved. The message says who was refused, what
+  they tried, and which conditions would have allowed it:
+
+  ```
+  User#2 may not change Todo#7: archived can only be changed if the principal is an admin
+  ```
+
+  A well-built page never offers a write the principal can't make, so this exception usually means a
+  bug in a page, or someone sending events that the page never showed them. "Ask before you offer a
+  control" in §4 shows how to avoid offering one.
+
+### Write a policy from grants
+
+`policy { }` builds a policy from *grants*. A grant is one line that says: if this condition holds,
+the principal can do this.
 
 ```kotlin
-// 1. Owner only.
-companion object : Policy<Note, User> by owned(Note::owner)
+principal() equalTo record(Todo::owner) implies canEdit()
+```
 
-// 2. Shared through a related record, and writable by the owner or an admin.
-override fun canWrite(record: Todo, principal: User): Boolean = record.owner == principal || principal.admin
-override fun canRead(record: Todo, principal: User): Boolean =
-    canWrite(record, principal) || (record.team != null && record.team == principal.team)
+Read it as "if the principal is the todo's owner, they can edit it". The part before `implies` is a
+*condition*. The part after it is a *permission*.
 
-// 3. One admin-only column.
-override fun canWrite(record: Todo, column: Column<Todo>, principal: User): Boolean = when (column) {
-    Todos.archived -> principal.admin
-    else -> canWrite(record, principal)
+Two principles hold throughout:
+
+- **Nothing is allowed without a grant.** A policy with no grants lets nobody see, add, change, or
+  delete anything.
+- **Grants add up.** If two lines grant the same thing, either condition is enough. That's how you
+  write "or": as two lines.
+
+This section builds the policy for `samples/teams`' `Todo` one grant at a time.
+
+#### Let the owner edit a todo
+
+```kotlin
+companion object : Policy<Todo, User> by policy({
+    principal() equalTo record(Todo::owner) implies canEdit()
+})
+```
+
+A condition compares values. Two values start every condition:
+
+- `principal()` is the principal: the user the application is acting for.
+- `record(Todo::owner)` is a field of the todo the framework is asking about: here, its owner.
+
+`equalTo` holds when the two are the same user. `canEdit()` lets the principal add, change, and
+delete todos.
+
+The framework checks the grant at every point where it matters, so this one line refuses all of
+these:
+
+| Who     | Tries to                                      | Result                                                               |
+|---------|-----------------------------------------------|----------------------------------------------------------------------|
+| Bob     | change the title of Alice's todo              | Refused: it can only be updated if the principal is its owner        |
+| Bob     | delete Alice's todo                           | Refused: it can only be deleted if the principal is its owner        |
+| Alice   | add a todo whose owner is Bob                 | Refused: it can only be created if the principal is its owner        |
+| Alice   | change a todo's owner from herself to Bob     | Refused: afterwards, it could only be updated if the principal is its owner |
+| Bob     | see Alice's todo in `db.todos`                | It isn't there                                                       |
+
+The fourth row is the one that's easy to miss if you check permissions by hand. A check that only
+asks "is Alice the owner?" before the change allows it, because she is. The framework also checks
+the todo as it would be *after* the change, so nobody can change a record into one they couldn't
+change. The last row follows from the others: a principal who can change or delete a record can
+always see it.
+
+#### Grant each action separately
+
+`canEdit()` is shorthand for three permissions, which you can also grant separately:
+
+| Permission      | Lets the principal…     | Checked against                                   |
+|-----------------|-------------------------|---------------------------------------------------|
+| `canCreate()`   | add records             | the new record                                    |
+| `canUpdate()`   | change records          | the record before the change, and after it        |
+| `canDelete()`   | delete records          | the record before it's deleted                    |
+| `canRead()`     | see records             | each record, every time a list or lookup runs     |
+
+For example, to let owners change their todos but only admins delete them:
+
+```kotlin
+principal() equalTo record(Todo::owner) implies canCreate()
+principal() equalTo record(Todo::owner) implies canUpdate()
+principal() map User::admin implies canDelete()
+```
+
+Principals who can update or delete a record can see it, so they don't need `canRead()` too. Adding
+a record doesn't let the principal see it. That's useful for a feedback form that anyone can submit
+and only admins can read. `anyone` is a condition that always holds:
+
+```kotlin
+anyone implies canCreate()
+principal() map User::admin implies canRead()
+```
+
+#### Let admins edit every todo
+
+Add another line:
+
+```kotlin
+companion object : Policy<Todo, User> by policy({
+    val admin = (principal() map User::admin) describedAs "the principal is an admin"
+
+    principal() equalTo record(Todo::owner) implies canEdit()
+    admin implies canEdit()
+})
+```
+
+`map` reaches a field of a value: `principal() map User::admin` is the principal's `admin` field. A `Boolean`
+field is a condition on its own, which holds when the field is true.
+
+Refusal messages describe conditions automatically. Without `describedAs`, this one would read "the
+principal's admin is true". With it, Bob now sees "it can only be updated if the principal is its
+owner, or if the principal is an admin". Naming a condition with `val` also lets you reuse it.
+
+To require two conditions at once, join them with `and`, and put each comparison in parentheses:
+
+```kotlin
+(principal() equalTo record(Todo::owner)) and not(principal() map User::suspended) implies canEdit()
+```
+
+There's no `or`. Write two grants instead.
+
+#### Share a todo with a team
+
+A team member should see a todo that's shared with their team, without being able to change it:
+
+```kotlin
+principal() map User::team equalTo record(Todo::team) implies canRead()
+```
+
+Read it as "if the principal's team is its team, they can read it".
+
+A missing value matches nothing. If a todo isn't shared (`team` is `null`), no team can see it. If a
+user is on no team, they're a member of nothing. In particular, a user on no team can't see an
+unshared todo, even though both teams are `null`. Hand-written Kotlin makes this mistake easily,
+because `null == null` is true. Conditions never make it: a comparison with a missing value never
+holds.
+
+If users can belong to several teams, give them `var teams: Set<Team>`, and use `contains`:
+
+```kotlin
+principal() map User::teams contains record(Todo::team) implies canRead()
+```
+
+#### Let only admins archive a todo
+
+```kotlin
+admin implies canChange(Todo::archived)
+```
+
+A column permission does two things:
+
+- **It lets the principal change that column on any record they can see**, even if they can't
+  change the rest of it. With `admin implies canRead()` and this grant, but no `admin implies
+  canEdit()`, admins could archive any todo without being able to change its title.
+- **It makes grants like it the only way to change that column.** The owner's `canEdit()` no longer
+  covers `archived`, so owners can change everything about their todos except whether they're
+  archived. To let owners archive too, grant it to them as well:
+  `principal() equalTo record(Todo::owner) implies canChange(Todo::archived)`.
+
+The column is named with `Todo::archived`, and it must be a `var`. Setting a column to the value it
+already has isn't a change, so `update { archived = archived }` needs no grant for `archived`. The
+permission isn't checked when a record is added. To control the value a new record starts with, use
+`onlyAllows`.
+
+#### Limit the values a column can take
+
+Without another rule, an owner could share a todo with any team, including teams they aren't on:
+
+```kotlin
+Todo::team.onlyAllows("the principal's own team") { team, principal ->
+    team == principal.team || principal.admin
 }
 ```
 
-Because all records are in memory, a policy is ordinary Kotlin code that works on live objects. It
-doesn't need to be translated to SQL, so there's no expression tree and no second representation to
-keep consistent with the schema. That's the main benefit of keeping data in memory, and §5 describes
-another.
+The lambda receives the new value and the principal, and returns whether the value is allowed. The
+framework checks it when a todo is added, and whenever a change gives `team` a new value, whichever
+grant allowed the change. The description completes the refusal message: "team can only be set to
+the principal's own team".
 
-Before you write a policy, know two things:
+The rule is never asked about `null`, so `team` in the lambda is a `Team`, never `null`. `null`
+means "no team", which isn't a value to allow or forbid:
 
-- Policies run during recomposition. A filtered collection runs its policy for each record on every
-  read, and caches nothing. Keep policies cheap, pure, and free of I/O. A `:conventions` test
-  enforces the last of these.
-- The principal is a normal parameter here. Only the framework calls policies, so there's nothing to
-  enforce at this level. The application-facing API uses context parameters instead, where they make
-  a write without a principal in scope a compile error.
+- Whether a todo can have no team is decided by the property's type. `var team: Team?` allows it.
+  `var team: Team` wouldn't.
+- Who can take a todo's team away is decided by the grants, like any other change. Here, anyone who
+  can update a todo can unshare it with `update { team = null }`.
+
+#### The complete policy
+
+```kotlin
+companion object : Policy<Todo, User> by policy({
+    val admin = (principal() map User::admin) describedAs "the principal is an admin"
+
+    principal() equalTo record(Todo::owner) implies canEdit()
+    admin implies canEdit()
+    principal() map User::team equalTo record(Todo::team) implies canRead()
+    admin implies canChange(Todo::archived)
+    Todo::team.onlyAllows("the principal's own team") { team, principal ->
+        team == principal.team || principal.admin
+    }
+})
+```
+
+Read aloud, it's the specification: "If the principal is its owner, they can edit it. If the
+principal is an admin, they can edit it. If the principal's team is its team, they can read it. If
+the principal is an admin, they can change archived. Team can only be set to the principal's own
+team."
+
+### Two ways to write a grant
+
+Every grant so far puts the condition first: `condition implies permission`. You can also put the
+subject first, and call the permission on it:
+
+```kotlin
+companion object : Policy<Todo, User> by policy({
+    val admin = usersWhere(User::admin, "the principal is an admin")
+
+    userIn(Todo::owner).canEdit()
+    admin.canEdit()
+    membersOf(record(Todo::team), membership = User::team).canRead()
+    admin.canChange(Todo::archived)
+    Todo::team.onlyAllows("the principal's own team") { team, principal ->
+        team == principal.team || principal.admin
+    }
+})
+```
+
+Read aloud: "Its owner can edit it. An admin can edit it. Members of its team can read it. An admin
+can change archived."
+
+This is the same policy as the one above, not a different kind. Two small pieces make it work:
+
+- **Shorthand conditions.** `userIn`, `usersWhere`, and `membersOf` return ordinary conditions,
+  already described for refusal messages:
+
+  | Shorthand                                                  | Is the condition                                           |
+  |------------------------------------------------------------|------------------------------------------------------------|
+  | `userIn(Todo::owner)`                                      | `principal() equalTo record(Todo::owner)`                  |
+  | `usersWhere(User::admin)`                                  | `principal() map User::admin`                              |
+  | `membersOf(record(Todo::team), membership = User::team)`   | `principal() map User::team equalTo record(Todo::team)`    |
+  | `membersOf(record(Todo::team), memberships = User::teams)` | `principal() map User::teams contains record(Todo::team)`  |
+
+- **Permissions called on a condition.** `condition.canEdit()` is exactly
+  `condition implies canEdit()`. Every permission has this form, including `canChange`,
+  `canReassign`, and `canOffer`, and it works on any condition, not only the shorthands:
+  `anyone.canRead()`.
+
+So both styles add up the same way, refuse with the same messages, and can be mixed in one policy.
+Which to use is a matter of reading:
+
+- **Subject first** reads best for the common shapes: an owner, a flag on the principal, a group.
+  Each line says who can do what.
+- **Condition first** reads best when the condition is its own sentence: it compares something other
+  than the principal's own fields, reaches through several fields, or joins conditions with `and` or
+  `not`.
+
+To call a permission on a condition you wrote out, put the condition in parentheses. A dot binds
+more tightly than an infix word, so without them, `principal() equalTo record(Todo::owner).canEdit()`
+calls `canEdit()` on the owner instead, and doesn't compile:
+
+```kotlin
+((principal() equalTo record(Todo::owner)) and not(principal() map User::suspended)).canEdit()
+```
+
+`membersOf` has two forms, for one group and for several, and the argument's name picks between
+them. Write `membership =` for a field that holds one group, and `memberships =` for a field that
+holds a collection.
+
+The rest of this section writes grants condition first, because that shows every condition in full.
+Each one can be written subject first.
+
+### Hand a record to someone else
+
+`canUpdate()` refuses any change after which the principal couldn't update the record. That's what
+stops Alice from dumping a todo on Bob, but some applications need records to change hands. Two
+permissions allow it.
+
+#### Reassign to a candidate
+
+Suppose a task belongs to whoever it's assigned to, and the assignee can pass it to a teammate:
+
+```kotlin
+@Entity
+class Task(@Owner assignee: User, title: String) : Record() {
+    var assignee: User by reference(assignee)
+    var title: String by column(title)
+
+    companion object : Policy<Task, User> by policy({
+        val assignee = principal() equalTo record(Task::assignee)
+
+        assignee implies canEdit()
+        assignee implies canReassign(Task::assignee) { candidate ->
+            candidate map User::team equalTo (principal() map User::team)
+        }
+    })
+}
+
+with(alice) { task.update { assignee = bob } }
+```
+
+The block says which candidates the task can go to. It receives `candidate`, the user the task
+would be assigned to, as a value, and returns a condition about them: "the candidate's team is the
+principal's team". `candidate` has the column's type, so the compiler checks that `User::team` is a
+field of the candidate.
+
+| Alice (team Acme) tries to            | Result                                                                                   |
+|---------------------------------------|------------------------------------------------------------------------------------------|
+| assign her task to Bob (Acme)         | Allowed. Bob can change it now, and Alice can't.                                         |
+| assign it to Carol (Globex)           | Refused: assignee can only be reassigned if the candidate's team is the principal's team |
+| add a task already assigned to Bob    | Allowed, because she could add it for herself and then reassign it                       |
+| reassign Bob's task                   | Refused: it can only be updated if the principal is its assignee                         |
+
+If Alice is on no team, the condition never holds, so she can't reassign her tasks to anyone.
+
+A reassignment relaxes only the reassigned column. The framework checks the rest of the change as
+if the task hadn't changed hands. If only members of a task's team could update it, reassigning the
+task to Bob while moving it to a team Alice isn't on would still be refused.
+
+The candidate condition can compare the candidate with anything: the principal, as above, or the
+record. To keep a task within its own team, whoever reassigns it:
+
+```kotlin
+assignee implies canReassign(Task::assignee) { candidate ->
+    candidate map User::team equalTo record(Task::team)
+}
+```
+
+The condition before `implies` says who can reassign, so it doesn't have to be the assignee. To let
+admins triage tasks, moving any task to someone on their own team without being able to edit it:
+
+```kotlin
+admin implies canRead()
+admin implies canReassign(Task::assignee) { candidate -> candidate map User::team equalTo (principal() map User::team) }
+```
+
+#### Offer, and let the recipient accept
+
+To hand a document on only with the recipient's agreement, give it a field for pending offers:
+
+```kotlin
+@Entity
+class Doc(@Owner owner: User, text: String) : Record() {
+    var owner: User by reference(owner)
+    var offeredTo: User? by reference()
+    var text: String by column(text)
+
+    companion object : Policy<Doc, User> by policy({
+        val owner = principal() equalTo record(Doc::owner)
+
+        owner implies canEdit()
+        owner implies canOffer(Doc::owner, via = Doc::offeredTo)
+    })
+}
+
+with(alice) { doc.update { offeredTo = bob } }                 // Alice offers it to Bob.
+with(bob) { doc.update { owner = bob; offeredTo = null } }     // Bob accepts it.
+```
+
+Only the owner can set `offeredTo`: setting it offers the document, and setting it back to `null`
+withdraws the offer. While a document is offered to Bob, he can see it, so he can decide. The only
+change he can make is accepting: setting the owner to himself and clearing the offer, in one
+`update { }`, and nothing else. Nobody can push a document onto someone else: Alice can offer it, but
+only Bob can make it his.
+
+### Shut someone out of everything
+
+`alwaysRequires` adds a condition to every check: reading, adding, changing, and deleting. Nobody
+can see or change a record unless it holds, whatever the grants say:
+
+```kotlin
+alwaysRequires(not(principal() map User::suspended))
+```
+
+For a change, the framework checks it before and after, so a condition about the record, such as
+`alwaysRequires(principal() map User::team equalTo record(Doc::team))`, also stops a principal from moving a
+record out of their own team.
+
+### Reference
+
+Values:
+
+| Value                          | Means                                                       |
+|--------------------------------|-------------------------------------------------------------|
+| `principal()`                  | the principal                                               |
+| `record(Todo::owner)`          | a field of the record the framework is asking about         |
+| `value map User::team`         | a field of another value                                    |
+| `candidate`                    | in a `canReassign` block: who the record would go to        |
+
+Conditions:
+
+| Condition                      | Holds when                                                  |
+|--------------------------------|-------------------------------------------------------------|
+| `a equalTo b`                  | `a` and `b` are the same, and neither is missing            |
+| `a contains b`                 | the collection `a` includes `b`                             |
+| a `Boolean` value              | it's true                                                   |
+| `a and b`                      | both hold                                                   |
+| `not(a)`                       | `a` doesn't hold                                            |
+| `anyone`                       | always                                                      |
+| `a describedAs "…"`            | `a` holds; refusal messages use the text                    |
+
+Permissions, granted with `condition implies permission`:
+
+| Permission                         | Lets the principal…                                          | Checked                                      |
+|------------------------------------|--------------------------------------------------------------|----------------------------------------------|
+| `canRead()`                        | see records                                                  | on every read                                |
+| `canCreate()`                      | add records                                                  | on add, against the new record               |
+| `canUpdate()`                      | change records, except columns with their own permissions    | before and after every change                |
+| `canDelete()`                      | delete records                                               | before deleting                              |
+| `canEdit()`                        | add, change, and delete records                              | as the three above                           |
+| `canChange(column)`                | change one column on records they can see                    | when the column gets a new value             |
+| `canReassign(column) { … }`        | hand a record to a candidate the block accepts               | when the column gets a new value, and on add |
+| `canOffer(column, via)`            | offer a record, which the recipient can accept               | when either column gets a new value          |
+
+Shorthand conditions, for writing grants subject first:
+
+| Shorthand                                                  | Holds when                                                  |
+|------------------------------------------------------------|-------------------------------------------------------------|
+| `userIn(Todo::owner)`                                      | the principal is the user in that field                     |
+| `usersWhere(User::admin, "…")`                             | the principal's `Boolean` field is true                     |
+| `membersOf(record(Todo::team), membership = User::team)`   | the principal's group is that group                         |
+| `membersOf(record(Todo::team), memberships = User::teams)` | the principal's groups include that group                   |
+
+Every permission can be written as `condition implies canX(…)` or as `condition.canX(…)`.
+
+Rules that limit the grants:
+
+| Rule                                   | Means                                                    | Checked                                      |
+|----------------------------------------|----------------------------------------------------------|----------------------------------------------|
+| `column.onlyAllows(text) { … }`        | The column can only take values the lambda allows. Never asked about `null`. | On add, and when the column gets a new value |
+| `alwaysRequires(condition)`            | Nobody for whom it doesn't hold can use any record.      | Everywhere, before and after a change        |
+
+### Mistakes the policy catches
+
+Most mistakes in a condition are compile errors:
+
+```kotlin
+// A bare property, without saying whose field it is:
+principal() equalTo Todo::owner implies canEdit()
+// error: Inapplicable candidate(s): val owner: User
+
+// Two comparisons joined with `and`, without parentheses:
+principal() equalTo record(Todo::owner) and principal() map User::team equalTo record(Todo::team) implies canEdit()
+// error: Argument type mismatch: actual type is 'Value<Todo, User, User>', but 'Value<Todo, User, Boolean>' was expected.
+
+// A column permission for a column that can't change:
+principal() equalTo record(Todo::owner) implies canChange(Todo::owner)
+// error: Inapplicable candidate(s): val owner: User
+```
+
+The second one happens because Kotlin reads every infix word, such as `equalTo`, `and`, `map`, and
+`implies`, from left to right with the same priority. The compiler refuses the result, so put each
+comparison in parentheses when you join them.
+
+Two mistakes compile, and the policy refuses them the first time it's used, with an error that says
+what to fix:
+
+- **A permission without a condition.** `canDelete()` on a line of its own grants nothing. The error
+  says to write it as `condition implies canDelete()`.
+- **Comparing values of different kinds.** `principal() map User::team equalTo record(Todo::title)` compiles,
+  because Kotlin treats a team and a string both as `Any`. The first time the policy compares a real
+  team with a real title, it throws instead of quietly never matching.
+
+### Write a policy by hand
+
+Two other ways to write a policy suit some entities better.
+
+If only the owner can do anything with a record, `owned` is the shortest:
+
+```kotlin
+companion object : Policy<Note, User> by owned(Note::owner)
+```
+
+If grants don't fit, implement `Policy` yourself. Only `canWrite` is required. Everything else has
+a default that builds on it:
+
+```kotlin
+companion object : Policy<User, User> {
+    // Users can change their own record, and admins can change anyone's.
+    override fun canWrite(record: User, principal: User) = record == principal || principal.admin
+
+    // Everyone can see every user.
+    override fun canRead(record: User, principal: User) = true
+
+    // But only admins can change what someone is allowed to do.
+    override fun canWrite(record: User, column: Column<User>, principal: User) = when (column) {
+        Users.admin, Users.team -> principal.admin
+        else -> canWrite(record, principal)
+    }
+}
+```
+
+| Method                             | Default                | Asked when                                          |
+|------------------------------------|------------------------|-----------------------------------------------------|
+| `canWrite(record, principal)`      | none: you write it     | a change starts, and a record is deleted            |
+| `canRead(record, principal)`       | `canWrite`             | a record is read                                    |
+| `canWrite(record, column, principal)` | `canWrite`          | a change gives that column a new value              |
+| `canCreate(record, principal)`     | `canWrite`             | a record is added, and after every change           |
+| `canDelete(record, principal)`     | `canWrite`             | a record is deleted                                 |
+| `canChange(change, principal)`     | the three checks below | every `update { }`                                  |
+
+By default, `canChange` allows a change if all of these hold:
+
+1. The principal can change the record as it is now (`canWrite`).
+2. The principal can change each column that gets a new value (`canWrite` for the column).
+3. The principal could add the record as it would be afterwards (`canCreate`).
+
+The third check is what stops Alice from changing a todo's owner to Bob: she couldn't have added a
+todo owned by Bob. It also makes `canCreate` the place for rules about values:
+
+```kotlin
+// A todo can only be shared with the principal's own team.
+override fun canCreate(record: Todo, principal: User) =
+    canWrite(record, principal) && (record.team == null || record.team == principal.team)
+```
+
+Override `canChange` only when a rule needs the old and new values together. It receives a
+`Change`: the record as it is now, the new values, and `afterwards { }`, which runs code against the
+record as it would be after the change, then discards it:
+
+```kotlin
+// Tasks can be marked done, but never undone.
+override fun canChange(change: Change<Task>, principal: User) =
+    !(change.record.done && !change.newValue(Task::done)) && super.canChange(change, principal)
+```
+
+When you override it, check both the old and the new state, for example by calling
+`super.canChange`. A rule that only looks at the new values lets anyone who holds a record rewrite it
+into one they're allowed to have, for example by setting its owner to themselves.
+
+### Keep policies fast and free of side effects
+
+Policies run while pages render. Reading `db.todos` runs the policy for every todo, every time the page
+reads the list, and the framework caches nothing, because a cached answer could outlive the data it
+was based on. So a policy must be quick, and must only read: no I/O, no suspending calls, and no
+changes to any state. A `:conventions` test checks for blocking calls in policies.
+
+This is also why a policy can be ordinary Kotlin. All records are in memory, so a rule doesn't need
+to be translated to SQL, and there's no second version of it to keep consistent with the schema. §5
+describes the other benefit: when the data a rule reads changes, open pages update by themselves.
 
 ## 3. Getting a principal, and protecting routes
 
@@ -239,81 +776,70 @@ which is what `PolicyTest` does.
 
 A property setter can't take a context parameter, so plain assignment could only check a
 thread-local principal at runtime. `update { }` is slightly longer to write, but it keeps the check
-at compile time. The draft also makes column-level policies possible, because each column the
-block sets is checked separately: `title = "x"` can be allowed while `archived = true` is refused.
+at compile time.
 
-The draft holds the writes back until the block finishes. Reading a field in the block returns what
-the block set, but the record itself doesn't change until three checks pass:
-
-1. Before the block, the principal must be able to change the record (`canWrite`).
-2. After the block, each column it set must pass the column rule, checked against the record as it
-   was before the block. The order of the assignments doesn't matter.
-3. After the values are stored, the principal must be able to create the record as it now is
-   (`canCreate`).
-
-The third check closes a gap the first two leave open. They only ask "may you change this record as
-it is?", never "may it end up like this?". Without it, you could create a record you're allowed to,
-then change its owner to someone else, which is exactly what `add` would refuse. The column rule
-can't catch that, because it doesn't see the new value. Rules about *values*, such as "a todo can
-only be shared with your own team", go in `canCreate`, and every write path enforces them.
-
-A column rule only narrows access. `update { }` checks the record-level `canWrite` before the block
-runs, so a column rule is only asked about principals who can already change the record. That's why
-the sample's `Todo.canWrite` admits admins for the whole record: with `record.owner == principal`
-alone, `Todos.archived -> principal.admin` would only let an admin archive their own todos. To let
-someone change one column of a record they otherwise can't, widen the record-level `canWrite` and
-narrow the other columns in the column rule.
-
-### Transferring ownership
-
-Because of the third check, `update { owner = bob }` is always refused: a record owned by someone
-else is one you couldn't create. Transfers have their own operation. When the `@Owner` column is a
-`var` of the principal type, KSP generates `transferTo(to)` and `canTransferTo(to)`, and the policy
-decides with `canTransfer`, which refuses everyone by default:
+The block also lets the policy judge a change as a whole. Inside the block, you set fields on a
+draft, not on the todo. The draft holds the new values back, and reading a field in the block returns
+the value you set:
 
 ```kotlin
-@Entity
-class Doc(@Owner owner: User, text: String) : Record() {
-    var owner: User by reference(owner)
-    var offeredTo: User? by reference()
-    var text: String by column(text)
-
-    companion object : Policy<Doc, User> {
-        override fun canWrite(record: Doc, principal: User) = record.owner == principal
-        override fun canRead(record: Doc, principal: User) =
-            canWrite(record, principal) || record.offeredTo == principal
-        // Only the person it's offered to can take it, and only for themselves.
-        override fun canTransfer(record: Doc, to: User, principal: User) =
-            to == principal && record.offeredTo == principal
-    }
+todo.update {
+    title = "$title (edited)"   // reads the current title
+    title = "$title again"      // reads "… (edited)", the value set on the line above
 }
-
-with(alice) { doc.update { offeredTo = bob } }   // an ordinary update: alice still owns it
-with(bob) { if (doc.canTransferTo(bob)) doc.transferTo(bob) }
 ```
 
-`canTransfer` is the whole rule for a transfer. It doesn't also require `canWrite`, so a policy can
-let a recipient pull a record, as above, or let an owner push one, with
-`record.owner == principal && to.team == principal.team`. With the offer-and-accept rule, someone
-can offer you a record, but only you can make it yours.
+When the block finishes, the framework asks the policy about the whole change at once: the todo as
+it is, the new values, and the todo as it would be afterwards. If the policy allows it, the values
+are saved together. If not, `update` throws `AccessDenied`, and nothing is saved, not even the
+columns the policy would have allowed on their own. A change that's partly saved, shown on screen
+but not all stored, is exactly the failure this design prevents.
 
-To decide what a page offers, ask the same checks instead of repeating the policy's logic. Next to
-`update { }` and `delete()`, KSP generates `canUpdate()`, `canUpdate(column)`, and `canDelete()`,
-which take the principal from context and go through the same gate as the writes:
+Because the policy sees the whole change, the order of the assignments doesn't matter.
+`update { done = true; title = "x" }` and `update { title = "x"; done = true }` get the same answer.
+
+A record that isn't stored yet isn't checked by `update`. Nobody else can have it, and `add` checks
+it when it's stored. That lets you set up a new record's fields before you add it.
+
+### Ask before you offer a control
+
+A page shouldn't offer a button that the policy would refuse. Ask the policy instead of repeating its
+rules in the page. Next to `update { }` and `delete()`, KSP generates functions that ask the same
+questions, with the principal taken from context:
+
+| Function                  | Asks                                                        |
+|---------------------------|-------------------------------------------------------------|
+| `todo.canUpdate()`        | Can the principal edit this todo at all?                    |
+| `todo.canUpdate(column)`  | …and change this column of it?                              |
+| `todo.canUpdate { … }`    | Would this exact change be allowed? Nothing is saved.       |
+| `todo.canDelete()`        | Can the principal delete it?                                |
 
 ```kotlin
-disabled(!todo.canUpdate(Todos.archived))   // the record-level check, then the column's
+// Show the archive checkbox, but only let admins use it.
+Input({
+    attr("type", "checkbox")
+    disabled(!todo.canUpdate(Todos.archived))
+    onChange { todo.update { archived = !archived } }
+})
+
+// Offer a delete button only to principals who can delete.
 if (todo.canDelete()) Button({ onClick { todo.delete() } }) { Text("Delete") }
 ```
 
-`canUpdate(column)` makes the first two checks `update { }` makes, so it never says yes to a write
-those would refuse. It can't foresee the third, because that depends on the value being written. The
-answers are reactive like everything else: they read the same cells as the policy, so revoking a role
-updates the controls on pages that are already open.
+`canUpdate()` and `canUpdate(column)` don't know which value you're going to set, so they can't
+answer questions such as "can Alice share this todo with the Globex team?", which depend on the
+value. `canUpdate { }` can: it runs the block against a draft, asks the policy exactly as `update`
+would, and throws the draft away.
 
-A refused column throws and rolls back the whole transaction, instead of skipping only that column. A
-write that's skipped without an error, shown on screen but not saved, is exactly the failure this
-design prevents.
+```kotlin
+// Offer only the people the task can be assigned to.
+val candidates = teammates.filter { person -> task.canUpdate { assignee = person } }
+```
+
+The block should only set fields. It runs, but nothing it sets is saved.
+
+The answers are live, like everything else. They read the same fields as the policy, so if an admin
+loses their role while a page is open, the page's controls update without a reload.
 
 ### Holding a reference grants access
 

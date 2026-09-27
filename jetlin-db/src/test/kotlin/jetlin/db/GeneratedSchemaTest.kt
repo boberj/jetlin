@@ -32,7 +32,7 @@ class GeneratedSchemaTest {
             Tasks.table.columns.map { it.name },
             "declaration order is the column order, because migrations read it",
         )
-        assertEquals(listOf("name", "admin"), Users.table.columns.map { it.name })
+        assertEquals(listOf("name", "admin", "team"), Users.table.columns.map { it.name })
         assertEquals(listOf("owner", "name", "shared"), Projects.table.columns.map { it.name })
     }
 
