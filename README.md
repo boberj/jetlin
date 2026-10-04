@@ -277,8 +277,8 @@ class Todo(@Owner val owner: User, title: String, done: Boolean = false) : Recor
 
     // "If the principal is its owner, they can edit it. If the principal's team is its team, they can read it."
     companion object : Policy<Todo, User> by policy({
-        principal() equalTo record(Todo::owner) implies canEdit()
-        principal() map User::team equalTo record(Todo::team) implies canRead()
+        principal() equalTo (record() map Todo::owner) implies canEdit()
+        principal() map User::team equalTo (record() map Todo::team) implies canRead()
     })
 }
 

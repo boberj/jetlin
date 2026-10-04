@@ -37,8 +37,8 @@ public interface Principal
  *
  * ```kotlin
  * companion object : Policy<Todo, User> by policy({
- *     principal() equalTo record(Todo::owner) implies canEdit()
- *     principal() map User::team equalTo record(Todo::team) implies canRead()
+ *     principal() equalTo (record() map Todo::owner) implies canEdit()
+ *     principal() map User::team equalTo (record() map Todo::team) implies canRead()
  * })
  * ```
  *

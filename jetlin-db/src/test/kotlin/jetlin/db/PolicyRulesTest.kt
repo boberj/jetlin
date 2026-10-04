@@ -24,7 +24,7 @@ class PolicyRulesTest {
 
     // ---- canCreate, canUpdate, canDelete, canEdit -------------------------------------------------
 
-    private val ownerOnly = policy<Doc, User> { principal() equalTo record(Doc::owner) implies canEdit() }
+    private val ownerOnly = policy<Doc, User> { principal() equalTo (record() map Doc::owner) implies canEdit() }
 
     @Test
     fun `only a principal granted canUpdate can change a record`(): Unit = withDb { db ->
@@ -35,7 +35,7 @@ class PolicyRulesTest {
         ownerOnly.update(doc, alice) { text = "Plan B" }
 
         assertEquals(
-            "$bob may not change $doc: it can only be updated if the principal is its owner",
+            "$bob may not change $doc: it can only be updated if the principal is the record's owner",
             refusal { ownerOnly.update(doc, bob) { text = "Bob's plan" } },
         )
         assertEquals("Plan B", doc.text)
@@ -48,7 +48,7 @@ class PolicyRulesTest {
         val doc = db.doc(alice)
 
         assertEquals(
-            "$alice may not change $doc: afterwards, it could only be updated if the principal is its owner",
+            "$alice may not change $doc: afterwards, it could only be updated if the principal is the record's owner",
             refusal { ownerOnly.update(doc, alice) { owner = bob } },
         )
         assertEquals(alice, doc.owner)
@@ -61,7 +61,7 @@ class PolicyRulesTest {
         val forBob = Doc(bob, "Spam")
 
         assertEquals(
-            "$alice may not create $forBob: it can only be created if the principal is its owner",
+            "$alice may not create $forBob: it can only be created if the principal is the record's owner",
             refusal { Gate.add(db, ownerOnly, alice, forBob) },
         )
         Gate.add(db, ownerOnly, alice, Doc(alice, "Mine"))
@@ -84,14 +84,14 @@ class PolicyRulesTest {
         val root = db.user("Root", admin = true)
         val doc = db.doc(alice)
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             (principal() map User::admin) describedAs "the principal is an admin" implies canUpdate()
         }
 
         policy.update(doc, root) { text = "Reviewed" }
 
         assertEquals(
-            "$bob may not change $doc: it can only be updated if the principal is its owner, " +
+            "$bob may not change $doc: it can only be updated if the principal is the record's owner, " +
                 "or if the principal is an admin",
             refusal { policy.update(doc, bob) { text = "Bob's plan" } },
         )
@@ -104,7 +104,7 @@ class PolicyRulesTest {
         val root = db.user("Root", admin = true)
         val doc = db.doc(alice)
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canUpdate()
+            principal() equalTo (record() map Doc::owner) implies canUpdate()
             principal() map User::admin implies canDelete()
         }
 
@@ -154,32 +154,53 @@ class PolicyRulesTest {
     fun `conditions describe themselves`(): Unit {
         lateinit var described: List<String>
         val policy = policy<Doc, User> {
-            val owner = principal() equalTo record(Doc::owner)
-            val sameTeam = principal() map User::team equalTo record(Doc::team)
+            val owner = principal() equalTo (record() map Doc::owner)
+            val sameTeam = principal() map User::team equalTo (record() map Doc::team)
             val admin = principal() map User::admin
-            described = listOf(owner, sameTeam, owner and sameTeam, admin, not(admin), not(owner)).map { it.statement }
+            described = listOf(owner, sameTeam, owner and sameTeam, admin, not(admin), not(owner), anyone, not(anyone))
+                .map { it.statement }
             owner implies canEdit()
         }
         policy.canRead(Doc(User("Alice"), "Plan"), User("Alice"))
 
         assertEquals(
             listOf(
-                "the principal is its owner",
-                "the principal's team is its team",
-                "the principal is its owner and the principal's team is its team",
+                "the principal is the record's owner",
+                "the principal's team is the record's team",
+                "the principal is the record's owner and the principal's team is the record's team",
                 "the principal's admin is true",
                 "the principal's admin is false",
-                "it isn't the case that the principal is its owner",
+                "it isn't the case that the principal is the record's owner",
+                "anyone may do this",
+                "it isn't the case that anyone may do this",
             ),
             described,
         )
     }
 
     @Test
+    fun `a condition can compare the principal with the record itself`(): Unit = withDb { db ->
+        val alice = db.user("Alice")
+        val bob = db.user("Bob")
+        val users = policy<User, User> {
+            anyone implies canRead()
+            principal() equalTo record() implies canUpdate()
+        }
+
+        Gate.update(alice, users, alice, UserDraft(alice)) { name = "Alicia" }
+
+        assertEquals(
+            "$bob may not change $alice: it can only be updated if the principal is the record",
+            refusal { Gate.update(alice, users, bob, UserDraft(alice)) { name = "Bob's now" } },
+        )
+        assertEquals("Alicia", alice.name)
+    }
+
+    @Test
     fun `and requires both conditions`(): Unit = withDb { db ->
         val alice = db.user("Alice", team = "acme")
         val policy = policy<Doc, User> {
-            (principal() equalTo record(Doc::owner)) and (principal() map User::team equalTo record(Doc::team)) implies canEdit()
+            (principal() equalTo (record() map Doc::owner)) and (principal() map User::team equalTo (record() map Doc::team)) implies canEdit()
         }
 
         assertTrue(policy.canRead(db.doc(alice, team = "acme"), alice))
@@ -192,8 +213,8 @@ class PolicyRulesTest {
         val dave = db.user("Dave")
         val unshared = db.doc(alice)
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
-            principal() map User::team equalTo record(Doc::team) implies canRead()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
+            principal() map User::team equalTo (record() map Doc::team) implies canRead()
         }
 
         // Neither the document nor Dave has a team. That's not the same team.
@@ -203,7 +224,7 @@ class PolicyRulesTest {
     @Test
     fun `contains matches principals in several groups`(): Unit {
         val policy = policy<Card, Member> {
-            principal() map Member::teams contains record(Card::team) implies canRead()
+            principal() map Member::teams contains (record() map Card::team) implies canRead()
         }
         val member = Member(setOf("acme", "globex"))
 
@@ -216,13 +237,13 @@ class PolicyRulesTest {
     fun `comparing values of different types fails the first time, instead of never matching`(): Unit {
         // This compiles, because Kotlin treats a String and an Int as Any.
         val policy = policy<Card, Member> {
-            principal() map Member::team equalTo record(Card::size) implies canRead()
+            principal() map Member::team equalTo (record() map Card::size) implies canRead()
         }
 
         val failure = assertFailsWith<IllegalStateException> { policy.canRead(Card("acme"), Member(setOf("acme"))) }
 
         assertEquals(
-            "The condition \"the principal's team is its size\" compares a value of type String with one of " +
+            "The condition \"the principal's team is the record's size\" compares a value of type String with one of " +
                 "type Int, so it could never hold. Compare values of the same kind.",
             failure.message,
         )
@@ -251,14 +272,14 @@ class PolicyRulesTest {
         val carol = db.user("Carol", team = "globex")
         val doc = db.doc(alice, team = "acme")
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
-            principal() map User::team equalTo record(Doc::team) implies canRead()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
+            principal() map User::team equalTo (record() map Doc::team) implies canRead()
         }
 
         assertTrue(policy.canRead(doc, bob))
         assertFalse(policy.canRead(doc, carol))
         assertEquals(
-            "$bob may not change $doc: it can only be updated if the principal is its owner",
+            "$bob may not change $doc: it can only be updated if the principal is the record's owner",
             refusal { policy.update(doc, bob) { text = "Bob's plan" } },
         )
     }
@@ -272,7 +293,7 @@ class PolicyRulesTest {
         val doc = db.doc(alice)
         val policy = policy<Doc, User> {
             val admin = (principal() map User::admin) describedAs "the principal is an admin"
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             admin implies canEdit()
             admin implies canChange(Doc::locked)
         }
@@ -294,7 +315,7 @@ class PolicyRulesTest {
         val root = db.user("Root", admin = true)
         val doc = db.doc(alice)
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             principal() map User::admin implies canRead()
             principal() map User::admin implies canChange(Doc::locked)
         }
@@ -303,7 +324,7 @@ class PolicyRulesTest {
 
         assertTrue(doc.locked)
         assertEquals(
-            "$root may not change $doc: it can only be updated if the principal is its owner",
+            "$root may not change $doc: it can only be updated if the principal is the record's owner",
             refusal { policy.update(doc, root) { text = "Root's plan" } },
         )
     }
@@ -314,7 +335,7 @@ class PolicyRulesTest {
         val root = db.user("Root", admin = true)
         val doc = db.doc(alice)
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             principal() map User::admin implies canChange(Doc::locked)
         }
 
@@ -327,7 +348,7 @@ class PolicyRulesTest {
         val alice = db.user("Alice")
         val doc = db.doc(alice)
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             principal() map User::admin implies canChange(Doc::locked)
         }
 
@@ -339,7 +360,7 @@ class PolicyRulesTest {
     // ---- onlyAllows -------------------------------------------------------------------------------
 
     private val ownTeamOnly = policy<Doc, User> {
-        principal() equalTo record(Doc::owner) implies canEdit()
+        principal() equalTo (record() map Doc::owner) implies canEdit()
         Doc::team.onlyAllows("the principal's own team") { team, principal -> team == principal.team }
     }
 
@@ -374,7 +395,7 @@ class PolicyRulesTest {
         val bob = db.user("Bob", team = "acme")
         val asked = mutableListOf<String>()
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             Doc::team.onlyAllows("the principal's own team") { team, principal ->
                 asked += team
                 team == principal.team
@@ -396,8 +417,8 @@ class PolicyRulesTest {
     // ---- canReassign ------------------------------------------------------------------------------
 
     private val toTeammates = policy<Doc, User> {
-        principal() equalTo record(Doc::owner) implies canEdit()
-        principal() equalTo record(Doc::owner) implies canReassign(Doc::owner) { candidate ->
+        principal() equalTo (record() map Doc::owner) implies canEdit()
+        principal() equalTo (record() map Doc::owner) implies canReassign(Doc::owner) { candidate ->
             candidate map User::team equalTo (principal() map User::team)
         }
     }
@@ -442,8 +463,8 @@ class PolicyRulesTest {
         val alice = db.user("Alice", team = "acme")
         val bob = db.user("Bob", team = "acme")
         val policy = policy<Doc, User> {
-            (principal() equalTo record(Doc::owner)) and (principal() map User::team equalTo record(Doc::team)) implies canEdit()
-            principal() equalTo record(Doc::owner) implies canReassign(Doc::owner) { candidate ->
+            (principal() equalTo (record() map Doc::owner)) and (principal() map User::team equalTo (record() map Doc::team)) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canReassign(Doc::owner) { candidate ->
                 candidate map User::team equalTo (principal() map User::team)
             }
         }
@@ -451,8 +472,8 @@ class PolicyRulesTest {
 
         // Moving the document to a team alice isn't on is refused, reassigned or not.
         assertEquals(
-            "$alice may not change $doc: afterwards, it could only be updated if the principal is its owner " +
-                "and the principal's team is its team",
+            "$alice may not change $doc: afterwards, it could only be updated if the principal is the record's owner " +
+                "and the principal's team is the record's team",
             refusal { policy.update(doc, alice) { owner = bob; team = "globex" } },
         )
         policy.update(doc, alice) { owner = bob }
@@ -469,7 +490,7 @@ class PolicyRulesTest {
         val doc = db.doc(alice)
         // Admins triage: they can move anyone's document to a teammate, but can't edit it.
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             principal() map User::admin implies canRead()
             principal() map User::admin implies canReassign(Doc::owner) { candidate ->
                 candidate map User::team equalTo (principal() map User::team)
@@ -489,9 +510,9 @@ class PolicyRulesTest {
         val carol = db.user("Carol", team = "acme")
         // A document can only move within its own team, whatever team the principal is on.
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
-            principal() equalTo record(Doc::owner) implies canReassign(Doc::owner) { candidate ->
-                candidate map User::team equalTo record(Doc::team)
+            principal() equalTo (record() map Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canReassign(Doc::owner) { candidate ->
+                candidate map User::team equalTo (record() map Doc::team)
             }
         }
         val doc = db.doc(alice, team = "globex")
@@ -512,7 +533,7 @@ class PolicyRulesTest {
 
         val forCarol = Doc(carol, "For Carol")
         assertEquals(
-            "$alice may not create $forCarol: it can only be created if the principal is its owner",
+            "$alice may not create $forCarol: it can only be created if the principal is the record's owner",
             refusal { Gate.add(db, toTeammates, alice, forCarol) },
         )
     }
@@ -545,7 +566,7 @@ class PolicyRulesTest {
         }
 
         assertEquals(
-            "$root may not change $doc: owner can only be reassigned if the principal is its owner",
+            "$root may not change $doc: owner can only be reassigned if the principal is the record's owner",
             refusal { policy.update(doc, root) { owner = bob } },
         )
         policy.update(doc, root) { text = "Reviewed" }
@@ -624,11 +645,11 @@ class PolicyRulesTest {
 
         with(bob) {
             assertEquals(
-                "$bob may not change $doc: it can only be updated if the principal is its owner",
+                "$bob may not change $doc: it can only be updated if the principal is the record's owner",
                 refusal { doc.update { text = "Bob's plan" } },
             )
             assertEquals(
-                "$bob may not change $doc: offeredTo can only be changed if the principal is its owner",
+                "$bob may not change $doc: offeredTo can only be changed if the principal is the record's owner",
                 refusal { doc.update { offeredTo = carol } },
             )
             // Taking it while leaving the offer open isn't accepting it.
@@ -679,15 +700,15 @@ class PolicyRulesTest {
     fun `alwaysRequires applies to every check, before and after a change`(): Unit = withDb { db ->
         val alice = db.user("Alice", team = "acme")
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
-            alwaysRequires(principal() map User::team equalTo record(Doc::team))
+            principal() equalTo (record() map Doc::owner) implies canEdit()
+            alwaysRequires(principal() map User::team equalTo (record() map Doc::team))
         }
         val inAcme = db.doc(alice, team = "acme")
         val inGlobex = db.doc(alice, team = "globex")
 
         assertTrue(policy.canRead(inAcme, alice))
         assertEquals(
-            "$alice may not change $inAcme: it requires that the principal's team is its team",
+            "$alice may not change $inAcme: it requires that the principal's team is the record's team",
             refusal { policy.update(inAcme, alice) { team = "globex" } },
         )
         // Alice owns this one, but it's in a team she isn't on.
@@ -701,16 +722,16 @@ class PolicyRulesTest {
     fun `grants and conditions build the same policy`(): Unit = withDb { db ->
         val conditions = policy<Doc, User> {
             val admin = (principal() map User::admin) describedAs "the principal is an admin"
-            principal() equalTo record(Doc::owner) describedAs "the principal is its owner" implies canEdit()
+            principal() equalTo (record() map Doc::owner) describedAs "the principal is the record's owner" implies canEdit()
             admin implies canEdit()
-            principal() map User::team equalTo record(Doc::team) implies canRead()
+            principal() map User::team equalTo (record() map Doc::team) implies canRead()
             admin implies canChange(Doc::locked)
         }
         val grants = policy<Doc, User> {
             val admin = usersWhere(User::admin, "the principal is an admin")
             userIn(Doc::owner).canEdit()
             admin.canEdit()
-            membersOf(record(Doc::team), membership = User::team).canRead()
+            membersOf(record() map Doc::team, membership = User::team).canRead()
             admin.canChange(Doc::locked)
         }
         val users = listOf(
@@ -746,7 +767,7 @@ class PolicyRulesTest {
                 userIn(Doc::owner),
                 usersWhere(User::admin),
                 usersWhere(User::admin, "the principal is an admin"),
-                membersOf(record(Doc::team), membership = User::team),
+                membersOf(record() map Doc::team, membership = User::team),
             ).map { it.statement }
             anyone.canRead()
         }
@@ -754,10 +775,10 @@ class PolicyRulesTest {
 
         assertEquals(
             listOf(
-                "the principal is its owner",
+                "the principal is the record's owner",
                 "the principal's admin is true",
                 "the principal is an admin",
-                "the principal's team is its team",
+                "the principal's team is the record's team",
             ),
             described,
         )
@@ -765,7 +786,7 @@ class PolicyRulesTest {
 
     @Test
     fun `membersOf with memberships matches principals in several groups`(): Unit {
-        val cards = policy<Card, Member> { membersOf(record(Card::team), memberships = Member::teams).canRead() }
+        val cards = policy<Card, Member> { membersOf(record() map Card::team, memberships = Member::teams).canRead() }
         val member = Member(setOf("acme", "globex"))
 
         assertTrue(cards.canRead(Card("globex"), member))
@@ -802,7 +823,7 @@ class PolicyRulesTest {
     @Test
     fun `a permission without a condition fails the first time the policy is used`(): Unit {
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canUpdate()
+            principal() equalTo (record() map Doc::owner) implies canUpdate()
             canDelete()
         }
 
@@ -818,7 +839,7 @@ class PolicyRulesTest {
     @Test
     fun `onlyAllows declared twice for one column fails the first time the policy is used`(): Unit {
         val policy = policy<Doc, User> {
-            principal() equalTo record(Doc::owner) implies canEdit()
+            principal() equalTo (record() map Doc::owner) implies canEdit()
             Doc::team.onlyAllows("acme") { team, _ -> team == "acme" }
             Doc::team.onlyAllows("globex") { team, _ -> team == "globex" }
         }

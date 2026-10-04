@@ -18,17 +18,17 @@ import kotlin.reflect.KProperty1
  *     companion object : Policy<Todo, User> by policy({
  *         val admin = (principal() map User::admin) describedAs "the principal is an admin"
  *
- *         principal() equalTo record(Todo::owner) implies canEdit()
+ *         principal() equalTo (record() map Todo::owner) implies canEdit()
  *         admin implies canEdit()
- *         principal() map User::team equalTo record(Todo::team) implies canRead()
+ *         principal() map User::team equalTo (record() map Todo::team) implies canRead()
  *         admin implies canChange(Todo::archived)
  *     })
  * }
  * ```
  *
- * Each line reads as a sentence: "If the principal is its owner, they can edit it. If the principal
- * is an admin, they can edit it. If the principal's team is its team, they can read it. If the
- * principal is an admin, they can change archived."
+ * Each line reads as a sentence: "If the principal is the record's owner, they can edit it. If the
+ * principal is an admin, they can edit it. If the principal's team is the record's team, they can
+ * read it. If the principal is an admin, they can change archived."
  *
  * The same policy can also be written subject first, with shorthand conditions:
  *
@@ -38,7 +38,7 @@ import kotlin.reflect.KProperty1
  *
  *     userIn(Todo::owner).canEdit()
  *     admin.canEdit()
- *     membersOf(record(Todo::team), membership = User::team).canRead()
+ *     membersOf(record() map Todo::team, membership = User::team).canRead()
  *     admin.canChange(Todo::archived)
  * })
  * ```
@@ -76,7 +76,7 @@ public fun <T : Record, P : Principal> policy(rules: PolicyRules<T, P>.() -> Uni
  * A grant is a line of the form `condition implies permission`:
  *
  * ```kotlin
- * principal() equalTo record(Todo::owner) implies canEdit()
+ * principal() equalTo (record() map Todo::owner) implies canEdit()
  * ```
  *
  * ## Conditions
@@ -86,8 +86,8 @@ public fun <T : Record, P : Principal> policy(rules: PolicyRules<T, P>.() -> Uni
  * | Value                          | Means                                             |
  * |--------------------------------|---------------------------------------------------|
  * | [principal]`()`                | the principal: the user the application acts for  |
- * | [record]`(Todo::owner)`        | the record's `owner` field                        |
- * | `value `[map]` User::team`     | a field of another value, such as its team        |
+ * | [record]`()`                   | the record the policy is being asked about        |
+ * | `value `[map]` User::team`     | a field of a value, such as the principal's team  |
  *
  * and combined with these:
  *
@@ -126,9 +126,9 @@ public fun <T : Record, P : Principal> policy(rules: PolicyRules<T, P>.() -> Uni
  *
  * | Condition first                                             | Subject first                                            |
  * |-------------------------------------------------------------|----------------------------------------------------------|
- * | `principal() equalTo record(Todo::owner) implies canEdit()` | `userIn(Todo::owner).canEdit()`                          |
+ * | `principal() equalTo (record() map Todo::owner) implies canEdit()` | `userIn(Todo::owner).canEdit()`                          |
  * | `principal() map User::admin implies canDelete()`           | `usersWhere(User::admin).canDelete()`                    |
- * | `principal() map User::team equalTo record(Todo::team) implies canRead()` | `membersOf(record(Todo::team), membership = User::team).canRead()` |
+ * | `principal() map User::team equalTo (record() map Todo::team) implies canRead()` | `membersOf(record() map Todo::team, membership = User::team).canRead()` |
  * | `anyone implies canRead()`                                  | `anyone.canRead()`                                       |
  *
  * The subject-first form is shorthand: `condition.canEdit()` is `condition implies canEdit()`, and
@@ -138,7 +138,7 @@ public fun <T : Record, P : Principal> policy(rules: PolicyRules<T, P>.() -> Uni
  * Subject first reads best for the common shapes: an owner, a flag on the principal, a group. Write
  * the condition out when it compares anything else, or joins conditions with [and] or [not]. To call
  * a permission on a condition you wrote out, put the condition in parentheses:
- * `(principal() equalTo record(Todo::owner)).canEdit()`.
+ * `(principal() equalTo (record() map Todo::owner)).canEdit()`.
  */
 public class PolicyRules<T : Record, P : Principal> internal constructor() {
     internal val readers = mutableListOf<Condition<T, P>>()
@@ -159,39 +159,40 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * Gets the principal: the user the application is acting for.
      *
      * ```kotlin
-     * principal() equalTo record(Todo::owner) implies canEdit()
-     * principal() map User::team equalTo record(Todo::team) implies canRead()
+     * principal() equalTo (record() map Todo::owner) implies canEdit()
+     * principal() map User::team equalTo (record() map Todo::team) implies canRead()
      * ```
      *
      * @return The principal, described as "the principal" in refusal messages.
      */
-    public fun principal(): Value<T, P, P> = Value("the principal", isStatement = false) { env ->
+    public fun principal(): Value<T, P, P> = Value(Phrase.Noun("the principal")) { env ->
         // A policy is only ever asked about principals of its own type.
         @Suppress("UNCHECKED_CAST")
         env.principal as P
     }
 
     /**
-     * Gets the value of [property] on the record the policy is being asked about.
+     * Gets the record the policy is being asked about.
      *
      * ```kotlin
-     * principal() equalTo record(Todo::owner) implies canEdit()    // "the principal is its owner"
+     * principal() equalTo (record() map Todo::owner) implies canEdit()    // "the principal is the record's owner"
+     * principal() equalTo record() implies canUpdate()                    // "the principal is the record"
      * ```
      *
-     * Always name the entity, as in `record(Todo::owner)`. In a policy for `User`, both the record
-     * and the principal are users, so writing `record(…)` for one and `principal() map …` for the
-     * other is what says which user a field belongs to.
+     * Reach its fields with [map], as with [principal]. Comparing the principal with the record itself
+     * is how a policy for users says "users can change their own record".
      *
-     * @param property The field to read. If it's `null`, the value is missing, and no comparison with
-     *   it holds.
-     * @return The field's value, described as "its ‹field›" in refusal messages.
+     * Kotlin reads every infix word, such as `equalTo` and `map`, from left to right with the same
+     * priority. So when a field of the record is on the right of [equalTo] or [contains], put it in
+     * parentheses, as above. Without them, the condition doesn't compile.
+     *
+     * @return The record, described as "the record" in refusal messages.
      */
-    public fun <V> record(property: KProperty1<T, V>): Value<T, P, V & Any> =
-        Value("its ${property.name}", isStatement = false) { env ->
-            // A policy is only ever asked about records of its own entity.
-            @Suppress("UNCHECKED_CAST")
-            property.get(env.record as T)
-        }
+    public fun record(): Value<T, P, T> = Value(Phrase.Noun("the record")) { env ->
+        // A policy is only ever asked about records of its own entity.
+        @Suppress("UNCHECKED_CAST")
+        env.record as T
+    }
 
     /**
      * A condition that always holds.
@@ -202,7 +203,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * admin implies canEdit()
      * ```
      */
-    public val anyone: Condition<T, P> = Value("anyone", isStatement = true) { true }
+    public val anyone: Condition<T, P> = Value(Phrase.Sentence("anyone may do this")) { true }
 
     // ---- Permissions ------------------------------------------------------------------------------
 
@@ -211,7 +212,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      *
      * ```kotlin
      * // Everyone on a todo's team can see it.
-     * principal() map User::team equalTo record(Todo::team) implies canRead()
+     * principal() map User::team equalTo (record() map Todo::team) implies canRead()
      * ```
      *
      * A record the principal can't see is left out of every collection, and a lookup by ID returns
@@ -227,7 +228,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * Lets principals add records.
      *
      * ```kotlin
-     * principal() equalTo record(Todo::owner) implies canCreate()
+     * principal() equalTo (record() map Todo::owner) implies canCreate()
      * ```
      *
      * The framework checks the condition against the new record. With the grant above, Alice can add
@@ -242,7 +243,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * Lets principals change records.
      *
      * ```kotlin
-     * principal() equalTo record(Todo::owner) implies canUpdate()
+     * principal() equalTo (record() map Todo::owner) implies canUpdate()
      * ```
      *
      * The framework checks the condition twice: against the record before the change, and against
@@ -277,7 +278,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * together.
      *
      * ```kotlin
-     * principal() equalTo record(Todo::owner) implies canEdit()
+     * principal() equalTo (record() map Todo::owner) implies canEdit()
      * ```
      */
     public fun canEdit(): Permission<T, P> = permission("canEdit()") {
@@ -292,7 +293,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      *
      * ```kotlin
      * // Owners edit their todos, but only admins can archive them, anyone's.
-     * principal() equalTo record(Todo::owner) implies canEdit()
+     * principal() equalTo (record() map Todo::owner) implies canEdit()
      * admin implies canRead()
      * admin implies canChange(Todo::archived)
      * ```
@@ -302,7 +303,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      *
      * Once a column has a grant like this, [canUpdate] no longer covers it. In the example, owners
      * can change everything about their todos except `archived`. To let owners archive too, grant it
-     * to them as well: `principal() equalTo record(Todo::owner) implies canChange(Todo::archived)`.
+     * to them as well: `principal() equalTo (record() map Todo::owner) implies canChange(Todo::archived)`.
      *
      * The framework checks this permission when a change gives [column] a new value. It doesn't
      * check it when a record is added. To control the value a new record starts with, use
@@ -318,8 +319,8 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      *
      * ```kotlin
      * // Whoever a task is assigned to can reassign it to a teammate.
-     * principal() equalTo record(Task::assignee) implies canEdit()
-     * principal() equalTo record(Task::assignee) implies canReassign(Task::assignee) { candidate ->
+     * principal() equalTo (record() map Task::assignee) implies canEdit()
+     * principal() equalTo (record() map Task::assignee) implies canReassign(Task::assignee) { candidate ->
      *     candidate map User::team equalTo (principal() map User::team)
      * }
      * ```
@@ -347,7 +348,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
         column: KMutableProperty1<T, V>,
         to: (candidate: Value<T, P, V & Any>) -> Condition<T, P>,
     ): Permission<T, P> {
-        val candidate = Value<T, P, V & Any>("the candidate", isStatement = false) { env ->
+        val candidate = Value<T, P, V & Any>(Phrase.Noun("the candidate")) { env ->
             // The candidate is the column's new value, so it has the column's type.
             @Suppress("UNCHECKED_CAST")
             env.candidate as V
@@ -367,8 +368,8 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      *     var text: String by column(text)
      *
      *     companion object : Policy<Doc, User> by policy({
-     *         principal() equalTo record(Doc::owner) implies canEdit()
-     *         principal() equalTo record(Doc::owner) implies canOffer(Doc::owner, via = Doc::offeredTo)
+     *         principal() equalTo (record() map Doc::owner) implies canEdit()
+     *         principal() equalTo (record() map Doc::owner) implies canOffer(Doc::owner, via = Doc::offeredTo)
      *     })
      * }
      *
@@ -402,7 +403,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * Grants [permission] to every principal for whom this condition holds.
      *
      * ```kotlin
-     * principal() equalTo record(Todo::owner) implies canEdit()
+     * principal() equalTo (record() map Todo::owner) implies canEdit()
      * ```
      *
      * Every permission must be granted this way. A permission on a line of its own grants nothing,
@@ -421,16 +422,15 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      *
      * ```kotlin
      * userIn(Todo::owner).canEdit()
-     * // Same as: (principal() equalTo record(Todo::owner)) describedAs "the principal is its owner" implies canEdit()
+     * // Same as: principal() equalTo (record() map Todo::owner) implies canEdit()
      * ```
      *
      * If [field] is `null`, the condition doesn't hold.
      *
      * @param field The record's field that holds a user.
-     * @return The condition, described as "the principal is its ‹field›".
+     * @return The condition, described as "the principal is the record's ‹field›".
      */
-    public fun userIn(field: KProperty1<T, P?>): Condition<T, P> =
-        principal() equalTo record(field) describedAs "the principal is its ${field.name}"
+    public fun userIn(field: KProperty1<T, P?>): Condition<T, P> = principal() equalTo (record() map field)
 
     /**
      * Returns a condition that holds when the principal's [property] is true, whatever the record.
@@ -454,8 +454,8 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * Returns a condition that holds when the principal's own group, in [membership], is [group].
      *
      * ```kotlin
-     * membersOf(record(Todo::team), membership = User::team).canRead()
-     * // Same as: principal() map User::team equalTo record(Todo::team) implies canRead()
+     * membersOf(record() map Todo::team, membership = User::team).canRead()
+     * // Same as: principal() map User::team equalTo (record() map Todo::team) implies canRead()
      * ```
      *
      * If either group is missing, the condition doesn't hold.
@@ -471,8 +471,8 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * Returns a condition that holds when the principal's groups, in [memberships], include [group].
      *
      * ```kotlin
-     * membersOf(record(Todo::team), memberships = User::teams).canRead()
-     * // Same as: principal() map User::teams contains record(Todo::team) implies canRead()
+     * membersOf(record() map Todo::team, memberships = User::teams).canRead()
+     * // Same as: principal() map User::teams contains (record() map Todo::team) implies canRead()
      * ```
      *
      * Name the argument `memberships =`. That's what tells this function apart from the one for a
@@ -615,17 +615,47 @@ public class Permission<T : Record, P : Principal> internal constructor(
  *
  * A value of type `Boolean` is a [Condition].
  *
- * @property description Describes the value in refusal messages, for example, "the principal's
- *   team".
+ * @property phrase The words that describe the value in refusal messages, and whether they name a
+ *   value or say something that's true or false.
+ * @param evaluate Returns the value in an [Env], or `null` if it's missing.
  */
 public class Value<T : Record, P : Principal, out V> internal constructor(
-    public val description: String,
-    internal val isStatement: Boolean,
+    internal val phrase: Phrase,
     private val evaluate: (Env) -> V?,
 ) {
+    /** Describes the value in refusal messages, for example, "the principal's team". */
+    public val description: String get() = phrase.text
+
     internal fun valueIn(env: Env): V? = evaluate(env)
 
     override fun toString(): String = description
+}
+
+/**
+ * What kind of phrase a [Value]'s description is, which decides how it reads in a refusal message.
+ *
+ * A message needs a sentence, such as "it can only be deleted if the principal is an admin". A
+ * comparison already is one, but a `Boolean` value used as a condition is only named by a noun
+ * phrase, so [statement] turns "the principal's admin" into "the principal's admin is true".
+ */
+internal sealed interface Phrase {
+    /** The words, as they appear in a refusal message. */
+    val text: String
+
+    /**
+     * Names a value: "the principal", "the record's owner".
+     *
+     * @property text The noun phrase, for example, "the principal's team".
+     */
+    data class Noun(override val text: String) : Phrase
+
+    /**
+     * Says something that's true or false: "the principal is the record's owner".
+     *
+     * @property text The sentence, without a final period, for example, "the principal is an
+     *   admin".
+     */
+    data class Sentence(override val text: String) : Phrase
 }
 
 /**
@@ -638,8 +668,8 @@ public typealias Condition<T, P> = Value<T, P, Boolean>
  * Gets [property] of this value: `principal() map User::team` is the principal's team.
  *
  * ```kotlin
- * principal() map User::team equalTo record(Todo::team) implies canRead()
- * record(Todo::team) map Team::organization equalTo (principal() map User::organization) implies canRead()
+ * principal() map User::team equalTo (record() map Todo::team) implies canRead()
+ * record() map Todo::team map Team::organization equalTo (principal() map User::organization) implies canRead()
  * ```
  *
  * If this value is missing, so is the result. If [property] is `null`, the result is missing.
@@ -647,13 +677,13 @@ public typealias Condition<T, P> = Value<T, P, Boolean>
  * @return The field's value, described as "‹this›'s ‹field›" in refusal messages.
  */
 public infix fun <T : Record, P : Principal, V : Any, W> Value<T, P, V>.map(property: KProperty1<V, W>): Value<T, P, W & Any> =
-    Value("$description's ${property.name}", isStatement = false) { env -> valueIn(env)?.let { property.get(it) } }
+    Value(Phrase.Noun("$description's ${property.name}")) { env -> valueIn(env)?.let { property.get(it) } }
 
 /**
  * Checks whether this value and [other] are the same.
  *
  * ```kotlin
- * principal() equalTo record(Todo::owner) implies canEdit()    // "the principal is its owner"
+ * principal() equalTo (record() map Todo::owner) implies canEdit()    // "the principal is the record's owner"
  * ```
  *
  * The condition doesn't hold if either value is missing. A todo with no team isn't visible to users
@@ -667,7 +697,7 @@ public infix fun <T : Record, P : Principal, V : Any, W> Value<T, P, V>.map(prop
  */
 public infix fun <T : Record, P : Principal, V : Any> Value<T, P, V>.equalTo(other: Value<T, P, V>): Condition<T, P> {
     val statement = "$description is ${other.description}"
-    return Value(statement, isStatement = true) { env ->
+    return Value(Phrase.Sentence(statement)) { env ->
         val left = valueIn(env)
         val right = other.valueIn(env)
         if (left == null || right == null) {
@@ -684,7 +714,7 @@ public infix fun <T : Record, P : Principal, V : Any> Value<T, P, V>.equalTo(oth
  *
  * ```kotlin
  * // Users on several teams can see todos shared with any of them.
- * principal() map User::teams contains record(Todo::team) implies canRead()
+ * principal() map User::teams contains (record() map Todo::team) implies canRead()
  * ```
  *
  * The condition doesn't hold if either value is missing.
@@ -693,7 +723,7 @@ public infix fun <T : Record, P : Principal, V : Any> Value<T, P, V>.equalTo(oth
  */
 public infix fun <T : Record, P : Principal, V : Any> Value<T, P, Collection<V>>.contains(element: Value<T, P, V>): Condition<T, P> {
     val statement = "$description include ${element.description}"
-    return Value(statement, isStatement = true) { env ->
+    return Value(Phrase.Sentence(statement)) { env ->
         val items = valueIn(env)
         val item = element.valueIn(env)
         if (items == null || item == null) {
@@ -709,13 +739,13 @@ public infix fun <T : Record, P : Principal, V : Any> Value<T, P, Collection<V>>
  * Checks whether both conditions hold.
  *
  * ```kotlin
- * principal() equalTo record(Todo::owner) and not(principal() map User::suspended) implies canEdit()
+ * principal() equalTo (record() map Todo::owner) and not(principal() map User::suspended) implies canEdit()
  * ```
  *
  * There's no `or`. Write two grants instead, because grants add up.
  */
 public infix fun <T : Record, P : Principal> Condition<T, P>.and(other: Condition<T, P>): Condition<T, P> =
-    Value("$statement and ${other.statement}", isStatement = true) { env -> holds(env) && other.holds(env) }
+    Value(Phrase.Sentence("$statement and ${other.statement}")) { env -> holds(env) && other.holds(env) }
 
 /**
  * Checks whether [condition] doesn't hold.
@@ -725,12 +755,14 @@ public infix fun <T : Record, P : Principal> Condition<T, P>.and(other: Conditio
  * ```
  *
  * A condition doesn't hold when a value it compares is missing, so `not` of it does. For example,
- * `not(principal() equalTo record(Doc::lockedBy))` holds for everyone when a document isn't locked by anyone.
+ * `not(principal() equalTo (record() map Doc::lockedBy))` holds for everyone when a document isn't locked by anyone.
  */
 public fun <T : Record, P : Principal> not(condition: Condition<T, P>): Condition<T, P> =
     Value(
-        if (condition.isStatement) "it isn't the case that ${condition.description}" else "${condition.description} is false",
-        isStatement = true,
+        when (val phrase = condition.phrase) {
+            is Phrase.Noun -> Phrase.Sentence("${phrase.text} is false")
+            is Phrase.Sentence -> Phrase.Sentence("it isn't the case that ${phrase.text}")
+        },
     ) { env -> !condition.holds(env) }
 
 /**
@@ -745,7 +777,7 @@ public fun <T : Record, P : Principal> not(condition: Condition<T, P>): Conditio
  * Without it, the condition above is described as "the principal's admin is true".
  */
 public infix fun <T : Record, P : Principal> Condition<T, P>.describedAs(statement: String): Condition<T, P> =
-    Value(statement, isStatement = true) { env -> valueIn(env) }
+    Value(Phrase.Sentence(statement)) { env -> valueIn(env) }
 
 /** What a condition is asked about: a record, a principal, and, for a reassignment, a candidate. */
 internal class Env(val record: Any?, val principal: Principal, val candidate: Any? = null)
@@ -754,7 +786,11 @@ internal class Env(val record: Any?, val principal: Principal, val candidate: An
 internal fun Condition<*, *>.holds(env: Env): Boolean = valueIn(env) == true
 
 /** This condition as a sentence, for refusal messages. */
-internal val Condition<*, *>.statement: String get() = if (isStatement) description else "$description is true"
+internal val Condition<*, *>.statement: String
+    get() = when (val phrase = phrase) {
+        is Phrase.Noun -> "${phrase.text} is true"
+        is Phrase.Sentence -> phrase.text
+    }
 
 private fun comparable(a: Any, b: Any): Boolean = a::class.isInstance(b) || b::class.isInstance(a)
 

@@ -105,7 +105,7 @@ class PolicyCheckTest {
     fun `conditions never match two missing values`(): Unit {
         val teams = policy<Note, Member> {
             userIn(Note::owner).canEdit()
-            (principal() map Member::team equalTo record(Note::team)).canRead()
+            (principal() map Member::team equalTo (record() map Note::team)).canRead()
         }
 
         val report = findPolicyProblems(schemaOf(notes = teams))
@@ -260,12 +260,12 @@ class PolicyCheckTest {
     @Test
     fun `two ways of writing the same policy decide the same`(): Unit {
         val conditions = policy<Note, Member> {
-            principal() equalTo record(Note::owner) implies canEdit()
-            principal() map Member::team equalTo record(Note::team) implies canRead()
+            principal() equalTo (record() map Note::owner) implies canEdit()
+            principal() map Member::team equalTo (record() map Note::team) implies canRead()
         }
         val grants = policy<Note, Member> {
             userIn(Note::owner).canEdit()
-            membersOf(record(Note::team), membership = Member::team).canRead()
+            membersOf(record() map Note::team, membership = Member::team).canRead()
         }
 
         comparePolicies(schemaOf(notes = conditions), Notes.table, old = conditions, new = grants).assertSame()
@@ -275,7 +275,7 @@ class PolicyCheckTest {
     fun `a comparison names a question the two policies answer differently`(): Unit {
         val shared = policy<Note, Member> {
             userIn(Note::owner).canEdit()
-            (principal() map Member::team equalTo record(Note::team)).canRead()
+            (principal() map Member::team equalTo (record() map Note::team)).canRead()
         }
 
         val comparison = comparePolicies(schemaOf(notes = ownerOnly), Notes.table, old = ownerOnly, new = shared)

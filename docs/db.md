@@ -79,7 +79,7 @@ class Todo(
     var archived: Boolean by column(false)
 
     companion object : Policy<Todo, User> by policy({
-        principal() equalTo record(Todo::owner) implies canEdit()
+        principal() equalTo (record() map Todo::owner) implies canEdit()
     })
 }
 ```
@@ -134,7 +134,7 @@ When a policy refuses something, two different things happen:
 the principal can do this.
 
 ```kotlin
-principal() equalTo record(Todo::owner) implies canEdit()
+principal() equalTo (record() map Todo::owner) implies canEdit()
 ```
 
 Read it as "if the principal is the todo's owner, they can edit it". The part before `implies` is a
@@ -153,14 +153,26 @@ This section builds the policy for `samples/teams`' `Todo` one grant at a time.
 
 ```kotlin
 companion object : Policy<Todo, User> by policy({
-    principal() equalTo record(Todo::owner) implies canEdit()
+    principal() equalTo (record() map Todo::owner) implies canEdit()
 })
 ```
 
 A condition compares values. Two values start every condition:
 
 - `principal()` is the principal: the user the application is acting for.
-- `record(Todo::owner)` is a field of the todo the framework is asking about: here, its owner.
+- `record()` is the todo the framework is asking about.
+
+`map` reaches a field of a value: `record() map Todo::owner` is the todo's owner. When it's on the
+right of `equalTo`, put it in parentheses, as above. Kotlin reads every infix word, such as `equalTo`
+and `map`, from left to right with the same priority, so without them, the condition doesn't
+compile.
+
+You can also compare the principal with the record itself. In a policy for users, that's how you say
+"users can change their own record":
+
+```kotlin
+principal() equalTo record() implies canUpdate()
+```
 
 `equalTo` holds when the two are the same user. `canEdit()` lets the principal add, change, and
 delete todos.
@@ -170,10 +182,10 @@ these:
 
 | Who     | Tries to                                      | Result                                                               |
 |---------|-----------------------------------------------|----------------------------------------------------------------------|
-| Bob     | change the title of Alice's todo              | Refused: it can only be updated if the principal is its owner        |
-| Bob     | delete Alice's todo                           | Refused: it can only be deleted if the principal is its owner        |
-| Alice   | add a todo whose owner is Bob                 | Refused: it can only be created if the principal is its owner        |
-| Alice   | change a todo's owner from herself to Bob     | Refused: afterwards, it could only be updated if the principal is its owner |
+| Bob     | change the title of Alice's todo              | Refused: it can only be updated if the principal is the record's owner |
+| Bob     | delete Alice's todo                           | Refused: it can only be deleted if the principal is the record's owner |
+| Alice   | add a todo whose owner is Bob                 | Refused: it can only be created if the principal is the record's owner |
+| Alice   | change a todo's owner from herself to Bob     | Refused: afterwards, it could only be updated if the principal is the record's owner |
 | Bob     | see Alice's todo in `db.todos`                | It isn't there                                                       |
 
 The fourth row is the one that's easy to miss if you check permissions by hand. A check that only
@@ -196,8 +208,8 @@ always see it.
 For example, to let owners change their todos but only admins delete them:
 
 ```kotlin
-principal() equalTo record(Todo::owner) implies canCreate()
-principal() equalTo record(Todo::owner) implies canUpdate()
+principal() equalTo (record() map Todo::owner) implies canCreate()
+principal() equalTo (record() map Todo::owner) implies canUpdate()
 principal() map User::admin implies canDelete()
 ```
 
@@ -218,7 +230,7 @@ Add another line:
 companion object : Policy<Todo, User> by policy({
     val admin = (principal() map User::admin) describedAs "the principal is an admin"
 
-    principal() equalTo record(Todo::owner) implies canEdit()
+    principal() equalTo (record() map Todo::owner) implies canEdit()
     admin implies canEdit()
 })
 ```
@@ -227,13 +239,14 @@ companion object : Policy<Todo, User> by policy({
 field is a condition on its own, which holds when the field is true.
 
 Refusal messages describe conditions automatically. Without `describedAs`, this one would read "the
-principal's admin is true". With it, Bob now sees "it can only be updated if the principal is its
-owner, or if the principal is an admin". Naming a condition with `val` also lets you reuse it.
+principal's admin is true". With it, Bob now sees "it can only be updated if the principal is the
+record's owner, or if the principal is an admin". Naming a condition with `val` also lets you reuse
+it.
 
 To require two conditions at once, join them with `and`, and put each comparison in parentheses:
 
 ```kotlin
-(principal() equalTo record(Todo::owner)) and not(principal() map User::suspended) implies canEdit()
+(principal() equalTo (record() map Todo::owner)) and not(principal() map User::suspended) implies canEdit()
 ```
 
 There's no `or`. Write two grants instead.
@@ -243,10 +256,10 @@ There's no `or`. Write two grants instead.
 A team member should see a todo that's shared with their team, without being able to change it:
 
 ```kotlin
-principal() map User::team equalTo record(Todo::team) implies canRead()
+principal() map User::team equalTo (record() map Todo::team) implies canRead()
 ```
 
-Read it as "if the principal's team is its team, they can read it".
+Read it as "if the principal's team is the record's team, they can read it".
 
 A missing value matches nothing. If a todo isn't shared (`team` is `null`), no team can see it. If a
 user is on no team, they're a member of nothing. In particular, a user on no team can't see an
@@ -257,7 +270,7 @@ holds.
 If users can belong to several teams, give them `var teams: Set<Team>`, and use `contains`:
 
 ```kotlin
-principal() map User::teams contains record(Todo::team) implies canRead()
+principal() map User::teams contains (record() map Todo::team) implies canRead()
 ```
 
 #### Let only admins archive a todo
@@ -274,7 +287,7 @@ A column permission does two things:
 - **It makes grants like it the only way to change that column.** The owner's `canEdit()` no longer
   covers `archived`, so owners can change everything about their todos except whether they're
   archived. To let owners archive too, grant it to them as well:
-  `principal() equalTo record(Todo::owner) implies canChange(Todo::archived)`.
+  `principal() equalTo (record() map Todo::owner) implies canChange(Todo::archived)`.
 
 The column is named with `Todo::archived`, and it must be a `var`. Setting a column to the value it
 already has isn't a change, so `update { archived = archived }` needs no grant for `archived`. The
@@ -310,9 +323,9 @@ means "no team", which isn't a value to allow or forbid:
 companion object : Policy<Todo, User> by policy({
     val admin = (principal() map User::admin) describedAs "the principal is an admin"
 
-    principal() equalTo record(Todo::owner) implies canEdit()
+    principal() equalTo (record() map Todo::owner) implies canEdit()
     admin implies canEdit()
-    principal() map User::team equalTo record(Todo::team) implies canRead()
+    principal() map User::team equalTo (record() map Todo::team) implies canRead()
     admin implies canChange(Todo::archived)
     Todo::team.onlyAllows("the principal's own team") { team, principal ->
         team == principal.team || principal.admin
@@ -320,8 +333,8 @@ companion object : Policy<Todo, User> by policy({
 })
 ```
 
-Read aloud, it's the specification: "If the principal is its owner, they can edit it. If the
-principal is an admin, they can edit it. If the principal's team is its team, they can read it. If
+Read aloud, it's the specification: "If the principal is the record's owner, they can edit it. If the
+principal is an admin, they can edit it. If the principal's team is the record's team, they can read it. If
 the principal is an admin, they can change archived. Team can only be set to the principal's own
 team."
 
@@ -336,7 +349,7 @@ companion object : Policy<Todo, User> by policy({
 
     userIn(Todo::owner).canEdit()
     admin.canEdit()
-    membersOf(record(Todo::team), membership = User::team).canRead()
+    membersOf(record() map Todo::team, membership = User::team).canRead()
     admin.canChange(Todo::archived)
     Todo::team.onlyAllows("the principal's own team") { team, principal ->
         team == principal.team || principal.admin
@@ -354,10 +367,10 @@ This is the same policy as the one above, not a different kind. Two small pieces
 
   | Shorthand                                                  | Is the condition                                           |
   |------------------------------------------------------------|------------------------------------------------------------|
-  | `userIn(Todo::owner)`                                      | `principal() equalTo record(Todo::owner)`                  |
+  | `userIn(Todo::owner)`                                      | `principal() equalTo (record() map Todo::owner)`                  |
   | `usersWhere(User::admin)`                                  | `principal() map User::admin`                              |
-  | `membersOf(record(Todo::team), membership = User::team)`   | `principal() map User::team equalTo record(Todo::team)`    |
-  | `membersOf(record(Todo::team), memberships = User::teams)` | `principal() map User::teams contains record(Todo::team)`  |
+  | `membersOf(record() map Todo::team, membership = User::team)`   | `principal() map User::team equalTo (record() map Todo::team)`    |
+  | `membersOf(record() map Todo::team, memberships = User::teams)` | `principal() map User::teams contains (record() map Todo::team)`  |
 
 - **Permissions called on a condition.** `condition.canEdit()` is exactly
   `condition implies canEdit()`. Every permission has this form, including `canChange`,
@@ -374,11 +387,11 @@ Which to use is a matter of reading:
   `not`.
 
 To call a permission on a condition you wrote out, put the condition in parentheses. A dot binds
-more tightly than an infix word, so without them, `principal() equalTo record(Todo::owner).canEdit()`
+more tightly than an infix word, so without them, `principal() equalTo (record() map Todo::owner).canEdit()`
 calls `canEdit()` on the owner instead, and doesn't compile:
 
 ```kotlin
-((principal() equalTo record(Todo::owner)) and not(principal() map User::suspended)).canEdit()
+((principal() equalTo (record() map Todo::owner)) and not(principal() map User::suspended)).canEdit()
 ```
 
 `membersOf` has two forms, for one group and for several, and the argument's name picks between
@@ -405,7 +418,7 @@ class Task(@Owner assignee: User, title: String) : Record() {
     var title: String by column(title)
 
     companion object : Policy<Task, User> by policy({
-        val assignee = principal() equalTo record(Task::assignee)
+        val assignee = principal() equalTo (record() map Task::assignee)
 
         assignee implies canEdit()
         assignee implies canReassign(Task::assignee) { candidate ->
@@ -427,7 +440,7 @@ field of the candidate.
 | assign her task to Bob (Acme)         | Allowed. Bob can change it now, and Alice can't.                                         |
 | assign it to Carol (Globex)           | Refused: assignee can only be reassigned if the candidate's team is the principal's team |
 | add a task already assigned to Bob    | Allowed, because she could add it for herself and then reassign it                       |
-| reassign Bob's task                   | Refused: it can only be updated if the principal is its assignee                         |
+| reassign Bob's task                   | Refused: it can only be updated if the principal is the record's assignee                |
 
 If Alice is on no team, the condition never holds, so she can't reassign her tasks to anyone.
 
@@ -447,7 +460,7 @@ record. To keep a task within its own team, whoever reassigns it:
 
 ```kotlin
 assignee implies canReassign(Task::assignee) { candidate ->
-    candidate map User::team equalTo record(Task::team)
+    candidate map User::team equalTo (record() map Task::team)
 }
 ```
 
@@ -471,7 +484,7 @@ class Doc(@Owner owner: User, text: String) : Record() {
     var text: String by column(text)
 
     companion object : Policy<Doc, User> by policy({
-        val owner = principal() equalTo record(Doc::owner)
+        val owner = principal() equalTo (record() map Doc::owner)
 
         owner implies canEdit()
         owner implies canOffer(Doc::owner, via = Doc::offeredTo)
@@ -501,7 +514,7 @@ alwaysRequires(not(principal() map User::suspended))
 ```
 
 For a change, the framework checks it before and after, so a condition about the record, such as
-`alwaysRequires(principal() map User::team equalTo record(Doc::team))`, also stops a principal from moving a
+`alwaysRequires(principal() map User::team equalTo (record() map Doc::team))`, also stops a principal from moving a
 record out of their own team.
 
 ### Reference
@@ -511,7 +524,7 @@ Values:
 | Value                          | Means                                                       |
 |--------------------------------|-------------------------------------------------------------|
 | `principal()`                  | the principal                                               |
-| `record(Todo::owner)`          | a field of the record the framework is asking about         |
+| `record()`                     | the record the framework is asking about                    |
 | `value map User::team`         | a field of another value                                    |
 | `candidate`                    | in a `canReassign` block: who the record would go to        |
 
@@ -546,8 +559,8 @@ Shorthand conditions, for writing grants subject first:
 |------------------------------------------------------------|-------------------------------------------------------------|
 | `userIn(Todo::owner)`                                      | the principal is the user in that field                     |
 | `usersWhere(User::admin, "…")`                             | the principal's `Boolean` field is true                     |
-| `membersOf(record(Todo::team), membership = User::team)`   | the principal's group is that group                         |
-| `membersOf(record(Todo::team), memberships = User::teams)` | the principal's groups include that group                   |
+| `membersOf(record() map Todo::team, membership = User::team)`   | the principal's group is that group                         |
+| `membersOf(record() map Todo::team, memberships = User::teams)` | the principal's groups include that group                   |
 
 Every permission can be written as `condition implies canX(…)` or as `condition.canX(…)`.
 
@@ -567,25 +580,30 @@ Most mistakes in a condition are compile errors:
 principal() equalTo Todo::owner implies canEdit()
 // error: Inapplicable candidate(s): val owner: User
 
+// A field of the record on the right of equalTo, without parentheses:
+principal() equalTo record() map Todo::owner implies canEdit()
+// error: Inapplicable candidate(s): val owner: User
+
 // Two comparisons joined with `and`, without parentheses:
-principal() equalTo record(Todo::owner) and principal() map User::team equalTo record(Todo::team) implies canEdit()
+principal() equalTo (record() map Todo::owner) and principal() map User::team equalTo (record() map Todo::team) implies canEdit()
 // error: Argument type mismatch: actual type is 'Value<Todo, User, User>', but 'Value<Todo, User, Boolean>' was expected.
 
 // A column permission for a column that can't change:
-principal() equalTo record(Todo::owner) implies canChange(Todo::owner)
+principal() equalTo (record() map Todo::owner) implies canChange(Todo::owner)
 // error: Inapplicable candidate(s): val owner: User
 ```
 
-The second one happens because Kotlin reads every infix word, such as `equalTo`, `and`, `map`, and
-`implies`, from left to right with the same priority. The compiler refuses the result, so put each
-comparison in parentheses when you join them.
+The second and third happen because Kotlin reads every infix word, such as `equalTo`, `and`, `map`,
+and `implies`, from left to right with the same priority. The compiler refuses the result, so put a
+field of the record in parentheses when it's on the right, and put each comparison in parentheses
+when you join them.
 
 Two mistakes compile, and the policy refuses them the first time it's used, with an error that says
 what to fix:
 
 - **A permission without a condition.** `canDelete()` on a line of its own grants nothing. The error
   says to write it as `condition implies canDelete()`.
-- **Comparing values of different kinds.** `principal() map User::team equalTo record(Todo::title)` compiles,
+- **Comparing values of different kinds.** `principal() map User::team equalTo (record() map Todo::title)` compiles,
   because Kotlin treats a team and a string both as `Any`. The first time the policy compares a real
   team with a real title, it throws instead of quietly never matching.
 
