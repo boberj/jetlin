@@ -14,8 +14,8 @@ release.
 reverted. The port worked: its 16 application tests and its browser tests passed without changes. But
 the demo exists to show the view layer, and it's clearer without a database. Keeping one sample on
 plain `mutableStateOf` also shows that `jetlin-db` is optional. The decision log in
-`db-framework-plan.md` §13 records what the port involved, which is a useful estimate for porting an
-existing application.
+`plans/db-framework-plan.md` §13 records what the port involved, which is a useful estimate for
+porting an existing application.
 
 ## 1. How it works
 

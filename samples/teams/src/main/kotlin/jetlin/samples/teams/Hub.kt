@@ -53,8 +53,8 @@ import kotlinx.serialization.json.put
  * That holds only while the cache is keyed by principal. A cache shared between principals, for
  * example one object for `acme/private` fetched with the credentials of whoever asked first, would
  * give Bob data fetched with Alice's access. It would need policy checks and an authority component
- * in the cache key. `docs/db-framework-plan.md` §11 describes that design. It isn't built, because
- * nothing needs it yet.
+ * in the cache key. `docs/plans/db-framework-plan.md` §11 describes that design. It isn't built,
+ * because nothing needs it yet.
  *
  * @param baseUrl the hub's base URL, without a trailing slash.
  * @param client the HTTP client for requests to the hub. [close] closes it.

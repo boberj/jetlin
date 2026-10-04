@@ -556,8 +556,8 @@ command should produce only an error message.
 `samples/teams/src/main/kotlin/jetlin/samples/teams/Hub.kt` avoids needing access control. Its profile
 cache is keyed by principal, so Bob has no way to refer to a profile fetched with Alice's credential.
 The cache's design answers the question that a policy would. A cache shared across principals would
-need policy checks and an authority component in its key. §11 of `db-framework-plan.md` works through
-that design and what it would cost.
+need policy checks and an authority component in its key. §11 of `plans/db-framework-plan.md` works
+through that design and what it would cost.
 
 ### Drawings
 
@@ -1098,7 +1098,7 @@ from Maven Central. From 1.6 onward, the desktop runtime pulls androidx artifact
 only to Google's Maven repository, which the development environment couldn't reach. Nothing here
 depends on newer features: `Applier`, `Composition`, `Recomposer`, and the snapshot system are stable
 across these versions, so upgrading was a one-line change. The build now uses Compose runtime 1.12.0.
-See the decision log in `db-framework-plan.md` §13.
+See the decision log in `plans/db-framework-plan.md` §13.
 
 ### Related work
 

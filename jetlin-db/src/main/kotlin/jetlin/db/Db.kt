@@ -284,7 +284,7 @@ public class Db private constructor(
     }
 
     /**
-     * Sets the connection pragmas. See `docs/db-framework-plan.md` §4.9.
+     * Sets the connection pragmas. See `docs/plans/db-framework-plan.md` §4.9.
      *
      * - WAL mode, so readers such as a backup tool never block the writer.
      * - `synchronous=NORMAL`, which in WAL mode survives a process crash. Only a power loss can lose
@@ -431,8 +431,8 @@ public class Db private constructor(
      * An exclusive lock would prevent external writes entirely, and §4.9 of the plan asks for one. But
      * in WAL mode, an exclusive lock also blocks readers, which would stop Litestream from reading
      * the file, and the same section relies on Litestream for backups. Detecting the problem one
-     * commit late is the better trade-off. The decision log in `docs/db-framework-plan.md` §13 records
-     * this.
+     * commit late is the better trade-off. The decision log in `docs/plans/db-framework-plan.md` §13
+     * records this.
      */
     private fun verifySoleWriter() {
         val current = readDataVersion()
