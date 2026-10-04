@@ -15,3 +15,7 @@ playwright-report/
 .idea/
 *.iml
 .DS_Store
+
+# Claude Code: worktrees and personal settings. .claude/settings.json and commands stay shareable.
+.claude/worktrees/
+.claude/settings.local.json
