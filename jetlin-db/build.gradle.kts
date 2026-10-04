@@ -12,9 +12,6 @@ dependencies {
     // SQLite runs in the process, against a single file. This is the only storage dependency.
     implementation(libs.sqlite.jdbc)
 
-    // `unsafe` logs a warning on every call, through SLF4J, so applications can route it.
-    implementation(libs.slf4j.api)
-
     // Tests compose a real view and assert on the ops that a write produces. That's the most direct way
     // to check that reading a field subscribes the reader. Only the tests need the HTML applier.
     testImplementation(project(":jetlin-html"))

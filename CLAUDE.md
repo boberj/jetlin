@@ -46,6 +46,11 @@ cd e2e && npm install && npx playwright test      # browser tests — demo must 
   `./gradlew build`.
 - CI (`ci/github-actions.yml`) is **not wired up** — it hasn't been moved to
   `.github/workflows/` (see `ci/README.md` for why). Don't assume GitHub Actions runs on push.
+- Don't add entries to `PRIVILEGED_TOP_LEVEL` or `PRIVILEGED_MEMBERS` in
+  `conventions/src/test/kotlin/jetlin/conventions/DbConventionsTest.kt`, or new overloads of the names
+  listed there, without explicit approval from the maintainer. Each entry is a way to obtain a record
+  without a policy check. If a change seems to need one, stop and ask, and prefer going through an
+  existing entry such as `insertUnchecked` inside `unsafe { }`.
 - Library modules (anything prefixed `jetlin-`) have `explicitApi()` turned on — public declarations
   need explicit visibility and return types. `samples/*` are applications and are exempt.
 
@@ -63,6 +68,7 @@ jetlin-html       (LiveView, HtmlApplier, virtual DOM, elements, routing, forms,
 jetlin-server-ktor (HTTP + WebSocket endpoints, SessionRegistry, rate limiting)
 
 jetlin-testing    (drives a jetlin-html view headlessly — no browser, server or socket)
+jetlin-db-testing (fuzz-tests jetlin-db policies for loopholes in small random worlds)
 jetlin-client     (TypeScript browser runtime; builds into jetlin-server-ktor's resources)
 ```
 

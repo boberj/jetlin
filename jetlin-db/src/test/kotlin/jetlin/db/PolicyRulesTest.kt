@@ -530,7 +530,71 @@ class PolicyRulesTest {
         assertEquals(alice, doc.owner, "asking changed nothing")
     }
 
+    @Test
+    fun `once a column can be reassigned, canUpdate can't hand the record on`(): Unit = withDb { db ->
+        val alice = db.user("Alice", team = "acme")
+        val bob = db.user("Bob", team = "acme")
+        val root = db.user("Root", admin = true)
+        val doc = db.doc(alice)
+        // Admins can update every document, and their grant holds before and after any change. Without
+        // the rule, that would let them change its owner to anyone.
+        val policy = policy<Doc, User> {
+            userIn(Doc::owner).canEdit()
+            usersWhere(User::admin).canUpdate()
+            userIn(Doc::owner).canReassign(Doc::owner) { candidate -> candidate map User::team equalTo (principal() map User::team) }
+        }
+
+        assertEquals(
+            "$root may not change $doc: owner can only be reassigned if the principal is its owner",
+            refusal { policy.update(doc, root) { owner = bob } },
+        )
+        policy.update(doc, root) { text = "Reviewed" }
+        assertFalse(policy.canWrite(doc, Docs.owner, root), "a page shouldn't offer it either")
+        assertTrue(policy.canWrite(doc, Docs.owner, alice))
+
+        assertEquals(alice, doc.owner)
+        assertEquals("Reviewed", doc.text)
+    }
+
+    @Test
+    fun `canUpdate can still clear a column that changes hands`(): Unit = withDb { db ->
+        val alice = db.user("Alice", team = "acme")
+        val bob = db.user("Bob", team = "acme")
+        val carol = db.user("Carol", team = "globex")
+        val policy = policy<Doc, User> {
+            userIn(Doc::owner).canEdit()
+            userIn(Doc::owner).canReassign(Doc::offeredTo) { candidate -> candidate map User::team equalTo (principal() map User::team) }
+        }
+        val doc = db.store(Doc(alice, "Plan").also { it.offeredTo = bob })
+
+        // Clearing it hands the document to nobody, so it's an ordinary update.
+        policy.update(doc, alice) { offeredTo = null }
+        assertFailsWith<AccessDenied> { policy.update(doc, alice) { offeredTo = carol } }
+        policy.update(doc, alice) { offeredTo = bob }
+
+        assertEquals(bob, doc.offeredTo)
+    }
+
     // ---- canOffer, through Doc's own policy -------------------------------------------------------
+
+    @Test
+    fun `an offered record only changes hands when its recipient accepts, even for admins`(): Unit = withDb { db ->
+        val alice = db.user("Alice")
+        val root = db.user("Root", admin = true)
+        val doc = db.doc(alice)
+        val policy = policy<Doc, User> {
+            userIn(Doc::owner).canEdit()
+            usersWhere(User::admin).canUpdate()
+            userIn(Doc::owner).canOffer(Doc::owner, via = Doc::offeredTo)
+        }
+
+        assertEquals(
+            "$root may not change $doc: owner can only change hands when someone accepts an offer",
+            refusal { policy.update(doc, root) { owner = root } },
+        )
+        assertEquals(alice, doc.owner)
+    }
+
 
     @Test
     fun `an offered record changes hands when its recipient accepts it`(): Unit = withDb { db ->

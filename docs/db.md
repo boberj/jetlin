@@ -435,6 +435,13 @@ A reassignment relaxes only the reassigned column. The framework checks the rest
 if the task hadn't changed hands. If only members of a task's team could update it, reassigning the
 task to Bob while moving it to a team Alice isn't on would still be refused.
 
+Once a column has a `canReassign` grant, reassigning is the only way it gets a new value. `canUpdate()`
+no longer covers it. That matters for grants such as `admin implies canUpdate()`. "The principal is
+an admin" holds before and after any change, so without this rule, an admin could set a task's
+assignee to anyone, even though nobody granted them reassignment. To let admins reassign tasks,
+grant it to them explicitly. `canUpdate()` can still clear the column, setting it to `null`, because
+that hands the task to nobody.
+
 The candidate condition can compare the candidate with anything: the principal, as above, or the
 record. To keep a task within its own team, whoever reassigns it:
 
@@ -481,6 +488,9 @@ change he can make is accepting: setting the owner to himself and clearing the o
 `update { }`, and nothing else. Nobody can push a document onto someone else: Alice can offer it, but
 only Bob can make it his.
 
+As with `canReassign`, accepting an offer becomes the only way the owner changes. Even a principal
+whose `canUpdate()` grant holds for every document, such as an admin, can't change it directly.
+
 ### Shut someone out of everything
 
 `alwaysRequires` adds a condition to every check: reading, adding, changing, and deleting. Nobody
@@ -523,7 +533,7 @@ Permissions, granted with `condition implies permission`:
 |------------------------------------|--------------------------------------------------------------|----------------------------------------------|
 | `canRead()`                        | see records                                                  | on every read                                |
 | `canCreate()`                      | add records                                                  | on add, against the new record               |
-| `canUpdate()`                      | change records, except columns with their own permissions    | before and after every change                |
+| `canUpdate()`                      | change records, except columns with their own permissions, and columns that `canReassign` or `canOffer` hand on | before and after every change |
 | `canDelete()`                      | delete records                                               | before deleting                              |
 | `canEdit()`                        | add, change, and delete records                              | as the three above                           |
 | `canChange(column)`                | change one column on records they can see                    | when the column gets a new value             |
@@ -656,6 +666,174 @@ changes to any state. A `:conventions` test checks for blocking calls in policie
 This is also why a policy can be ordinary Kotlin. All records are in memory, so a rule doesn't need
 to be translated to SQL, and there's no second version of it to keep consistent with the schema. §5
 describes the other benefit: when the data a rule reads changes, open pages update by themselves.
+
+### Test your policies for loopholes
+
+A policy can be wrong in ways that ordinary tests don't catch, because ordinary tests check the cases
+you thought of. `jetlin-db-testing` looks for the cases you didn't. It builds many small, random
+databases, tries everything each user could do in them, and reports patterns that are usually
+mistakes, such as a user who can make themselves an admin.
+
+Add the module to your tests:
+
+```kotlin
+dependencies {
+    testImplementation(project(":jetlin-db-testing"))
+}
+```
+
+Then write one test that checks every policy in your schema:
+
+```kotlin
+@Test
+fun `the policies have no loopholes`(): Unit {
+    checkPolicies(JetlinSchema)
+}
+```
+
+`JetlinSchema` is the object KSP generates, which lists every entity and its policy. The test fails
+with an `AssertionError` that describes each problem it found.
+
+#### What it looks for
+
+| Check                  | Finds                                                                   | Example                                            |
+|------------------------|-------------------------------------------------------------------------|----------------------------------------------------|
+| `SelfEscalation`       | A user gains access to other records by changing, adding, or deleting a record | A user sets their own `admin` field          |
+| `TakeOver`             | A user gains control of a record by changing it                          | A user sets a document's owner to themselves       |
+| `PushOntoOthers`       | One user's action gives another user access, without their involvement   | Alice makes Bob the owner of a todo                |
+| `NotCreatable`         | A change produces a record the user couldn't have added directly         | Editing a todo that's shared with someone else's team |
+| `MissingValuesMatch`   | Access depends on two missing values counting as the same                | A user on no team sees todos shared with no team   |
+| `DeadGrant`            | A grant whose condition never holds, so it does nothing                  | A condition that compares a team with a name       |
+| `Orphan`               | A change leaves a record nobody can see                                  | Archiving a note hides it from its owner too       |
+| `CannotUndo`           | A user can make a change they can't reverse                              | An admin removes their own admin role              |
+
+Each world is a real database with a few records of every entity. Values come from small pools,
+such as "a" or "b" for text and `true` or `false` for a flag, plus `null` for a nullable field, so
+that collisions, such as two users on the same team, happen often. In each world, the check tries
+every change, addition, and deletion that each user could make to the records they can reach.
+
+A user who can already do the same to every other record of an entity doesn't count as gaining
+anything. An admin who can edit every todo doesn't gain access when someone adds one.
+
+#### Read a report
+
+When the check finds a problem, it shrinks the world to the fewest records that still show it, and
+describes that world step by step:
+
+```
+Self-escalation: User: changing admin can give a principal access to other records
+  A principal gains access to other records by changing, adding, or deleting a record.
+
+  In this world:
+    User1(name = "a", email = "a", admin = false, team = null)
+    User2(name = "a", email = "a", admin = false, team = null)
+  User2 changes User2: admin false → true. The policy allows it.
+  Afterwards, User2 can also: update User1, delete User1, change User1.name, change User1.admin
+
+  If this is intended, allow it:
+    allow(Check.SelfEscalation, User::admin, because = "…")
+```
+
+Read it from the top: the world, what one user did, and what that let them do. Here, the fix is a
+column rule that lets only admins change `admin`.
+
+The same seed always builds the same worlds, so a failure always reproduces.
+
+#### Allow what's intended
+
+Not every finding is a mistake. Sharing a todo with a team is supposed to give the team access. When
+a finding is intended, allow it, and say why:
+
+```kotlin
+@Test
+fun `the policies have no loopholes beyond the intended ones`(): Unit {
+    checkPolicies(JetlinSchema) {
+        allow(Check.PushOntoOthers, Todo::team, because = "sharing a todo with a team is the point")
+        allow(Check.CannotUndo, User::admin, because = "an admin who gives up the role needs another admin to restore it")
+    }
+}
+```
+
+You can allow a check for one column, as above, for a whole entity (`allow(Check.PushOntoOthers,
+Announcement::class, because = …)`), or everywhere (`allow(Check.CannotUndo, because = …)`). The
+reasons are worth writing well: together, they describe what your policies let users do to each
+other. `samples/teams`' `PoliciesTest` has seven of them, and it also shows the check catching the
+sample's old self-admin loophole.
+
+#### State your own rules
+
+The built-in checks look for patterns that are usually wrong. To check something specific to your
+application, state it:
+
+```kotlin
+checkPolicies(JetlinSchema) {
+    // Checked for every action a user is allowed to take, in every world.
+    never("a non-admin archives a todo") { event ->
+        event.changes(Todo::archived) && !(event.principal as User).admin
+    }
+
+    // Checked for every todo and every user, in every world.
+    always(Todo::class, User::class, "an owner can see their own todos") { todo, user, access ->
+        todo.owner != user || access.read
+    }
+}
+```
+
+An `Event` says what a user did (`Action.Create`, `Update`, or `Delete`), who did it, and the
+record's values before and after. `Access` says what one user can do with one record.
+
+#### Compare two policies
+
+When you rewrite a policy, for example, from a hand-written one to grants, check that it still
+decides the same way:
+
+```kotlin
+@Test
+fun `the rewritten todo policy decides like the old one`(): Unit {
+    comparePolicies(JetlinSchema, Todos.table, old = LegacyTodoPolicy, new = Todos.policy).assertSame()
+}
+```
+
+Both policies answer the same questions in the same worlds. Each difference is reported with the
+smallest world that shows it:
+
+```
+Asked "can User1 read Todo1?", the old policy says no, and the new one says yes.
+```
+
+If you're changing a policy on purpose, `comparePolicies(…).differences` lists exactly what changed.
+
+#### Tune the worlds
+
+The defaults find most problems in about a second:
+
+```kotlin
+checkPolicies(JetlinSchema) {
+    worlds = 100                  // Default: 30. More worlds find rarer problems.
+    seed = 42                     // Default: 1. Change it to explore different worlds.
+    maxActionsPerWorld = 300      // Default: 150.
+
+    entity(User::class) {
+        count = 4                                      // Default: 3 for principals, 2 otherwise.
+        values(User::role, "viewer", "editor", "owner") // Default: "a" or "b" for text.
+    }
+}
+```
+
+Choose values when a policy compares a field with particular values, such as a role. Otherwise, the
+check never tries the values that matter. The values you give are used exactly, so include `null` if
+the field should sometimes be empty.
+
+#### Limits
+
+- The check only knows what the patterns and your rules tell it. A policy that consistently does the
+  wrong thing passes, unless a rule you state says otherwise.
+- Worlds are small. Problems that need many records, or values outside the pools, can be missed.
+  That's rarely a problem for access rules, which usually go wrong with two users and one record.
+- `DeadGrant` only works for policies built with `policy { }`, because a hand-written policy can't be
+  looked inside.
+- The check never deletes a record that another record references. The database would refuse that
+  anyway.
 
 ## 3. Getting a principal, and protecting routes
 
@@ -854,8 +1032,8 @@ This approach isn't leak-proof, but leaks can be found, for these reasons:
 1. Application code can't reach an unchecked lookup, and a `:conventions` test enforces that.
 2. Relation collections are filtered by policy on every read.
 3. Writes are checked again, because a reference can outlive the check that produced it.
-4. There's exactly one way to bypass the checks. It's called `unsafe`, it's easy to search for, and it
-   logs a warning every time it runs.
+4. There's exactly one way to bypass the checks. It's called `unsafe`, so every use is easy to search
+   for and stands out in review.
 5. The leak detector, turned on with `-Djetlin.db.leakDetector=true`, records which principals
    obtained each record, and throws when a principal that never obtained a record reads one of its
    fields. The exception's cause is the stack trace where the record was obtained. It's on for every

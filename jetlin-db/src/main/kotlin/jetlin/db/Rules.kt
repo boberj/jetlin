@@ -150,6 +150,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
     internal val reassignments = mutableListOf<Reassignment<T, P>>()
     internal val offers = mutableListOf<Offer<T, P>>()
     internal val requirements = mutableListOf<Condition<T, P>>()
+    internal val granted = mutableListOf<Pair<Permission<T, P>, Condition<T, P>>>()
     private val unclaimed = LinkedHashSet<Permission<T, P>>()
 
     // ---- Values -----------------------------------------------------------------------------------
@@ -249,7 +250,16 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * title, but not its owner: afterwards, the todo wouldn't be hers to change. To let records
      * change hands, use [canReassign] or [canOffer].
      *
-     * The permission covers every column except those with their own [canChange] grants.
+     * The permission covers every column except two kinds:
+     *
+     * - Columns with their own [canChange] grants.
+     * - Columns that say who a record belongs to, according to [canReassign] or [canOffer]. Once you
+     *   declare how a record changes hands, that's the only way it does. This permission can still
+     *   clear such a column, setting it to `null`, which hands the record to nobody.
+     *
+     * The second kind matters for grants whose condition doesn't depend on the record, such as
+     * "the principal is an admin". That condition holds after any change, so without this, it would
+     * let admins hand a record to anyone.
      */
     public fun canUpdate(): Permission<T, P> = permission("canUpdate()") { updaters += it }
 
@@ -322,8 +332,12 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * A new record can start out already handed on, when [column] holds principals: Alice can add
      * a task assigned to Bob, because she could have added it for herself and then reassigned it.
      *
-     * Setting [column] to `null` isn't handing the record on. The other grants decide whether
-     * that's allowed.
+     * Once a column has a grant like this, [canUpdate] no longer covers giving it a new value: only
+     * grants like this one can hand the record on. That includes principals whose [canUpdate] grant
+     * holds whatever the record says, such as admins. To let admins reassign records, grant this to
+     * them too.
+     *
+     * Setting [column] to `null` isn't handing the record on, so [canUpdate] still covers it.
      *
      * @param column The column that says who the record belongs to. It must be a `var`.
      * @param to Returns the condition a candidate must meet. It receives the candidate as a value,
@@ -371,6 +385,10 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
      * the same `update { }`, and nothing else. Nobody can push a record onto someone else this way.
      * Only the recipient can make it theirs.
      *
+     * Accepting an offer becomes the only way [column] gets a new value. [canUpdate] doesn't cover
+     * it, even for principals whose [canUpdate] grant holds whatever the record says, such as
+     * admins.
+     *
      * @param column The column that says who owns the record. It must be a `var`.
      * @param via The column that says who the record is offered to, or `null` if nobody.
      */
@@ -393,6 +411,7 @@ public class PolicyRules<T : Record, P : Principal> internal constructor() {
     public infix fun Condition<T, P>.implies(permission: Permission<T, P>) {
         check(unclaimed.remove(permission)) { "${permission.description} is granted twice. Create it again for each grant." }
         permission.grant(this)
+        granted += permission to this
     }
 
     // ---- Grants, written subject first ------------------------------------------------------------
@@ -869,6 +888,13 @@ internal class RulesPolicy<T : Record, P : Principal>(declare: PolicyRules<T, P>
 
     override fun canChange(change: Change<T>, principal: P): Boolean = Refusals.note(refuseChange(change, principal))
 
+    @JetlinDbTooling
+    override fun describeGrants(): List<GrantDescription> = rules.granted.map { (permission, condition) ->
+        GrantDescription(permission.description, condition.statement) { record, principal ->
+            condition.holds(Env(record, principal))
+        }
+    }
+
     /** Returns why [principal] can't add [record], or `null` if they can. */
     fun refuseCreate(record: T, principal: P): String? {
         refuseRequirements(record, principal)?.let { return it }
@@ -907,7 +933,6 @@ internal class RulesPolicy<T : Record, P : Principal>(declare: PolicyRules<T, P>
         // is judged as if they hadn't moved.
         val keep = HashSet<String>()
         var updated = false
-        var missedCandidates: String? = null
         for (column in change.columns) {
             val name = column.name
             val value = change.newValueOf(column)
@@ -921,21 +946,37 @@ internal class RulesPolicy<T : Record, P : Principal>(declare: PolicyRules<T, P>
                     }
                     keep += name
                 }
-                rules.updaters.holdFor(env) -> {
-                    updated = true
-                    if (value != null && reassignments.isNotEmpty()) {
-                        missedCandidates = "$name can only be reassigned if ${reassignments.first().candidates}"
-                    }
-                }
-                else -> return reassignments.firstOrNull()?.let { "$name can only be reassigned if ${it.candidates}" }
-                    ?: only("updated", rules.updaters)
+                // canReassign and canOffer say how the record changes hands, so canUpdate can't hand
+                // it on another way. It can still clear the column, which hands it to nobody.
+                value != null && changesHands(name) -> return refuseHandingOn(name, reassignments)
+                rules.updaters.holdFor(env) -> updated = true
+                else -> return only("updated", rules.updaters)
             }
         }
         return change.afterwards(keeping = keep) { changed ->
             refuseRequirements(changed, principal)?.let { return@afterwards it }
             if (!updated || rules.updaters.holdFor(Env(changed, principal))) return@afterwards null
-            missedCandidates ?: "afterwards, it could only be updated if ${rules.updaters.statements()}"
+            "afterwards, it could only be updated if ${rules.updaters.statements()}"
         }
+    }
+
+    /**
+     * Checks whether the column named [name] says who the record belongs to, according to a
+     * [PolicyRules.canReassign] or [PolicyRules.canOffer] grant. [PolicyRules.canUpdate] doesn't cover
+     * giving such a column a new value.
+     */
+    private fun changesHands(name: String): Boolean =
+        rules.reassignments.any { it.column.name == name } || rules.offers.any { it.column.name == name }
+
+    /**
+     * Returns why setting the column named [name] to a new value is refused, given the [reassignments]
+     * of it that the principal could use.
+     */
+    private fun refuseHandingOn(name: String, reassignments: List<Reassignment<T, P>>): String {
+        reassignments.firstOrNull()?.let { return "$name can only be reassigned if ${it.candidates}" }
+        val anyone = rules.reassignments.filter { it.column.name == name }
+        if (anyone.isNotEmpty()) return "$name can only be reassigned if ${anyone.map { it.who }.statements()}"
+        return "$name can only change hands when someone accepts an offer"
     }
 
     /** Checks whether [principal] can see [record], ignoring [PolicyRules.alwaysRequires]. */
@@ -950,7 +991,7 @@ internal class RulesPolicy<T : Record, P : Principal>(declare: PolicyRules<T, P>
     /** Checks whether a grant lets [principal] change the column named [name] on [record]. */
     private fun coversColumn(record: T, name: String, principal: P): Boolean {
         val env = Env(record, principal)
-        val grants = rules.columnGrants[name] ?: return rules.updaters.holdFor(env)
+        val grants = rules.columnGrants[name] ?: return !changesHands(name) && rules.updaters.holdFor(env)
         return sees(record, principal) && grants.holdFor(env)
     }
 

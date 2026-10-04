@@ -212,6 +212,18 @@ public interface Policy<T : Record, P : Principal> {
             change.columns.all { column -> canWrite(record, column, principal) } &&
             change.afterwards { changed -> canCreate(changed, principal) }
     }
+
+    /**
+     * Describes this policy's grants for tooling, such as `jetlin-db-testing`, or returns `null` if
+     * the policy wasn't built with [policy].
+     *
+     * You don't need to override it. Policies built with [policy] describe themselves, and tooling
+     * treats a hand-written policy as one it can only test from the outside.
+     *
+     * @return The grants, or `null` if they can't be described.
+     */
+    @JetlinDbTooling
+    public fun describeGrants(): List<GrantDescription>? = null
 }
 
 /**

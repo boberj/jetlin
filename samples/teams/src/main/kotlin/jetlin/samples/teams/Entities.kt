@@ -115,14 +115,17 @@ class Todo(
 
     /**
      * The todo's grants, read aloud: "If the principal is its owner, they can edit it. If the
-     * principal is an admin, they can edit it. If the principal's team is its team, they can read
-     * it. If the principal is an admin, they can change archived."
+     * principal is an admin, they can update and delete it. If the principal's team is its team, they
+     * can read it. If the principal is an admin, they can change archived."
      */
     companion object : Policy<Todo, User> by policy({
         val admin = (principal() map User::admin) describedAs "the principal is an admin"
 
         principal() equalTo record(Todo::owner) implies canEdit()
-        admin implies canEdit()
+        // Admins can change and delete anyone's todo, but not add one in someone else's name.
+        // PoliciesTest found that canEdit() let them, and nothing in the sample needs it.
+        admin implies canUpdate()
+        admin implies canDelete()
         // Pattern 2: sharing a todo with a team lets its members see it, not change it.
         principal() map User::team equalTo record(Todo::team) implies canRead()
         // Pattern 3: with its own grant, archived is no longer covered by the owner's canEdit().

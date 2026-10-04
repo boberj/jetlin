@@ -1,7 +1,6 @@
 package jetlin.db
 
 import kotlin.reflect.KClass
-import org.slf4j.LoggerFactory
 
 /**
  * The only route from application code to stored records.
@@ -19,7 +18,8 @@ import org.slf4j.LoggerFactory
  * 2. Relation collections are filtered on every read, at the cost of running the policy for each
  *    record.
  * 3. Writes are checked again, because a reference can outlive the check that produced it.
- * 4. There's exactly one way to bypass the checks, [unsafe], and it logs every use.
+ * 4. There's exactly one way to bypass the checks, [unsafe], and its name makes every use easy to
+ *    find.
  * 5. [LeakDetector] turns a leaked reference into a test failure that includes the stack trace of
  *    where the record was obtained.
  *
@@ -254,10 +254,9 @@ public fun <T : Record> Db.authenticate(type: KClass<T>, match: (T) -> Boolean):
 /**
  * Stores a record without a policy check, for seeding, fixtures, and backfills.
  *
- * You can call it only inside [unsafe], which logs each use. Seeding needs an unchecked insert
- * because the first user in an empty database has no principal to be checked against. Requiring
- * [unsafe] keeps this from becoming a second, unlogged way around the policies. Normal writes use
- * `db.todos.add(…)`, which is checked.
+ * You can call it only inside [unsafe]. Seeding needs an unchecked insert because the first user in
+ * an empty database has no principal to be checked against. Normal
+ * writes use `db.todos.add(…)`, which is checked.
  *
  * @param id the ID to store the record under, for fixtures where the ID matters, such as a seeded
  *   record that something links to by number, or a test that requests `/todo/1`. The ID sequence
@@ -268,13 +267,38 @@ public fun <T : Record> Db.authenticate(type: KClass<T>, match: (T) -> Boolean):
 public fun <T : Record> Db.insertUnchecked(record: T, id: Long? = null): T {
     check(unsafeInEffect) {
         "insertUnchecked stores $record without checking any policy, so it is only allowed inside " +
-            "unsafe { } — which says why, in the log, every time it runs."
+            "unsafe { }, which says why."
     }
     if (id != null) {
         record.adoptStoredId(id)
         Ids.advanceTo(record::class, id)
     }
     return transact { insert(record) }
+}
+
+/**
+ * Creates a record of [table] from column values, and stores it without a policy check.
+ *
+ * Tooling, such as `jetlin-db-testing`, uses it to build throwaway worlds, which needs records built
+ * from raw values instead of constructors. Like the other [insertUnchecked], it works only inside
+ * [unsafe].
+ *
+ * Every column needs a value, keyed by name. A reference's value is the record it points to, which
+ * must be stored in this database.
+ *
+ * @throws IllegalStateException if called outside [unsafe].
+ */
+@JetlinDbTooling
+public fun <T : Record> Db.insertUnchecked(table: Table<T>, values: Map<String, Any?>): T {
+    val row = table.columns.associate { column ->
+        require(column.name in values) { "No value for ${table.name}.${column.name}" }
+        column.name to when (val value = values[column.name]) {
+            is Record -> value.id
+            is Boolean -> if (value) 1L else 0L
+            else -> value
+        }
+    }
+    return insertUnchecked(table.instantiate(Row(row, resident)))
 }
 
 /**
@@ -373,9 +397,6 @@ public object LeakDetector {
 public class LeakDetected internal constructor(message: String, acquiredAt: Throwable?) :
     RuntimeException(message, acquiredAt)
 
-/** The logger for policy bypasses. */
-private val logger = LoggerFactory.getLogger("jetlin.db")
-
 /** How many [unsafe] blocks the current thread is inside. */
 private val unsafeDepth = ThreadLocal.withInitial { 0 }
 
@@ -385,18 +406,17 @@ internal val unsafeInEffect: Boolean get() = unsafeDepth.get() > 0
 /**
  * Runs [block] with all policy checks disabled.
  *
- * This is the only way to bypass policies. It has a distinctive name, so uses are easy to search
- * for, and it logs a warning on every call, so nobody comes to rely on it without noticing. Use it
- * for work that the application does on its own behalf instead of for a user, such as a migration
- * that backfills a column, an admin console, or a test fixture.
+ * This is the only way to bypass policies. It has a distinctive name, so every use is easy to
+ * search for and stands out in review. Use it for work that the application does on its own behalf
+ * instead of for a user, such as a migration that backfills a column, an admin console, or a test
+ * fixture.
  *
  * Blocks can nest. The checks stay off until the outermost block returns. They're off only on the
  * current thread.
  *
- * @param reason why the bypass is needed, not what the block does. It's written to the log.
+ * @param reason why the bypass is needed, not what the block does.
  */
 public fun <T> unsafe(reason: String, block: () -> T): T {
-    logger.warn("jetlin-db: policy checks bypassed — {}", reason)
     unsafeDepth.set(unsafeDepth.get() + 1)
     return try {
         block()

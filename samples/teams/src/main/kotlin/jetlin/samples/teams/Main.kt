@@ -185,9 +185,8 @@ internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve
     val db = Db.open(file, JetlinSchema.tables)
     if (db.resident.recordCount > 0) return db
 
-    // Seeding needs `unsafe`, which logs, because there's no principal yet: nobody can be allowed to
-    // create the first user of an empty database. Everything after this goes through the policy
-    // checks.
+    // Seeding needs `unsafe`, because there's no principal yet: nobody can be allowed to create the
+    // first user of an empty database. Everything after this goes through the policy checks.
     unsafe("seeding the sample database") {
         db.transact {
             val acme = db.insertUnchecked(Team("Acme"))

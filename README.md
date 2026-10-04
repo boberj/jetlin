@@ -383,6 +383,7 @@ instead, because a browser reconnects too quickly for the grace period to expire
 | `jetlin-db-ksp` | KSP processor: tables, column objects, drafts, policy-checked accessors, and the schema snapshot |
 | `jetlin-db-gradle` | `dbDiff`, `dbMigrate`, `dbVerify`, and the migration engine behind them |
 | `samples/demo` | A runnable five-page demo, and the session memory benchmark |
+| `jetlin-db-testing` | Tests `jetlin-db` policies for loopholes, such as users who can make themselves admins, in many small, random databases |
 | `samples/teams` | A sample with several users, with owner-only records, team-shared records, and an admin-only column |
 | `samples/issue-tracker` | An issue tracker in the style of Linear: list, board, projects, ⌘K palette, Tailwind styling |
 | `conventions` | Repository-wide rules that the compiler can't check, written as tests |

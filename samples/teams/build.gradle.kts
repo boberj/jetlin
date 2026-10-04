@@ -18,6 +18,7 @@ dependencies {
     implementation(libs.slf4j.simple)
 
     testImplementation(project(":jetlin-testing"))
+    testImplementation(project(":jetlin-db-testing"))
     testImplementation(libs.kotlin.test)
 }
 

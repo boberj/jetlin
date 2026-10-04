@@ -236,18 +236,27 @@ internal fun emitSchema(entities: List<EntityModel>, packageName: String, object
         appendLine("/**")
         appendLine(" * All stored entities, ordered so that each table is loaded after the tables it references.")
         appendLine(" */")
-        appendLine("$visibility object $objectName {")
-        appendLine("    /** The tables, in load order. Pass them to [jetlin.db.Db.open]. */")
-        appendLine("    $visibility val tables: List<jetlin.db.Table<out jetlin.db.Record>> = listOf(")
-        entities.forEach { entity ->
-            val qualifier = if (entity.packageName == packageName || entity.packageName.isEmpty()) {
+        val qualifiers = entities.map { entity ->
+            if (entity.packageName == packageName || entity.packageName.isEmpty()) {
                 entity.objectName
             } else {
                 "${entity.packageName}.${entity.objectName}"
             }
-            appendLine("        $qualifier.table,")
         }
+        appendLine("$visibility object $objectName : jetlin.db.Schema {")
+        appendLine("    /** The tables, in load order. Pass them to [jetlin.db.Db.open]. */")
+        appendLine("    override val tables: List<jetlin.db.Table<out jetlin.db.Record>> = listOf(")
+        qualifiers.forEach { appendLine("        $it.table,") }
         appendLine("    )")
+        appendLine()
+        appendLine("    private val policies: Map<jetlin.db.Table<out jetlin.db.Record>, jetlin.db.Policy<out jetlin.db.Record, out jetlin.db.Principal>> =")
+        appendLine("        mapOf(")
+        qualifiers.forEach { appendLine("            $it.table to $it.policy,") }
+        appendLine("        )")
+        appendLine()
+        appendLine("    /** Returns the policy declared on [table]'s entity. */")
+        appendLine("    override fun policyFor(table: jetlin.db.Table<out jetlin.db.Record>): jetlin.db.Policy<out jetlin.db.Record, out jetlin.db.Principal> =")
+        appendLine("        policies[table] ?: error(\"${'$'}table isn't part of this schema\")")
         appendLine("}")
         entities.forEach { entity ->
             appendLine()

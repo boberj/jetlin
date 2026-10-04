@@ -34,6 +34,7 @@ include(
     ":jetlin-db-ksp",
     ":jetlin-server-ktor",
     ":jetlin-testing",
+    ":jetlin-db-testing",
     ":samples:demo",
     ":samples:teams",
     ":samples:issue-tracker",

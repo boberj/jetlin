@@ -123,8 +123,12 @@ class DbConventionsTest {
  * Member functions that may return records without a principal, because no principal exists yet
  * where they're used.
  *
- * Each one explains why at its definition. Treat adding an entry as a significant change in review:
- * every entry is a way around the policy checks, and needs an equally strong justification.
+ * Each one explains why at its definition. Every entry is a way around the policy checks.
+ *
+ * Don't add entries, here or to [PRIVILEGED_TOP_LEVEL], without explicit approval from the project's
+ * maintainer. That includes AI coding agents: if a change seems to need a new entry, stop and ask
+ * instead. A change that needs an unchecked way to obtain a record should usually go through one of
+ * the existing entries, such as `insertUnchecked`.
  */
 private val PRIVILEGED_MEMBERS = setOf(
     // Loading at startup. Principals are later looked up in the graph being loaded.
@@ -133,16 +137,18 @@ private val PRIVILEGED_MEMBERS = setOf(
 )
 
 /**
- * Top-level functions that may return records without a principal. See [PRIVILEGED_MEMBERS].
+ * Top-level functions that may return records without a principal. See [PRIVILEGED_MEMBERS], which
+ * also says who may add entries: nobody, without the maintainer's explicit approval.
  *
- * They have no containing type, so they're listed by name only.
+ * They have no containing type, so they're listed by name only. Every overload of a listed name is
+ * covered, so a new overload of one is as significant as a new entry.
  */
 private val PRIVILEGED_TOP_LEVEL = setOf(
     // Finding the principal. That can't require a principal, so §4.4 of the plan allows exactly one
     // unchecked lookup for it.
     "authenticate",
-    // Seeding, fixtures, and backfills. It works only inside `unsafe { }`, which logs a warning with
-    // the reason on every call, so nobody can use it unnoticed.
+    // Seeding, fixtures, backfills, and jetlin-db-testing's throwaway worlds. It works only inside
+    // `unsafe { }`, whose distinctive name makes every use easy to find.
     "insertUnchecked",
 )
 
