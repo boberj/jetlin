@@ -57,9 +57,7 @@ public class Update internal constructor(
      */
     public suspend fun assertOnlyWithin(vararg matchers: NodeMatcher) {
         val allowed = test.inspect { owner ->
-            matchers.flatMap { owner.find(it) }.flatMapTo(mutableSetOf()) { subtree ->
-                subtree.find(anyNode()).map { it.id } + subtree.id
-            }
+            matchers.flatMap { owner.find(it) }.flatMapTo(mutableSetOf()) { subtree -> subtree.elements().map { it.id } }
         }
         val outside = changedNodes - allowed
         if (outside.isNotEmpty()) {
@@ -101,11 +99,21 @@ public class Update internal constructor(
     private suspend fun describeIds(ids: Set<NodeId>): String {
         if (ids.isEmpty()) return "none"
         val byId = test.inspect { owner ->
-            owner.find(anyNode()).filter { it.id in ids }.associate { it.id to "<${it.tag}>" }
+            owner.root.elements().filter { it.id in ids }.associate { it.id to "<${it.tag}>" }
         }
         return ids.sorted().joinToString { id -> "#$id ${byId[id] ?: "(no longer in the tree)"}" }
     }
 }
+
+/**
+ * Returns this element and every element below it.
+ *
+ * `find(anyNode())` isn't a substitute. `find` keeps only the innermost of nested matches, which is
+ * right for a query, but for "every element" it drops each element that has element children, such
+ * as a list that holds rows.
+ */
+private fun ElementNode.elements(): List<ElementNode> =
+    listOf(this) + childNodes.filterIsInstance<ElementNode>().flatMap { it.elements() }
 
 /**
  * Runs [block] and returns the nodes it changed.

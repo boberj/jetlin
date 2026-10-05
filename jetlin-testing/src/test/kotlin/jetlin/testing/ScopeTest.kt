@@ -118,6 +118,24 @@ class ScopeTest {
     }
 
     @Test
+    fun `assertOnlyWithin allows a change to an element between the subtree's root and its leaves`(): Unit = runViewTest {
+        setContent {
+            var picked by remember { mutableStateOf(false) }
+            Div({ testTag("card") }) {
+                // Neither the root of the subtree nor a leaf: it has an element child of its own.
+                Div({ classes(if (picked) "picked" else "plain") }) {
+                    Span { Text("label") }
+                }
+                Button({ onClick { picked = !picked } }) { Text("pick") }
+            }
+        }
+
+        val update = recordUpdate { onNode(hasText("pick")).click() }
+
+        update.assertOnlyWithin(hasTestTag("card"))
+    }
+
+    @Test
     fun `assertOnlyWithin names what escaped the subtree`(): Unit = runViewTest {
         setContent {
             val rows = remember { mutableStateListOf("one", "two") }
