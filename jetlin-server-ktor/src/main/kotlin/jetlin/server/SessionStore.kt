@@ -28,6 +28,11 @@ public data class SessionSnapshot(
      * place to hook in a migration, and adding the field later would itself be a breaking change.
      */
     public val version: Int = CURRENT_VERSION,
+    /**
+     * Identifies the browser that held the session, or `null` if the session wasn't bound. A socket
+     * has to present the same binding to wake the session. See [SessionRegistry.attach].
+     */
+    public val binding: String? = null,
 ) {
     public companion object {
         /** The format version that this code writes. */

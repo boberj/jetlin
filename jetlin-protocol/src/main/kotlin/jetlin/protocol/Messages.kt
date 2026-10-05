@@ -69,6 +69,22 @@ public sealed interface ServerMessage {
     ) : ServerMessage
 
     /**
+     * Leaves the live session with a real page load, which the server can answer with cookies.
+     *
+     * [Navigate] moves inside the session and never makes an HTTP request, so it can't carry a
+     * `Set-Cookie`. Signing in and out needs exactly that, so this message hands the browser to an
+     * ordinary HTTP endpoint instead.
+     *
+     * @property url where to go.
+     * @property post the fields to submit as a `POST` form, or `null` to follow a link instead. A
+     *   secret, such as a sign-in ticket, belongs here and not in [url], because URLs end up in
+     *   access logs and browser history.
+     */
+    @Serializable
+    @SerialName("load")
+    public data class Load(val url: String, val post: Map<String, String>? = null) : ServerMessage
+
+    /**
      * Something went wrong on the server.
      *
      * @property message a description for the browser console.

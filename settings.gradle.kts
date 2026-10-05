@@ -33,6 +33,7 @@ include(
     ":jetlin-db",
     ":jetlin-db-ksp",
     ":jetlin-server-ktor",
+    ":jetlin-server-ktor-auth",
     ":jetlin-testing",
     ":jetlin-db-testing",
     ":samples:demo",

@@ -28,6 +28,33 @@ import kotlin.test.assertTrue
 class TeamsAppTest {
 
     @Test
+    fun `signing in goes back to the page that asked for it`(): Unit = withSample { db ->
+        runViewTest {
+            val session = RecordingControls()
+            signedInAs(db, email = null, session = session)
+
+            // The guard sent the signed-out browser here, with the page it wanted in `next`.
+            navigate("/notes")
+            assertEquals("/login?next=/notes", currentUrl)
+            onNode(hasTestTag("signin-bob")).click()
+
+            assertEquals(listOf("signIn(bob@example.com, /notes)"), session.calls)
+        }
+    }
+
+    @Test
+    fun `switching user signs out, which ends every tab`(): Unit = withSample { db ->
+        runViewTest {
+            val session = RecordingControls()
+            signedInAs(db, "alice@example.com", session)
+
+            onNode(hasTestTag("sign-out")).click()
+
+            assertEquals(listOf("signOut(/login)"), session.calls)
+        }
+    }
+
+    @Test
     fun `a principal sees their own todos and their team's`(): Unit = withSample { db ->
         runViewTest {
             signedInAs(db, "bob@example.com")
@@ -305,11 +332,15 @@ class TeamsAppTest {
     }
 }
 
-/** Signs in as [email] and composes the application's real route table. */
-private suspend fun ViewTest.signedInAs(db: Db, email: String) {
-    setAttribute(PrincipalKey, db.user(email))
+/**
+ * Signs in as [email] and composes the application's real route table.
+ *
+ * @param session records what the sign-in page and the sign-out button ask for.
+ */
+private suspend fun ViewTest.signedInAs(db: Db, email: String?, session: RecordingControls = RecordingControls()) {
+    setAttribute(PrincipalKey, email?.let { db.user(it) })
     setRoutes {
-        view("/login") { SignInPage() }
+        view("/login") { SignInPage(session) }
         view("/", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }
         view("/notes", requires = Principals.signedIn) { WithPrincipal { NotesPage(db) } }
         view(
@@ -320,6 +351,6 @@ private suspend fun ViewTest.signedInAs(db: Db, email: String) {
         ) { todo -> WithPrincipal { TodoDetailPage(db, todo) } }
         view("/admin/users", requires = Principals.where { it.admin }) { WithPrincipal { AdminUsersPage(db) } }
         // These tests don't use the external system. They're about stored data and who can see it.
-        app { route -> Shell(hub = null, content = route) }
+        app { route -> Shell(hub = null, session = session, content = route) }
     }
 }

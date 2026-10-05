@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.compose)
+    // The session that the sign-in cookie refers to is @Serializable, which is how Ktor stores it.
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     id("jetlin.db")
     application
@@ -8,6 +10,7 @@ plugins {
 
 dependencies {
     implementation(project(":jetlin-server-ktor"))
+    implementation(project(":jetlin-server-ktor-auth"))
     implementation(project(":jetlin-db"))
     ksp(project(":jetlin-db-ksp"))
 

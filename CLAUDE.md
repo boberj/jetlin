@@ -66,6 +66,8 @@ jetlin-runtime    (CompositionHost, FramePolicy, GlobalSnapshotManager — Compo
 jetlin-html       (LiveView, HtmlApplier, virtual DOM, elements, routing, forms, HTML serializer)
       ▲
 jetlin-server-ktor (HTTP + WebSocket endpoints, SessionRegistry, rate limiting)
+      ▲
+jetlin-server-ktor-auth (Ktor typed session auth: principal, token binding, sign-in/out tickets)
 
 jetlin-testing    (drives a jetlin-html view headlessly — no browser, server or socket)
 jetlin-db-testing (fuzz-tests jetlin-db policies for loopholes in small random worlds)

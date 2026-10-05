@@ -76,8 +76,11 @@ public class LiveView(
     @Volatile
     private var ack = 0L
 
-    /** The navigations waiting to be sent. Each one goes out after the patch that renders it. */
-    private val pendingNavigations = ArrayDeque<ServerMessage.Navigate>()
+    /**
+     * The navigations and page loads waiting to be sent. Each one goes out after the patch that
+     * renders it.
+     */
+    private val pendingNavigations = ArrayDeque<ServerMessage>()
 
     /** The URL this session shows, including the query string. */
     public val currentUrl: String get() = request.url
@@ -85,6 +88,10 @@ public class LiveView(
     private val navigator = object : Navigator {
         override fun push(url: String): Unit = goto(url, replace = false, notifyClient = true)
         override fun replace(url: String): Unit = goto(url, replace = true, notifyClient = true)
+        override fun load(url: String, post: Map<String, String>?) {
+            pendingNavigations.addLast(ServerMessage.Load(url, post))
+            owner.signalDirty()
+        }
     }
 
     /**

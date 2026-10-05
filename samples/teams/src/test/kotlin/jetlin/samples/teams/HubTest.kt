@@ -173,7 +173,7 @@ private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
     setRoutes {
         view("/", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }
         view("/hub", requires = Principals.signedIn) { WithPrincipal { HubPage(hub) } }
-        app { route -> Shell(hub, route) }
+        app { route -> Shell(hub, RecordingControls(), route) }
     }
 }
 

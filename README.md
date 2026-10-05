@@ -328,6 +328,42 @@ Everyone showing the same value shares the polling, so a hundred viewers cause o
 interval, and it stops when the last of them leaves. [`docs/architecture.md`](docs/architecture.md)
 §8 covers the details, and `samples/teams` has a working example.
 
+## Sign users in
+
+`jetlin-server-ktor-auth` connects a Ktor typed session scheme to Jetlin. The cookie holds only an
+opaque session ID, and the session stays on the server:
+
+```kotlin
+val sessionAuth = session<AppSession, User>("app") {
+    transport = SessionTransportType.CookieId(SessionStorageMemory()) {
+        cookie.path = "/"
+        cookie.httpOnly = true
+    }
+    validate { session -> users.find(session.userId) }
+}
+install(sessionAuth)
+
+jetlin {
+    val auth = authentication(sessionAuth, principal = PrincipalKey)
+    view("/login") { SignInPage(auth.rememberControls()) }
+    view("/", requires = Principals.signedIn) { HomePage() }
+}
+
+@Composable
+fun SignInPage(session: SessionControls<AppSession>) {
+    Button({ onClick { session.signIn(AppSession(userId = "alice"), next = queryParam("next") ?: "/") } }) {
+        Text("Sign in")
+    }
+}
+```
+
+Handlers run over the WebSocket, which can't set a cookie. So `signIn` and `signOut` hand the browser
+a one-time ticket, and the browser posts it to an HTTP endpoint that sets the cookie with a new session
+ID and redirects to `next`. Signing out ends the browser's other tabs as well. Every session token is
+bound to the cookie, so a token that leaks from a page is no use in another browser. The API builds on
+Ktor's `@ExperimentalKtorApi` typed authentication, so it can change with Ktor.
+[`docs/architecture.md`](docs/architecture.md) §7 describes the flow and its defenses.
+
 ## Run the tests
 
 To run the tests and benchmarks, use the following commands:
@@ -377,6 +413,7 @@ instead, because a browser reconnects too quickly for the grace period to expire
 | `jetlin-protocol` | Ops and messages (kotlinx.serialization) |
 | `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, routing, route guards, forms, and the HTML serializer |
 | `jetlin-server-ktor` | HTTP and WebSocket endpoints, and the session registry |
+| `jetlin-server-ktor-auth` | Sign-in sessions on Ktor's typed session authentication: principal, token binding, and sign-in and sign-out from handlers |
 | `jetlin-client` | The TypeScript browser runtime (`npm run build` produces the committed `jetlin.js`) |
 | `jetlin-testing` | Runs views without a browser, for testing an application's own UI logic |
 | `jetlin-db` | Records, cells, the identity map, policies, the gate, snapshot transactions, and SQLite |

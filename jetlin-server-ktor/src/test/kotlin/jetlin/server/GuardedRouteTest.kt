@@ -111,7 +111,7 @@ private val readableNotes = mapOf("7" to Note("Seven"))
 
 private fun io.ktor.server.application.Application.guardedApp(principal: Person?) {
     jetlin {
-        attributes { mapOf(PersonKey to principal) }
+        principal(PersonKey) { principal }
         view("/login", title = "Sign in") { Page("Sign in") }
         view("/todos", title = "Todos", requires = Principals.signedIn) { Page("Todos") }
         view("/admin/users", title = "Users", requires = Principals.where { it.admin }) { Page("Users") }

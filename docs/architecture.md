@@ -307,6 +307,55 @@ origins, for deployments where the page and the socket use different hostnames.
 Sessions are cleaned up on a timer. If no WebSocket connects, or the socket disconnects and doesn't
 reconnect within the grace period, the session hibernates. See [§9](#hibernation).
 
+### Binding tokens to the browser
+
+The session token is embedded in the page, so it can leak through a saved page, a log, or a
+screenshot. On its own, it would let whoever found it drive the session. `JetlinConfig.bindSessions`
+closes that gap: it returns a value that identifies the browser, which the registry records when the
+page is rendered and compares, in constant time, when a socket attaches. A socket from another browser
+gets the same fatal "unknown session" error as a wrong token, and the session stays available to its
+own browser. Hibernated snapshots keep the binding, so waking checks it too. A snapshot presented from
+the wrong browser goes back to the store instead of being consumed.
+
+`jetlin-server-ktor-auth` binds each session to a SHA-256 hash of the sign-in cookie's session ID. It's
+a hash because snapshots may be persisted, and the ID itself is a credential. Applications that don't
+set a binding keep the old behavior: an unbound session attaches with the token alone.
+
+`SessionRegistry.endSessions(binding)` ends every live session of one browser. An attached socket gets
+`Error(fatal = true)`, and the client reloads as whoever it is now. A session in its grace period is
+closed and never hibernates. Hibernated snapshots are left alone, because they can't be woken without
+the binding that the browser no longer presents.
+
+### Signing in
+
+Event handlers run over the WebSocket, which can't set a cookie, so signing in from a handler needs a
+real HTTP request. `jetlin-server-ktor-auth` builds that on Ktor's typed session authentication, with
+a `CookieId` transport: the cookie holds only an opaque ID, and the session stays in a Ktor
+`SessionStorage` on the server.
+
+1. The handler calls `signIn(session, next)` on the `SessionControls` that
+   `SessionAuth.rememberControls()` returned. The server stores the session under a one-time ticket,
+   32 random bytes that expire after 60 seconds.
+2. The socket sends `ServerMessage.Load("/jetlin/auth", post = {ticket})`. The client submits a
+   hidden form. It's a form rather than `fetch` because a form submission is a top-level navigation,
+   so the browser applies the response's `Set-Cookie` and follows its redirect. The ticket goes in the
+   body, not the URL, which keeps it out of access logs.
+3. `POST /jetlin/auth` refuses anything that isn't same-origin, by `Sec-Fetch-Site` and `Origin`,
+   which stops login CSRF. It spends the ticket whatever the outcome, ends the live sessions of the
+   browser's previous identity, and sets the new session with a new ID. Ktor would otherwise reuse the
+   ID the request arrived with, which allows session fixation. It redirects with `303` to `next` if
+   that's a path on this site, and to `/` otherwise, so the sign-in page can't be used as an open
+   redirect.
+
+Signing out is the same flow. It clears the session and ends every live session of the browser, so
+another tab can't go on as the user who left.
+
+Jetlin's page renders and socket are registered under `authenticateWithOptional(scheme)`.
+Authentication is optional because route guards decide who may see what, and they redirect to the
+sign-in page with the original URL in `next`. A cookie whose session no longer validates, for example
+because its user was deleted, is cleared, and the browser is sent back to the same URL as nobody,
+instead of getting `401` on every request until the cookie expires.
+
 ### Failures
 
 Three kinds of failure can happen on an open socket, and each is handled differently.
@@ -388,7 +437,7 @@ on it to navigate within the session:
 ```kotlin
 jetlin {
     head = STYLES
-    attributes { call -> mapOf(CurrentUser to call.principal<User>()) }
+    principal(CurrentUser) { call -> lookUpUser(call) }
     view("/", title = "Todos") { TodoListPage() }
     view("/todo/{id}", title = "Edit") { TodoDetailPage() }
 }
@@ -403,11 +452,12 @@ fun TodoDetailPage() {
 }
 ```
 
-`RequestContext` holds the path, the path parameters, the query parameters, and the headers. The
-application adds its own values, such as a principal, a tenant, or a locale, through `AttributeKey`s
-computed from the originating HTTP request. That avoids passing a type parameter through the whole
-configuration DSL. Attributes are computed when the page is rendered, and again only when a WebSocket
-wakes a hibernated session, where the principal has to be recomputed instead of trusted from a
+`RequestContext` holds the path, the path parameters, the query parameters, the headers, and the
+principal. The application declares the principal's `AttributeKey` and supplies the value from the
+originating HTTP request with `principal(key) { call -> … }`, which avoids passing a type parameter
+through the whole configuration DSL. `jetlin-server-ktor-auth` does this from a Ktor session scheme
+(see [Signing in](#signing-in)). The principal is computed when the page is rendered, and again only
+when a WebSocket wakes a hibernated session, where it has to be recomputed instead of trusted from a
 snapshot. A socket that reconnects to a running composition keeps the existing context.
 
 Because `Link` renders a real anchor, it also works without JavaScript. Middle-click and **Open in new
@@ -678,7 +728,9 @@ worth stating clearly, because it's easy to assume otherwise.
 A store only ever holds hibernated sessions. A session exists only on its node during three periods,
 wherever snapshots are stored: while a socket is connected, between rendering the page and the socket
 connecting, and during the disconnect grace period, when the composition is deliberately kept. A
-request that reaches a different node during any of these finds nothing.
+request that reaches a different node during any of these finds nothing. Sign-in tickets are also kept
+on one node, for the few hundred milliseconds between a handler issuing one and the browser posting it.
+Ending a browser's sessions on sign-out reaches only the live sessions on the node that handled it.
 
 Handling those periods requires a policy decision, not more storage. The options are sticky routing;
 hibernating immediately on disconnect, and paying for a new render after every brief interruption; or
@@ -1070,10 +1122,11 @@ The gaps are grouped by what each one prevents, not by how much work it is.
 - `clientOnly` can target only the element itself or an ancestor, by class. There's no targeting of
   siblings, and no node references. Targeting a sibling requires a handle to a node that might not
   have been composed yet, which is a design problem, not only an implementation task.
-- The session token is a bearer token. Anyone who has it can connect to the session. It's generated
-  with `SecureRandom`, never reused, and appears only in the page it belongs to. But it isn't bound to
-  a cookie or a principal, so a token leaked through a referrer header or a log allows a session
-  takeover. Binding it to the request that created it is the obvious improvement.
+- Without a binding, the session token is a bearer token. It's generated with `SecureRandom`, never
+  reused, and appears only in the page it belongs to. An application that uses
+  `jetlin-server-ktor-auth` binds it to the sign-in cookie (see
+  [Binding tokens to the browser](#binding-tokens-to-the-browser)). One that doesn't, and doesn't call
+  `bindSessions` itself, still has a token that anyone who finds it can use.
 
 ### Wanted, but not urgent
 

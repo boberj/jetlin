@@ -11,10 +11,13 @@ import io.ktor.server.application.install
 import io.ktor.server.request.path
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
+import io.ktor.util.AttributeKey as KtorAttributeKey
+import io.ktor.websocket.close
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import jetlin.html.Access
@@ -146,7 +149,9 @@ public class JetlinConfig {
 
     /** The registered views, in the order they were registered. */
     internal val views: MutableList<ViewRegistration> = mutableListOf()
-    internal var attributeFactory: (suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>)? = null
+    internal var principalSource: (suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>)? = null
+    internal var routeWrapper: (Route.(routes: Route.() -> Unit) -> Unit)? = null
+    internal var bindingSource: (suspend (ApplicationCall) -> String?)? = null
     internal var appContainer: (@Composable (route: @Composable () -> Unit) -> Unit)? = null
 
     /**
@@ -209,21 +214,51 @@ public class JetlinConfig {
     }
 
     /**
-     * Computes the session's values from the HTTP call that created it.
+     * Supplies the session's principal from the HTTP call that created it.
      *
-     * This is where an authenticated principal, a tenant, or a locale enters the composition. Views
-     * read the values back through [RequestContext.get], with the keys the application declared. The
-     * factory runs on the HTTP call, because that's the only point where Ktor's call context still
-     * exists.
+     * Views and guards read it back with `LocalRequest.current[key]`, or through `Principals`. It's
+     * computed on the HTTP call, because that's the only point where Ktor's call context, and so its
+     * authentication, still exists. `jetlin-server-ktor-auth` calls this for you. Call it yourself
+     * only if you authenticate some other way.
      *
-     * The factory runs once when the page is rendered. It runs again only if a socket wakes a
+     * [resolve] runs once when the page is rendered. It runs again only if a socket wakes a
      * hibernated session, because the principal then has to be recomputed from the new connection
      * instead of trusted from a snapshot that might be minutes old. A socket that reconnects to a
-     * running composition doesn't call it, because that session already has its context. So the
-     * factory can do real work, but it should be idempotent.
+     * running composition doesn't call it, because that session already has its principal. So it can
+     * do real work, but it should be idempotent.
+     *
+     * @param key the attribute key that holds the principal, or `null` when nobody is signed in.
+     * @param resolve returns the principal for the call, or `null`.
      */
-    public fun attributes(factory: suspend (ApplicationCall) -> Map<AttributeKey<*>, Any?>) {
-        attributeFactory = factory
+    public fun <P : Any> principal(key: AttributeKey<P?>, resolve: suspend (ApplicationCall) -> P?) {
+        check(principalSource == null) { "The principal is already configured" }
+        principalSource = { call -> mapOf(key to resolve(call)) }
+    }
+
+    /**
+     * Registers Jetlin's routes inside [wrapper], which must call `routes()` exactly once.
+     *
+     * It's for integrations that have to put Jetlin's page renders and its socket under the same
+     * route, for example `authenticateWithOptional`. The two have to be under the same one, because
+     * the socket recomputes what the render computed. Only one wrapper can be set.
+     */
+    public fun routes(wrapper: Route.(routes: Route.() -> Unit) -> Unit) {
+        check(routeWrapper == null) { "Jetlin's routes are already wrapped" }
+        routeWrapper = wrapper
+    }
+
+    /**
+     * Binds each session token to the browser that the page was rendered for.
+     *
+     * [binding] returns an opaque value that identifies the browser, such as a hash of its sign-in
+     * cookie's session ID. A socket can attach to a session only if its own request returns the same
+     * value, so a token that leaks from the page is no use without the cookie as well. Return a hash,
+     * not the ID itself, because hibernated sessions keep the value in the [sessionStore].
+     * `jetlin-server-ktor-auth` sets this for you.
+     */
+    public fun bindSessions(binding: suspend (ApplicationCall) -> String?) {
+        check(bindingSource == null) { "Session binding is already configured" }
+        bindingSource = binding
     }
 
     /**
@@ -303,6 +338,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             }
         }
     }
+    attributes.put(JetlinSessionsKey, registry)
 
     routing {
         get("/jetlin/jetlin.js") {
@@ -312,177 +348,216 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             call.respondText(script, ContentType.Text.JavaScript)
         }
 
-        for (registration in config.views) {
-            get(registration.pattern.pattern) {
-                val request = call.toRequestContext(config)
-                // Check the guard before creating a session. A redirect costs only a response header,
-                // while rendering a page for someone about to be redirected costs a whole composition.
-                val access = registration.guard?.check(request) ?: Access.Allow
-                if (access is Access.Redirect) {
-                    call.respondRedirect(access.to)
-                    return@get
+        // Page renders and the socket go under the same wrapper, because the socket recomputes what
+        // the render computed, such as the principal and the session binding.
+        val routes: Route.() -> Unit = {
+            for (registration in config.views) {
+                get(registration.pattern.pattern) {
+                    val request = call.toRequestContext(config)
+                val binding = config.bindingSource?.invoke(call)
+                    // Check the guard before creating a session. A redirect costs only a response header,
+                    // while rendering a page for someone about to be redirected costs a whole composition.
+                    val access = registration.guard?.check(request) ?: Access.Allow
+                    if (access is Access.Redirect) {
+                        call.respondRedirect(access.to)
+                        return@get
+                    }
+
+                    val session = try {
+                        registry.create(request, binding)
+                    } catch (e: SessionLimitReachedException) {
+                        // Refuse the request. Otherwise memory grows past what the heap can hold, which
+                        // takes down everyone's session, not only this one. Reaching the limit isn't
+                        // normal, so log it, but at most once a minute, with a count of the refusals.
+                        capacityLog.attempt()?.let { suppressed ->
+                            logger.warn(
+                                "At the session limit of {}: refusing page renders. " +
+                                    "{} live, {} refused since this message, {} refused in total.",
+                                e.limit,
+                                registry.liveCount,
+                                suppressed,
+                                registry.rejectedCount,
+                            )
+                        }
+                        call.response.headers.append(HttpHeaders.RetryAfter, "5")
+                        call.respondText(
+                            AT_CAPACITY_PAGE,
+                            ContentType.Text.Html,
+                            HttpStatusCode.ServiceUnavailable,
+                        )
+                        return@get
+                    }
+                    call.respondText(
+                        // Prefer the title that the composition set. Only the composition knows what the
+                        // route loaded and whether this principal may see it.
+                        renderPage(config, session.view.title ?: registration.title, session),
+                        ContentType.Text.Html,
+                        // A route that refused this principal responds as if the page doesn't exist.
+                        if (access == Access.NotFound) HttpStatusCode.NotFound else HttpStatusCode.OK,
+                    )
+                }
+            }
+
+            webSocket("/jetlin") {
+                // The browser's same-origin policy doesn't cover WebSockets, so a page on any site can
+                // open one to this endpoint. Without this check, a hostile page that obtained a token
+                // could drive a victim's session.
+                if (!originAllowed(
+                        origin = call.request.headers["Origin"],
+                        host = call.request.headers["Host"],
+                        allowed = config.allowedOrigins,
+                    )
+                ) {
+                    sendMessage(ServerMessage.Error("Origin not allowed", fatal = true))
+                    return@webSocket
                 }
 
-                val session = try {
-                    registry.create(request)
-                } catch (e: SessionLimitReachedException) {
-                    // Refuse the request. Otherwise memory grows past what the heap can hold, which
-                    // takes down everyone's session, not only this one. Reaching the limit isn't
-                    // normal, so log it, but at most once a minute, with a count of the refusals.
-                    capacityLog.attempt()?.let { suppressed ->
+                val hello = receiveMessage() as? ClientMessage.Hello ?: return@webSocket
+                // The socket's own request supplies the headers and the attributes derived from them, so
+                // a session woken from storage recomputes its principal instead of trusting a stale one.
+                val session = registry.attach(
+                    token = hello.token,
+                    base = { call.toRequestContext(config) },
+                    url = hello.url,
+                    binding = config.bindingSource?.invoke(call),
+                )
+                if (session == null) {
+                    sendMessage(ServerMessage.Error("Unknown or already-attached session", fatal = true))
+                    return@webSocket
+                }
+
+                // Declared outside the try, so the finally block can report the total.
+                var dropped = 0L
+
+                try {
+                    // The page render already built the composition. If the page that composition
+                    // rendered opened this socket, the browser holds that composition's markup and can
+                    // keep it. Anything that changed since then follows as a normal patch. Claim the
+                    // adoption whatever the client asked, so the right to adopt is used up either way.
+                    val mayAdopt = session.claimAdoption()
+                    sendMessage(if (mayAdopt && hello.adopt) session.view.adopt() else session.view.reset())
+
+                    val sender = launch {
+                        session.view.messages.collect { sendMessage(it.withTitle(router)) }
+                    }
+
+                    // The registry ends a session when its browser signs out elsewhere. The
+                    // composition is already closed, so tell the client, which reloads as whoever it
+                    // is now, and hang up. Closing the socket ends the loop below.
+                    val watcher = launch {
+                        session.ended.await()
+                        sendMessage(ServerMessage.Error(SESSION_ENDED, fatal = true))
+                        close()
+                    }
+
+                    // Check the budget before parsing anything, so a flood costs a clock read instead of
+                    // a JSON decode.
+                    val budget = TokenBucket(config.eventsPerSecond, config.eventBurst)
+                    var throttled = false
+
+                    for (frame in incoming) {
+                        if (frame !is Frame.Text) continue
+
+                        if (!budget.tryConsume()) {
+                            // Drop the frame instead of queuing it. Queuing would only move the flood into
+                            // memory, and it's better to tell the client it's going too fast. Tell it
+                            // once per episode, because a page that ignores the first warning will ignore
+                            // the next thousand.
+                            dropped++
+                            if (!throttled) {
+                                throttled = true
+                                // Identify the session well enough to find the page. A page sending faster
+                                // than a person can click almost always has a loop in application
+                                // JavaScript, and knowing which page is most of the work of fixing it. The
+                                // token is truncated on purpose: it's a bearer credential, and a leaked log
+                                // shouldn't allow a session takeover. Eight characters are enough to
+                                // correlate log lines, but not enough to use.
+                                logger.warn(
+                                    "Throttling session {} on {}: sending faster than {}/s",
+                                    session.token.take(8),
+                                    session.view.currentUrl,
+                                    config.eventsPerSecond,
+                                )
+                                sendMessage(ServerMessage.Error(TOO_FAST, fatal = false))
+                            }
+                            continue
+                        }
+                        throttled = false
+
+                        val message = try {
+                            JetlinJson.decodeFromString(ClientMessage.serializer(), frame.readText())
+                        } catch (t: Throwable) {
+                            // Frames come from a browser, which might not behave. Drop a frame that can't
+                            // be read. Ending the session over it would let anyone end their own session
+                            // with a malformed message, and would turn a protocol version mismatch into
+                            // an outage instead of a warning.
+                            logger.warn("Ignoring a frame that could not be read", t)
+                            continue
+                        }
+
+                        try {
+                            session.view.dispatch(message)
+                        } catch (t: Throwable) {
+                            config.onError(t)
+                            if (session.view.isAlive) {
+                                // A handler threw. The composition is intact and the page is still
+                                // correct. Only this one interaction didn't happen, and only the client
+                                // needs to know that.
+                                logger.error("A handler failed while processing a client event", t)
+                                sendMessage(ServerMessage.Error(HANDLER_FAILED, fatal = false))
+                            } else {
+                                // A composable threw, which stops the recomposer for good. Nothing this
+                                // session does from now on can succeed, so say so, instead of leaving a
+                                // page that looks live.
+                                logger.error("The composition failed; the session cannot continue", t)
+                                sendMessage(ServerMessage.Error(SESSION_FAILED, fatal = true))
+                                break
+                            }
+                        }
+                    }
+                    sender.cancel()
+                    watcher.cancel()
+                } finally {
+                    // Log the total once, on the way out. A connection can be throttled and recover many
+                    // times, so the per-episode lines say that it's happening, and this line says how
+                    // much it came to.
+                    if (dropped > 0) {
                         logger.warn(
-                            "At the session limit of {}: refusing page renders. " +
-                                "{} live, {} refused since this message, {} refused in total.",
-                            e.limit,
-                            registry.liveCount,
-                            suppressed,
-                            registry.rejectedCount,
+                            "Dropped {} events for exceeding {}/s: session {} on {}",
+                            dropped,
+                            config.eventsPerSecond,
+                            session.token.take(8),
+                            session.view.currentUrl,
                         )
                     }
-                    call.response.headers.append(HttpHeaders.RetryAfter, "5")
-                    call.respondText(
-                        AT_CAPACITY_PAGE,
-                        ContentType.Text.Html,
-                        HttpStatusCode.ServiceUnavailable,
-                    )
-                    return@get
+                    // Stop recording before releasing the session. The composition keeps running during
+                    // the grace period, and whoever reconnects receives the whole tree anyway. An ended
+                    // session has already been closed and released, so there's nothing to stop.
+                    if (!session.ended.isCompleted) {
+                        session.view.clientDetached()
+                        registry.detach(session)
+                    }
                 }
-                call.respondText(
-                    // Prefer the title that the composition set. Only the composition knows what the
-                    // route loaded and whether this principal may see it.
-                    renderPage(config, session.view.title ?: registration.title, session),
-                    ContentType.Text.Html,
-                    // A route that refused this principal responds as if the page doesn't exist.
-                    if (access == Access.NotFound) HttpStatusCode.NotFound else HttpStatusCode.OK,
-                )
             }
         }
-
-        webSocket("/jetlin") {
-            // The browser's same-origin policy doesn't cover WebSockets, so a page on any site can
-            // open one to this endpoint. Without this check, a hostile page that obtained a token
-            // could drive a victim's session.
-            if (!originAllowed(
-                    origin = call.request.headers["Origin"],
-                    host = call.request.headers["Host"],
-                    allowed = config.allowedOrigins,
-                )
-            ) {
-                sendMessage(ServerMessage.Error("Origin not allowed", fatal = true))
-                return@webSocket
-            }
-
-            val hello = receiveMessage() as? ClientMessage.Hello ?: return@webSocket
-            // The socket's own request supplies the headers and the attributes derived from them, so
-            // a session woken from storage recomputes its principal instead of trusting a stale one.
-            val session = registry.attach(hello.token, { call.toRequestContext(config) }, hello.url)
-            if (session == null) {
-                sendMessage(ServerMessage.Error("Unknown or already-attached session", fatal = true))
-                return@webSocket
-            }
-
-            // Declared outside the try, so the finally block can report the total.
-            var dropped = 0L
-
-            try {
-                // The page render already built the composition. If the page that composition
-                // rendered opened this socket, the browser holds that composition's markup and can
-                // keep it. Anything that changed since then follows as a normal patch. Claim the
-                // adoption whatever the client asked, so the right to adopt is used up either way.
-                val mayAdopt = session.claimAdoption()
-                sendMessage(if (mayAdopt && hello.adopt) session.view.adopt() else session.view.reset())
-
-                val sender = launch {
-                    session.view.messages.collect { sendMessage(it.withTitle(router)) }
-                }
-
-                // Check the budget before parsing anything, so a flood costs a clock read instead of
-                // a JSON decode.
-                val budget = TokenBucket(config.eventsPerSecond, config.eventBurst)
-                var throttled = false
-
-                for (frame in incoming) {
-                    if (frame !is Frame.Text) continue
-
-                    if (!budget.tryConsume()) {
-                        // Drop the frame instead of queuing it. Queuing would only move the flood into
-                        // memory, and it's better to tell the client it's going too fast. Tell it
-                        // once per episode, because a page that ignores the first warning will ignore
-                        // the next thousand.
-                        dropped++
-                        if (!throttled) {
-                            throttled = true
-                            // Identify the session well enough to find the page. A page sending faster
-                            // than a person can click almost always has a loop in application
-                            // JavaScript, and knowing which page is most of the work of fixing it. The
-                            // token is truncated on purpose: it's a bearer credential, and a leaked log
-                            // shouldn't allow a session takeover. Eight characters are enough to
-                            // correlate log lines, but not enough to use.
-                            logger.warn(
-                                "Throttling session {} on {}: sending faster than {}/s",
-                                session.token.take(8),
-                                session.view.currentUrl,
-                                config.eventsPerSecond,
-                            )
-                            sendMessage(ServerMessage.Error(TOO_FAST, fatal = false))
-                        }
-                        continue
-                    }
-                    throttled = false
-
-                    val message = try {
-                        JetlinJson.decodeFromString(ClientMessage.serializer(), frame.readText())
-                    } catch (t: Throwable) {
-                        // Frames come from a browser, which might not behave. Drop a frame that can't
-                        // be read. Ending the session over it would let anyone end their own session
-                        // with a malformed message, and would turn a protocol version mismatch into
-                        // an outage instead of a warning.
-                        logger.warn("Ignoring a frame that could not be read", t)
-                        continue
-                    }
-
-                    try {
-                        session.view.dispatch(message)
-                    } catch (t: Throwable) {
-                        config.onError(t)
-                        if (session.view.isAlive) {
-                            // A handler threw. The composition is intact and the page is still
-                            // correct. Only this one interaction didn't happen, and only the client
-                            // needs to know that.
-                            logger.error("A handler failed while processing a client event", t)
-                            sendMessage(ServerMessage.Error(HANDLER_FAILED, fatal = false))
-                        } else {
-                            // A composable threw, which stops the recomposer for good. Nothing this
-                            // session does from now on can succeed, so say so, instead of leaving a
-                            // page that looks live.
-                            logger.error("The composition failed; the session cannot continue", t)
-                            sendMessage(ServerMessage.Error(SESSION_FAILED, fatal = true))
-                            break
-                        }
-                    }
-                }
-                sender.cancel()
-            } finally {
-                // Log the total once, on the way out. A connection can be throttled and recover many
-                // times, so the per-episode lines say that it's happening, and this line says how
-                // much it came to.
-                if (dropped > 0) {
-                    logger.warn(
-                        "Dropped {} events for exceeding {}/s: session {} on {}",
-                        dropped,
-                        config.eventsPerSecond,
-                        session.token.take(8),
-                        session.view.currentUrl,
-                    )
-                }
-                // Stop recording before releasing the session. The composition keeps running during
-                // the grace period, and whoever reconnects receives the whole tree anyway.
-                session.view.clientDetached()
-                registry.detach(session)
-            }
-        }
+        config.routeWrapper?.let { wrap -> wrap(routes) } ?: routes()
     }
 }
+
+/** Where [jetlin] keeps its [SessionRegistry], so [jetlinSessions] can find it. */
+private val JetlinSessionsKey = KtorAttributeKey<SessionRegistry>("jetlin.sessions")
+
+/**
+ * The live sessions of the application's Jetlin installation.
+ *
+ * Use it to end the sessions of a browser that signed out through a route of your own, with
+ * [SessionRegistry.endSessions]. `jetlin-server-ktor-auth` does this for you when you sign out through
+ * it.
+ *
+ * @throws IllegalStateException if [jetlin] hasn't been installed yet.
+ */
+public val Application.jetlinSessions: SessionRegistry
+    get() = checkNotNull(attributes.getOrNull(JetlinSessionsKey)) { "Jetlin is not installed" }
 
 /** The logger for the server's endpoints. */
 private val logger = LoggerFactory.getLogger("jetlin.server")
@@ -494,6 +569,9 @@ private val logger = LoggerFactory.getLogger("jetlin.server")
  * [JetlinConfig.onError]. Its text is for whoever runs the server, not whoever is looking at the page.
  */
 private const val HANDLER_FAILED: String = "That action could not be completed."
+
+/** The message a client gets when its session was ended, for example by signing out in another tab. */
+private const val SESSION_ENDED: String = "This session has ended."
 
 /** The message a client gets when it sends faster than [JetlinConfig.eventsPerSecond] allows. */
 private const val TOO_FAST: String = "Too many messages; some were ignored."
@@ -541,7 +619,7 @@ private suspend fun ApplicationCall.toRequestContext(config: JetlinConfig): Requ
         pathParams = parameters.names().associateWith { parameters[it].orEmpty() },
         queryParams = request.queryParameters.names().associateWith { request.queryParameters.getAll(it).orEmpty() },
         headers = request.headers.names().associateWith { request.headers.getAll(it).orEmpty() },
-        attributes = config.attributeFactory?.invoke(this).orEmpty(),
+        attributes = config.principalSource?.invoke(this).orEmpty(),
     )
 
 /** Receives the next client message, or returns `null` if the socket closed or sent a non-text frame. */
@@ -556,14 +634,14 @@ private suspend fun io.ktor.websocket.WebSocketSession.sendMessage(message: Serv
 }
 
 /**
- * Returns whether a socket may be opened from [origin].
+ * Returns whether a socket may be opened, or a form posted, from [origin].
  *
  * A missing `Origin` header means the caller isn't a browser, for example a test, a CLI, or a
  * service, and it's allowed. The header identifies the page that started the request, and only
  * browsers can be trusted to set it honestly. When [allowed] is empty, the origin must match the
  * request's own `Host` header, which is the same-origin case.
  */
-internal fun originAllowed(origin: String?, host: String?, allowed: Set<String>): Boolean {
+public fun originAllowed(origin: String?, host: String?, allowed: Set<String>): Boolean {
     if (origin == null) return true
     if (allowed.isNotEmpty()) return origin in allowed
     if (host == null) return false

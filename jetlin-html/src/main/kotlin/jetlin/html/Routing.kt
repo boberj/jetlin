@@ -159,6 +159,19 @@ public interface Navigator {
 
     /** Navigates to [url] and replaces the current browser history entry. */
     public fun replace(url: String)
+
+    /**
+     * Leaves the session with a real page load of [url].
+     *
+     * Use it only to reach an HTTP endpoint that has to answer the browser directly, for example to
+     * set a cookie. Everything else should use [push] or [replace], which keep the session alive.
+     * The browser goes after the patch from the current update, and nothing sent after that reaches
+     * it.
+     *
+     * @param post the fields to submit as a `POST` form, or `null` to follow a link. Put secrets
+     *   here instead of in [url], which ends up in access logs and browser history.
+     */
+    public fun load(url: String, post: Map<String, String>? = null)
 }
 
 /** The session's [Navigator]. [LiveView] provides it. */

@@ -1,6 +1,7 @@
 package jetlin.server
 
 import androidx.compose.runtime.Composable
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -10,6 +11,7 @@ import jetlin.html.RequestContext
 import jetlin.runtime.FramePolicy
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -31,16 +33,26 @@ public class SessionLimitReachedException internal constructor(
 /**
  * One user's live view, and the bookkeeping the transport needs around it.
  *
- * @property token the secret that identifies the session. Anyone who has it can drive the session.
+ * @property token the secret that identifies the session. Anyone who has it and, when [binding] is
+ *   set, the browser it's bound to, can drive the session.
  * @property view the session's view.
+ * @property binding identifies the browser that holds the session, such as a hash of a sign-in
+ *   cookie's session ID, or `null` if the session isn't bound. See [SessionRegistry.attach].
  * @param adoptable whether the next socket may keep the markup the browser already has. See
  *   [claimAdoption].
  */
 public class JetlinSession internal constructor(
     public val token: String,
     public val view: LiveView,
+    public val binding: String?,
     adoptable: Boolean,
 ) : AutoCloseable {
+
+    /**
+     * Completes when [SessionRegistry.endSessions] ends this session, for example because its user
+     * signed out in another tab. The socket that's attached, if any, tells its client and closes.
+     */
+    internal val ended: CompletableDeferred<Unit> = CompletableDeferred()
 
     /** Whether a socket is attached. It keeps two sockets from driving one composition. */
     internal var attached: Boolean = false
@@ -130,9 +142,12 @@ public class SessionRegistry(
      * deliberate. An exact limit would put every page render behind one lock, to prevent an overshoot
      * that's bounded and harmless.
      *
+     * @param request the request that the page render is for.
+     * @param binding identifies the browser that made the request, or `null` to leave the session
+     *   unbound. A socket can attach only if it presents the same binding. See [attach].
      * @throws SessionLimitReachedException if there are already [maxSessions] live sessions.
      */
-    public suspend fun create(request: RequestContext): JetlinSession {
+    public suspend fun create(request: RequestContext, binding: String? = null): JetlinSession {
         if (sessions.size >= maxSessions) {
             rejected.incrementAndGet()
             throw SessionLimitReachedException(maxSessions)
@@ -140,6 +155,7 @@ public class SessionRegistry(
         val session = JetlinSession(
             token = newToken(),
             view = LiveView(request, framePolicy, emptyMap(), exposeTestTags, content),
+            binding = binding,
             // This composition renders the page the browser is about to receive, so the socket that
             // follows may adopt the markup it was served.
             adoptable = true,
@@ -170,15 +186,21 @@ public class SessionRegistry(
      *   reconnect for nothing.
      * @param url where the client says it is. It takes precedence over the location in the snapshot,
      *   because the user might have pressed the back button while disconnected.
-     * @return the session, or `null` if the token is unknown or another socket is already attached.
+     * @param binding identifies the browser the socket came from. It must match the binding the
+     *   session was created with. The token is embedded in the page, so it can leak through a log, a
+     *   saved page, or a shared screenshot, and on its own it would let whoever found it take over the
+     *   session. With a binding, the token is useless without the browser's cookie as well.
+     * @return the session, or `null` if the token is unknown, another socket is already attached, or
+     *   the binding doesn't match.
      */
     public suspend fun attach(
         token: String,
         base: suspend () -> RequestContext,
         url: String?,
+        binding: String? = null,
     ): JetlinSession? {
         sessions[token]?.let { live ->
-            if (live.attached) return null
+            if (live.attached || !bindingsMatch(live.binding, binding)) return null
             live.attached = true
             reapers.remove(token)?.cancel()
             return live
@@ -195,9 +217,21 @@ public class SessionRegistry(
             null
         } ?: return null
 
+        if (!bindingsMatch(snapshot.binding, binding)) {
+            // Put it back. Whoever presented the token without the browser it belongs to has no
+            // claim to the snapshot, and taking it would let them destroy the owner's saved state.
+            try {
+                store.save(token, snapshot)
+            } catch (t: Throwable) {
+                logger.warn("Could not return stored session state after a binding mismatch", t)
+            }
+            return null
+        }
+
         val restored = JetlinSession(
             token = token,
             view = LiveView(base().forUrl(url ?: snapshot.url), framePolicy, snapshot.state, exposeTestTags, content),
+            binding = snapshot.binding,
             // This composition is new, so its node IDs have nothing to do with the data-jl values in
             // the markup the browser holds. The client has to receive the tree.
             adoptable = false,
@@ -213,8 +247,35 @@ public class SessionRegistry(
         return restored
     }
 
+    /**
+     * Ends every live session bound to [binding], for example when that browser signs out.
+     *
+     * An attached socket tells its client, which reloads and starts again as whoever the browser is
+     * now. A session in its grace period is closed and never hibernates. A session that already
+     * hibernated can't be woken either, because waking checks the binding and the browser no longer
+     * presents it.
+     *
+     * @return the number of sessions ended.
+     */
+    public fun endSessions(binding: String): Int {
+        var ended = 0
+        for (session in sessions.values) {
+            if (session.binding == null || !bindingsMatch(session.binding, binding)) continue
+            // Remove it first, so a reconnect racing this call can't claim it.
+            if (!sessions.remove(session.token, session)) continue
+            reapers.remove(session.token)?.cancel()
+            session.ended.complete(Unit)
+            session.close()
+            ended++
+        }
+        return ended
+    }
+
     /** Releases a session when its socket closes, and starts the grace period. */
     public fun detach(session: JetlinSession) {
+        // A session that was ended has already been released. Scheduling a reaper for it would only
+        // find nothing to reap.
+        if (session.ended.isCompleted) return
         session.attached = false
         scheduleReap(session.token, disconnectGrace)
     }
@@ -240,7 +301,7 @@ public class SessionRegistry(
             // A session with no saved values has nothing to come back to. Storing it would fill the
             // store with entries that hold only a URL the client already knows.
             if (state.isNotEmpty()) {
-                store.save(session.token, SessionSnapshot(url, state))
+                store.save(session.token, SessionSnapshot(url, state, binding = session.binding))
             }
         } catch (t: Throwable) {
             // Capturing can fail on a key collision, saving can fail on an unreachable store, and a
@@ -259,6 +320,18 @@ public class SessionRegistry(
 
     private companion object {
         private val logger = LoggerFactory.getLogger(SessionRegistry::class.java)
+    }
+
+    /**
+     * Returns whether a socket presenting [presented] may take over a session created with
+     * [expected]. Both being `null` matches, so an application without bindings works as before.
+     *
+     * The comparison takes the same time whatever the input, so the time a rejection takes says
+     * nothing about how close the guess was.
+     */
+    private fun bindingsMatch(expected: String?, presented: String?): Boolean {
+        if (expected == null || presented == null) return expected == presented
+        return MessageDigest.isEqual(expected.toByteArray(), presented.toByteArray())
     }
 
     /** Returns a new random session token: 24 bytes from a secure random source, Base64-encoded. */

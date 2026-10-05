@@ -12,10 +12,10 @@ import androidx.compose.runtime.compositionLocalOf
  * and reads the values back with the right type:
  *
  * ```kotlin
- * val CurrentUser = AttributeKey<User>("user")
+ * val CurrentUser = AttributeKey<User?>("user")
  *
  * jetlin {
- *     attributes { call -> mapOf(CurrentUser to call.principal<User>()) }
+ *     principal(CurrentUser) { call -> lookUpUser(call) }
  * }
  *
  * @Composable fun Header() {

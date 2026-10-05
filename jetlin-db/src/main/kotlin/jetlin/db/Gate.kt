@@ -235,9 +235,8 @@ public object Gate {
  * checked.
  *
  * ```kotlin
- * attributes { call ->
- *     val email = call.sessions.get<Auth>()?.email
- *     mapOf(PrincipalKey to email?.let { db.authenticate(User::class) { user -> user.email == it } })
+ * val auth = session<AuthSession, User>("auth") {
+ *     validate { session -> db.authenticate(User::class) { user -> user.email == session.email } }
  * }
  * ```
  *

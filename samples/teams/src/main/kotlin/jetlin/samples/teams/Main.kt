@@ -1,12 +1,16 @@
 package jetlin.samples.teams
 
-import io.ktor.server.application.ApplicationCall
 import androidx.compose.runtime.Composable
+import io.ktor.server.auth.SessionAuthenticationScheme
+import io.ktor.server.auth.SessionTransportType
+import io.ktor.server.auth.install
+import io.ktor.server.auth.session
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
-import io.ktor.server.response.respondRedirect
-import io.ktor.server.routing.get
-import io.ktor.server.routing.routing
+import io.ktor.server.sessions.SameSite
+import io.ktor.server.sessions.SessionStorageMemory
+import io.ktor.server.sessions.sameSite
+import io.ktor.utils.io.ExperimentalKtorApi
 import jetlin.db.Db
 import jetlin.db.authenticate
 import jetlin.db.insertUnchecked
@@ -16,9 +20,11 @@ import jetlin.html.AttributeKey
 import jetlin.html.LocalRequest
 import jetlin.html.RequestContext
 import jetlin.html.Principals
+import jetlin.server.auth.authentication
 import jetlin.server.jetlin
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
+import kotlinx.serialization.Serializable
 
 /**
  * Starts a sample with several users that shows the framework's access control in an application.
@@ -28,12 +34,14 @@ import kotlin.io.path.createTempDirectory
  * unshared. There's no polling, subscription, or invalidation code: the write that stores the change
  * is also what recomposes the sessions that can see the record.
  *
- * Signing in sets a cookie that contains an email address. That isn't real authentication, and it
- * isn't meant to be. The sample is about what each principal can see and what happens when that
- * changes, not about how users prove who they are.
+ * Signing in is real session handling: the cookie holds an opaque session ID, the session stays on
+ * the server, and signing out ends the user's other tabs. What isn't real is proving who you are.
+ * The sign-in page lets anyone pick any seeded account without a password, because the sample is
+ * about what each principal can see and what happens when that changes.
  *
  * The server listens on the port in the `PORT` environment variable, or on port 8081.
  */
+@OptIn(ExperimentalKtorApi::class)
 fun main() {
     val db = openSeeded()
     val port = System.getenv("PORT")?.toInt() ?: 8081
@@ -44,28 +52,19 @@ fun main() {
     embeddedServer(Netty, port = port) {
         hubService()
 
-        routing {
-            // Signing in and out are ordinary HTTP routes that set or clear a cookie and redirect. The
-            // framework isn't involved.
-            get("/signin/{email}") {
-                call.response.cookies.append(SESSION_COOKIE, call.parameters["email"].orEmpty(), path = "/")
-                call.respondRedirect("/")
-            }
-            get("/signout") {
-                call.response.cookies.append(SESSION_COOKIE, "", path = "/", maxAge = 0)
-                call.respondRedirect("/login")
-            }
-        }
+        val sessionAuth = db.sessionAuth()
+        install(sessionAuth)
 
         jetlin {
             exposeTestTags = true
             head = STYLES
 
-            // Supply the session's principal. This runs for the initial HTTP request, and again when a
-            // WebSocket wakes a hibernated session. So the principal is recomputed from the new
-            // connection instead of restored from a snapshot that might be out of date. If a role was
-            // revoked while a laptop was asleep, the change takes effect when the laptop wakes.
-            attributes { call -> mapOf(PrincipalKey to db.signedInUser(call)) }
+            // Supply the session's principal from the sign-in cookie. It's looked up for the initial
+            // HTTP request, and again when a WebSocket wakes a hibernated session. So the principal is
+            // recomputed from the new connection instead of restored from a snapshot that might be out
+            // of date. If a role was revoked while a laptop was asleep, the change takes effect when
+            // the laptop wakes.
+            val auth = authentication(sessionAuth, principal = PrincipalKey)
 
             onError = { throwable ->
                 // An AccessDenied here means application code tried something that a policy refuses,
@@ -73,9 +72,9 @@ fun main() {
                 println("[teams] ${throwable::class.simpleName}: ${throwable.message}")
             }
 
-            app { route -> Shell(hub, route) }
+            app { route -> Shell(hub, auth.rememberControls(), route) }
 
-            view("/login", title = "Sign in · Teams") { SignInPage() }
+            view("/login", title = "Sign in · Teams") { SignInPage(auth.rememberControls()) }
 
             // Context parameters are lexically scoped, and they aren't passed through a
             // `@Composable () -> Unit`. So WithPrincipal puts the principal back in scope at the
@@ -124,8 +123,16 @@ val PrincipalKey: AttributeKey<User?> = AttributeKey("principal")
 /** Typed guards for the principal, such as `Principals.signedIn` and `Principals.where { it.admin }`. */
 val Principals: Principals<User> = Principals(PrincipalKey, signIn = "/login")
 
-/** The cookie this sample uses as a stand-in for authentication. It verifies nothing. */
-const val SESSION_COOKIE: String = "teams_email"
+/** The name of the sign-in cookie. It holds a session ID, and the [TeamsSession] stays on the server. */
+const val SESSION_COOKIE: String = "teams_session"
+
+/**
+ * What the sign-in cookie refers to.
+ *
+ * @property email the signed-in user's email address.
+ */
+@Serializable
+data class TeamsSession(val email: String)
 
 /**
  * A seeded account, as the sign-in page lists it.
@@ -150,17 +157,25 @@ val SEEDED_ACCOUNTS: List<Account> = listOf(
 )
 
 /**
- * Looks up the signed-in user from the session cookie.
+ * The sign-in scheme: a cookie that holds a session ID, and the user that the session names.
  *
- * This uses `authenticate`, the framework's one unchecked lookup. It needs it because there's no
- * principal yet to check the lookup against.
+ * `validate` uses `authenticate`, the framework's one unchecked lookup. It needs it because there's
+ * no principal yet to check the lookup against. A session whose user no longer exists doesn't
+ * validate, and the browser is signed out.
  *
- * @return the user, or `null` if nobody is signed in or no user has the cookie's email address.
+ * The sessions are kept in memory, so a restart signs everyone out. A real application would use
+ * `directorySessionStorage` or a shared store.
  */
-internal fun Db.signedInUser(call: ApplicationCall): User? {
-    val email = call.request.cookies[SESSION_COOKIE] ?: return null
-    return authenticate(User::class) { user -> user.email == email }
-}
+@OptIn(ExperimentalKtorApi::class)
+internal fun Db.sessionAuth(): SessionAuthenticationScheme<TeamsSession, User> =
+    session<TeamsSession, User>(SESSION_COOKIE) {
+        transport = SessionTransportType.CookieId(SessionStorageMemory()) {
+            cookie.path = "/"
+            cookie.httpOnly = true
+            cookie.sameSite = SameSite.Lax
+        }
+        validate { session -> authenticate(User::class) { user -> user.email == session.email } }
+    }
 
 /**
  * Looks up the todo for the `/todo/{id}` route. Returns `null` for a todo that this principal can't

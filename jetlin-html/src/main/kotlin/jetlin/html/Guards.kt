@@ -33,7 +33,7 @@ public sealed interface Access {
  * A requirement a request must meet to reach a route.
  *
  * A guard checks the session's [RequestContext], which holds the application's principal. It's a
- * pure function of the request and the values that `attributes { }` added to it, so it gives the
+ * pure function of the request and the principal that the server added to it, so it gives the
  * same answer in the HTTP layer, in the composition, and in a test.
  *
  * Guards aren't the security boundary. Record policies are. A guard improves the user experience
@@ -145,7 +145,7 @@ public val LocalRouteGuards: ProvidableCompositionLocal<RouteGuards> =
  *
  * - A deep link: the HTTP layer checks the guard first, and this check agrees with it.
  * - Navigation within a session: the request changes, and this composable recomposes.
- * - A hibernated session waking up: the attributes are recomputed from the new connection, so a role
+ * - A hibernated session waking up: the principal is recomputed from the new connection, so a role
  *   revoked while the session was hibernated takes effect on the first recomposition.
  *
  * @param guard the requirement to check, or `null` to allow every request.

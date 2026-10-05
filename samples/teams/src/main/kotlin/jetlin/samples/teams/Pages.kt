@@ -19,11 +19,13 @@ import jetlin.html.Span
 import jetlin.html.Text
 import jetlin.html.Ul
 import jetlin.html.bind
+import jetlin.html.queryParam
 import jetlin.html.rememberSavedField
 import jetlin.runtime.Fetched
 import jetlin.runtime.Run
 import jetlin.runtime.fresh
 import jetlin.runtime.rememberAction
+import jetlin.server.auth.SessionControls
 
 /**
  * The page chrome. It's composed once per session, around whichever view is current.
@@ -32,9 +34,10 @@ import jetlin.runtime.rememberAction
  * the route can't disagree about who can use them.
  *
  * @param hub the external system, or `null` to leave out the announcement banner.
+ * @param session signs the browser out.
  */
 @Composable
-fun Shell(hub: Hub?, content: @Composable () -> Unit) {
+fun Shell(hub: Hub?, session: SessionControls<TeamsSession>, content: @Composable () -> Unit) {
     val principal = Principals.of(LocalRequest.current)
     Div({ classes("page") }) {
         Nav({ classes("nav") }) {
@@ -47,7 +50,11 @@ fun Shell(hub: Hub?, content: @Composable () -> Unit) {
                 Span({ classes("who"); testTag("principal") }) {
                     Text("${principal.name}${principal.team?.let { " · ${it.name}" } ?: ""}")
                 }
-                Link("/login", { classes("link") }) { Text("Switch user") }
+                // Signing out ends this browser's other tabs too, so none of them goes on showing
+                // this user's data.
+                Button({ classes("link"); testTag("sign-out"); onClick { session.signOut(next = "/login") } }) {
+                    Text("Switch user")
+                }
             }
         }
         // Show external data in the chrome, which is where an announcement banner usually goes. One
@@ -82,14 +89,18 @@ private fun Announcement(hub: Hub) {
 }
 
 /**
- * The sign-in page. Choosing a seeded account sets a cookie.
+ * The sign-in page. Choosing a seeded account signs the browser in, and then goes back to the page
+ * that sent it here.
  *
  * It reads nothing from the database. The sign-in page is shown before there's a principal, so it
  * lists the sample's fixed accounts instead of querying for them, which would need a way around the
  * policy checks.
+ *
+ * @param session signs the browser in.
  */
 @Composable
-fun SignInPage() {
+fun SignInPage(session: SessionControls<TeamsSession>) {
+    val next = queryParam("next") ?: "/"
     Div({ classes("card") }) {
         H1 { Text("Sign in") }
         P { Text("Pick someone. Open a second window, pick someone else, and watch a share arrive.") }
@@ -97,8 +108,13 @@ fun SignInPage() {
             for (account in SEEDED_ACCOUNTS) {
                 key(account.email) {
                     Li({ classes("person") }) {
-                        // A plain link to a route that sets a cookie. jetlin-db isn't involved.
-                        Link("/signin/${account.email}", { testTag("signin-${account.label.lowercase()}") }) {
+                        // Only the email address goes in the session. The user is looked up again on every
+                        // request, so a deleted account can't stay signed in.
+                        Button({
+                            classes("link")
+                            testTag("signin-${account.label.lowercase()}")
+                            onClick { session.signIn(TeamsSession(account.email), next) }
+                        }) {
                             Text(account.label)
                         }
                         account.note?.let { Span({ classes("muted") }) { Text(" · $it") } }

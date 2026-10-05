@@ -855,18 +855,27 @@ the field should sometimes be empty.
 
 ## 3. Getting a principal, and protecting routes
 
-`attributes { }` adds the principal to a session. The block runs for the initial HTTP request, and
-again when a WebSocket wakes a hibernated session, so the principal is recomputed from the new
-connection instead of restored from a snapshot that might be minutes old.
+`authentication(scheme, principal = PrincipalKey)`, from `jetlin-server-ktor-auth`, adds the
+principal to a session from a Ktor session scheme. The scheme's `validate` finds the user with
+`authenticate`, the one unchecked lookup, because there's no principal yet to check it against. The
+principal is looked up for the initial HTTP request, and again when a WebSocket wakes a hibernated
+session, so it's recomputed from the new connection instead of restored from a snapshot that might be
+minutes old.
 
 ```kotlin
 val PrincipalKey = AttributeKey<User?>("principal")
 val Principals = Principals(PrincipalKey, signIn = "/login")
 
-jetlin {
-    attributes { call -> mapOf(PrincipalKey to db.signedInUser(call)) }
+val sessionAuth = session<AppSession, User>("app") {
+    transport = SessionTransportType.CookieId(storage) { cookie.path = "/"; cookie.httpOnly = true }
+    validate { session -> db.authenticate(User::class) { it.email == session.email } }
+}
+install(sessionAuth)
 
-    view("/login", title = "Sign in") { SignInPage() }
+jetlin {
+    val auth = authentication(sessionAuth, principal = PrincipalKey)
+
+    view("/login", title = "Sign in") { SignInPage(auth.rememberControls()) }
     view("/", title = "Todos", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }
     view("/admin/users", title = "Users", requires = Principals.where { it.admin }) {
         WithPrincipal { AdminUsersPage(db) }
@@ -930,7 +939,7 @@ this repository checks the title separately.
 |---|---|
 | Deep link | The guard runs in the HTTP layer. A redirect is a `302` response, and no session is created. A refusal is a `404`. |
 | Navigation within a session | There's no page load. The guard runs in the composition and redirects on the client. |
-| Waking from hibernation | `attributes { }` runs again, so the principal is recomputed, and the guard for the current route runs again, not only guards on routes being entered. A role revoked while a laptop was asleep takes effect when it wakes. |
+| Waking from hibernation | The principal is looked up again, and the guard for the current route runs again, not only guards on routes being entered. A role revoked while a laptop was asleep takes effect when it wakes. |
 
 Guards aren't the security boundary. Record policies are. A guard improves the user experience and
 avoids rendering a page that would be empty. If a guard is ever the only protection for some data,

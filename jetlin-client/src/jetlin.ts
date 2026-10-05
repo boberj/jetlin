@@ -78,6 +78,7 @@ type ServerMessage =
   | { t: "ready"; rev: number }
   | { t: "reset"; rev: number; children: NodeSpec[] }
   | { t: "nav"; url: string; replace?: boolean; title?: string }
+  | { t: "load"; url: string; post?: Record<string, string> | null }
   | { t: "error"; message: string; fatal?: boolean };
 
 /** The ID of the root node, which is the container element. */
@@ -418,10 +419,43 @@ class Jetlin {
         else history.pushState({ jetlin: true }, "", message.url);
         if (message.title) document.title = message.title;
         break;
+      case "load":
+        this.load(message.url, message.post ?? null);
+        break;
       case "error":
         this.reportError(message.message, !!message.fatal);
         break;
     }
+  }
+
+  /**
+   * Leaves the session with a real page load, so the server can answer with cookies.
+   *
+   * A `POST` goes through a form instead of `fetch`, because a form submission is a top-level
+   * navigation: the browser applies the response's `Set-Cookie` and follows its redirect like any
+   * other page load.
+   */
+  private load(url: string, post: Record<string, string> | null): void {
+    // The page is going away on purpose. Don't reconnect while it unloads.
+    this.fatal = true;
+    this.socket?.close();
+    if (!post) {
+      location.assign(url);
+      return;
+    }
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = url;
+    form.style.display = "none";
+    for (const [name, value] of Object.entries(post)) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    }
+    document.body.appendChild(form);
+    form.submit();
   }
 
   // ----------------------------------------------------------------- adoption
