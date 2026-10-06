@@ -32,8 +32,8 @@ public value class Id<T : Record>(public val value: Long) {
  *
  * A record is an ordinary Kotlin object that's also stored in the database. Its mutable fields are
  * [Cell]s, which are named snapshot state. Reading a field in a composable subscribes that
- * composable, and writing the field recomposes every session in the process that read it, with no
- * subscription code.
+ * composable, and writing the field recomposes every UI session in the process that read it, with
+ * no subscription code.
  *
  * ```kotlin
  * class Todo(val owner: User, title: String) : Record() {
@@ -51,11 +51,12 @@ public value class Id<T : Record>(public val value: Long) {
  * `data class` entity would have, would break the identity map. [id] is assigned when the record is
  * constructed, not when it's inserted, so a new record can be used as a `key` before it's stored.
  *
- * For the same reason, don't put a record in `rememberSaved`. Session state is stored as JSON, and
- * deserializing a record would create a second object for a row that already has one in the
+ * For the same reason, don't put a record in `rememberSaved`. UI session state is stored as JSON,
+ * and deserializing a record would create a second object for a row that already has one in the
  * identity map. The copy wouldn't equal the original, wouldn't recompose readers when it changed,
  * and would never have passed an access check. Save the [id] instead, and look the record up again.
- * The lookup is policy-checked, so a resumed session that has lost access to the record gets `null`.
+ * The lookup is policy-checked, so a resumed UI session that has lost access to the record gets
+ * `null`.
  */
 public abstract class Record {
 
@@ -258,7 +259,7 @@ public class CellProvider<V> internal constructor(private val initial: V) {
 }
 
 /**
- * When two sessions write the same cell, keeps the value from the snapshot that applied last.
+ * When two UI sessions write the same cell, keeps the value from the snapshot that applied last.
  *
  * Without a merge policy, concurrent writes to one cell conflict, and the second `apply()` throws.
  * By then, its transaction is already committed, because commits happen before the snapshot is

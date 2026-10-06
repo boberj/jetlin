@@ -40,7 +40,7 @@ public sealed interface ServerMessage {
      * Replaces the entire tree.
      *
      * The server sends this when it can't patch what the browser has, for example after it wakes a
-     * hibernated session and composes it from scratch.
+     * hibernated UI session and composes it from scratch.
      *
      * @property rev the revision of the new tree.
      * @property children the new contents of the root.
@@ -50,7 +50,7 @@ public sealed interface ServerMessage {
     public data class Reset(val rev: Long, val children: List<NodeSpec>) : ServerMessage
 
     /**
-     * The session moved to another location, and the browser should update its address bar.
+     * The UI session moved to another location, and the browser should update its address bar.
      *
      * It travels on the same channel as patches, so it can't overtake the patch that rendered the
      * destination.
@@ -69,9 +69,9 @@ public sealed interface ServerMessage {
     ) : ServerMessage
 
     /**
-     * Leaves the live session with a real page load, which the server can answer with cookies.
+     * Leaves the live UI session with a real page load, which the server can answer with cookies.
      *
-     * [Navigate] moves inside the session and never makes an HTTP request, so it can't carry a
+     * [Navigate] moves inside the UI session and never makes an HTTP request, so it can't carry a
      * `Set-Cookie`. Signing in and out needs exactly that, so this message hands the browser to an
      * ordinary HTTP endpoint instead.
      *
@@ -88,8 +88,8 @@ public sealed interface ServerMessage {
      * Something went wrong on the server.
      *
      * @property message a description for the browser console.
-     * @property fatal whether the session is gone. The client reloads the page after a fatal error,
-     *   unless the page cancels the error event.
+     * @property fatal whether the UI session is gone. The client reloads the page after a fatal
+     *   error, unless the page cancels the error event.
      */
     @Serializable
     @SerialName("error")
@@ -103,10 +103,10 @@ public sealed interface ClientMessage {
     /**
      * The first message on every connection.
      *
-     * @property token identifies the session that the initial page render created, so the server can
-     *   reuse the composition it already has instead of rendering again.
-     * @property url where the browser is now. This matters when the server wakes the session from
-     *   storage. The user might have pressed the back button while disconnected, and then the
+     * @property token identifies the UI session that the initial page render created, so the server
+     *   can reuse the composition it already has instead of rendering again.
+     * @property url where the browser is now. This matters when the server wakes the UI session
+     *   from storage. The user might have pressed the back button while disconnected, and then the
      *   address bar is right and the stored location is stale.
      */
     @Serializable
@@ -146,7 +146,7 @@ public sealed interface ClientMessage {
      * The user pressed back or forward.
      *
      * The browser has already changed its address bar, so the server follows instead of leading. It
-     * moves the session to [url] and doesn't send a [ServerMessage.Navigate] back.
+     * moves the UI session to [url] and doesn't send a [ServerMessage.Navigate] back.
      */
     @Serializable
     @SerialName("nav")

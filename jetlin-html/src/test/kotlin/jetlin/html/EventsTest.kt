@@ -72,7 +72,7 @@ class EventsTest {
             view.start()
             view.dispatch(ClientMessage.Event(node = 1, event = "click", seq = 1, payload = EventPayload()))
             // Both parties need this click: the caller wanted to hear about it, and the link still
-            // has to move the session.
+            // has to move the UI session.
             assertEquals(1, clicks)
             assertEquals("/next", view.currentUrl)
         }

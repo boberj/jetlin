@@ -6,7 +6,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
 /**
- * Controls how often a session turns state changes into patches for the browser.
+ * Controls how often a UI session turns state changes into patches for the browser.
  *
  * Compose always waits for a frame before it recomposes, so the frame clock throttles the whole
  * pipeline. Each frame produces at most one patch message.
@@ -23,8 +23,8 @@ public sealed interface FramePolicy {
     /**
      * Recomposes at most once per [interval].
      *
-     * Use this for sessions fed by a fast server-side source, such as market data, a log tail, or
-     * telemetry, where the browser can't make use of every change.
+     * Use this for UI sessions fed by a fast server-side source, such as market data, a log tail,
+     * or telemetry, where the browser can't make use of every change.
      */
     public data class Paced(val interval: Duration) : FramePolicy
 
@@ -48,7 +48,8 @@ internal fun FramePolicy.toClock(): MonotonicFrameClock = when (this) {
  * positive, the clock delays only long enough to keep frames that far apart. Everything that
  * happens during the delay is batched into one recomposition pass.
  *
- * Only one session's dispatcher uses a given clock, so [lastFrameNanos] needs no synchronization.
+ * Only one UI session's dispatcher uses a given clock, so [lastFrameNanos] needs no
+ * synchronization.
  */
 internal class PacedFrameClock(private val minIntervalNanos: Long) : MonotonicFrameClock {
     private var lastFrameNanos = 0L

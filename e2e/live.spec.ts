@@ -230,7 +230,7 @@ test("a handler that throws costs one interaction and nothing else", async ({ pa
   // Nothing about the exception itself crosses the wire.
   await expect(page.locator("[data-test=toast]")).not.toContainText("always going to");
 
-  // And the session is intact: the count is where it was, and clicking still works.
+  // And the UI session is intact: the count is where it was, and clicking still works.
   await expect(page.locator("[data-test=clicks]")).toHaveText("1");
   await page.locator("[data-test=still-works]").click();
   await expect(page.locator("[data-test=clicks]")).toHaveText("2");
@@ -245,7 +245,7 @@ test("a view that throws ends the session and the page starts over", async ({ pa
 
   await page.locator("[data-test=fail-view]").click();
 
-  // The client is told that this one can't be recovered, and reloads into a new session. That
+  // The client is told that this one can't be recovered, and reloads into a new UI session. That
   // shows up as the counter going back to zero on a page that works again.
   await expect(page.locator("[data-test=clicks]")).toHaveText("0", { timeout: 10_000 });
   await page.locator("[data-test=still-works]").click();
@@ -566,9 +566,9 @@ test("a foreign object hands the browser back to HTML mid-drawing", async ({ pag
  * State that outlives a navigation.
  *
  * Three lifetimes have to be distinguishable, and the browser is where the difference shows. State
- * in the chrome lasts as long as the session, a view's saved state comes back when the view does,
- * and a view's remembered state doesn't. A headless test can't cover the back button, because the
- * browser's own history drives the session, instead of the session driving it.
+ * in the chrome lasts as long as the UI session, a view's saved state comes back when the view
+ * does, and a view's remembered state doesn't. A headless test can't cover the back button, because
+ * the browser's own history drives the UI session, instead of the UI session driving it.
  */
 
 test("state in the chrome survives navigating away and back", async ({ page }) => {

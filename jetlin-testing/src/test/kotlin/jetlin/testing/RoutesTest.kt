@@ -12,7 +12,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * Tests following a session as it moves between views.
+ * Tests following a UI session as it moves between views.
  *
  * A single view set with `setContent` can't cover navigation. The location changes, and whether the
  * right view is composed at the other end is application behavior worth asserting on.

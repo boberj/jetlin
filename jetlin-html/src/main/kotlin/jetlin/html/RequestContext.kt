@@ -5,7 +5,7 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.compositionLocalOf
 
 /**
- * A typed key for a value that the application attaches to a session.
+ * A typed key for a value that the application attaches to a UI session.
  *
  * Jetlin knows about paths and query strings, but nothing about authentication, tenancy, or locale.
  * Instead of a type parameter on the whole configuration DSL, an application declares its own keys
@@ -32,15 +32,15 @@ public class AttributeKey<T>(public val name: String) {
 }
 
 /**
- * What the browser asked for, and whatever the application attached to the session.
+ * What the browser asked for, and whatever the application attached to the UI session.
  *
- * It's created with the session and updated on navigation, so a composable at any depth can read
+ * It's created with the UI session and updated on navigation, so a composable at any depth can read
  * the current path or a path parameter without it being passed down as an argument.
  *
  * @property path the path, without the query string.
  * @property pathParams the parameters that the matched route extracted from [path], by name.
  * @property queryParams the query parameters, by name. A name can appear more than once.
- * @property headers the headers of the HTTP request that created the session.
+ * @property headers the headers of the HTTP request that created the UI session.
  * @param attributes the values that the application attached, by key.
  */
 public class RequestContext(
@@ -76,8 +76,8 @@ public class RequestContext(
     /**
      * Returns a copy for the location [url].
      *
-     * It keeps the headers and attributes, which belong to the session, and replaces the path and
-     * the query. The path parameters are cleared until the router matches the new path.
+     * It keeps the headers and attributes, which belong to the UI session, and replaces the path
+     * and the query. The path parameters are cleared until the router matches the new path.
      */
     public fun forUrl(url: String): RequestContext {
         val path = url.substringBefore('?')

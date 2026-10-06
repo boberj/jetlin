@@ -1,8 +1,9 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.compose)
-    // SessionSnapshot is @Serializable. Without this plugin, the annotation compiles but generates
-    // nothing, so a store that has to write the snapshot somewhere would fail to find a serializer.
+    // UiSessionSnapshot is @Serializable. Without this plugin, the annotation compiles but
+    // generates nothing, so a store that has to write the snapshot somewhere would fail to find a
+    // serializer.
     alias(libs.plugins.kotlin.serialization)
 }
 

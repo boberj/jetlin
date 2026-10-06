@@ -23,7 +23,8 @@ import jetlin.html.rememberField
  * The new-issue dialog, composed by [Shell] while [UiState.create] is set.
  *
  * Everything in it is `remember`, not saved: an abandoned dialog is not worth waking a hibernated
- * session up to. Keyed on the request, so opening it again — or from a different "+" — starts clean.
+ * UI session up to. Keyed on the request, so opening it again — or from a different "+" — starts
+ * clean.
  */
 @Composable
 fun CreateIssueModal() {

@@ -15,10 +15,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Tests tearing a session down and building it back.
+ * Tests tearing a UI session down and building it back.
  *
- * Hibernation makes an idle session cheap and a restart survivable, and its whole contract is the
- * line between what comes back and what doesn't. These tests pin that line down.
+ * Hibernation makes an idle UI session cheap and a restart survivable, and its whole contract is
+ * the line between what comes back and what doesn't. These tests pin that line down.
  */
 class HibernationTest {
 
@@ -94,8 +94,8 @@ class HibernationTest {
         }
         view.start()
 
-        // Worth stating: an empty map is the signal the registry uses to decide that a session isn't
-        // worth storing at all.
+        // Worth stating: an empty map is the signal the registry uses to decide that a UI session
+        // isn't worth storing at all.
         assertEquals(emptyMap(), view.hibernate())
     }
 
@@ -181,7 +181,7 @@ class HibernationTest {
     }
 }
 
-/** Builds a session, lets [mutate] change its state, and hibernates it. */
+/** Builds a UI session, lets [mutate] change its state, and hibernates it. */
 private suspend fun firstSession(
     mutate: (draft: MutableState<String>, scratch: MutableState<String>) -> Unit,
 ): Map<String, JsonElement> {

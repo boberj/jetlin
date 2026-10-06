@@ -7,18 +7,20 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 /**
- * A session reduced to what's worth keeping while nobody is using it.
+ * A UI session reduced to what's worth keeping while nobody is using it.
  *
  * It's small by design. The composition, the node tree, and every `remember` are gone. What's left
  * is the location and whatever was declared with `rememberSaved`.
  */
 @Serializable
-public data class SessionSnapshot(
-    /** Where the session was, so a returning client that lost its address bar still lands there. */
+public data class UiSessionSnapshot(
+    /**
+     * Where the UI session was, so a returning client that lost its address bar still lands there.
+     */
     public val url: String,
     /** The values declared with `rememberSaved`, by key. */
     public val state: Map<String, JsonElement>,
-    /** When the session hibernated, in milliseconds since the epoch. */
+    /** When the UI session hibernated, in milliseconds since the epoch. */
     public val savedAtMillis: Long = System.currentTimeMillis(),
     /**
      * The format version of this snapshot.
@@ -29,8 +31,9 @@ public data class SessionSnapshot(
      */
     public val version: Int = CURRENT_VERSION,
     /**
-     * Identifies the browser that held the session, or `null` if the session wasn't bound. A socket
-     * has to present the same binding to wake the session. See [SessionRegistry.attach].
+     * Identifies the browser that held the UI session, or `null` if the UI session wasn't bound. A
+     * socket has to present the same binding to wake the UI session. See
+     * [UiSessionRegistry.attach].
      */
     public val binding: String? = null,
 ) {
@@ -41,62 +44,62 @@ public data class SessionSnapshot(
 }
 
 /**
- * Where hibernated sessions are kept.
+ * Where hibernated UI sessions are kept.
  *
- * Jetlin assumes a single node, so the in-memory implementation is all it needs today. A session
+ * Jetlin assumes a single node, so the in-memory implementation is all it needs today. A UI session
  * survives a dropped connection and a closed laptop lid, but not a restart. A shared implementation,
  * such as Redis, a database table, or anything with a TTL, would also survive the process, and you
  * can write one without changing anything above this interface.
  *
  * A shared store alone wouldn't make Jetlin run on several nodes, though. It only holds hibernated
- * sessions, so another node still couldn't pick up a session that's live, between the page render
- * and the socket connecting, or in its disconnect grace period. See `docs/architecture.md` for what
- * those cases would need.
+ * UI sessions, so another node still couldn't pick up a UI session that's live, between the page
+ * render and the socket connecting, or in its disconnect grace period. See `docs/architecture.md`
+ * for what those cases would need.
  */
-public interface SessionStore {
+public interface UiSessionStore {
 
     /** Stores [snapshot] under [token], replacing any snapshot already there. */
-    public suspend fun save(token: String, snapshot: SessionSnapshot)
+    public suspend fun save(token: String, snapshot: UiSessionSnapshot)
 
     /**
      * Atomically removes and returns the snapshot for [token].
      *
-     * It must be atomic, because waking a session transfers ownership. It isn't a read. Two sockets
-     * can send the same token at once, for example a reconnect racing a retry, or two tabs restored
-     * from the same saved page, and exactly one of them must end up owning the session. With a
-     * separate read and delete, both could build a composition from the same snapshot, and one of
-     * them would be live, attached, and invisible to the reaper that should collect it.
+     * It must be atomic, because waking a UI session transfers ownership. It isn't a read. Two
+     * sockets can send the same token at once, for example a reconnect racing a retry, or two tabs
+     * restored from the same saved page, and exactly one of them must end up owning the UI session.
+     * With a separate read and delete, both could build a composition from the same snapshot, and
+     * one of them would be live, attached, and invisible to the reaper that should collect it.
      *
      * @return the snapshot, or `null` if there's none.
      */
-    public suspend fun take(token: String): SessionSnapshot?
+    public suspend fun take(token: String): UiSessionSnapshot?
 }
 
 /**
- * Keeps hibernated sessions in this process.
+ * Keeps hibernated UI sessions in this process.
  *
  * That's enough to recover from a dropped connection or a closed laptop lid, which is the common
- * case. Sessions don't survive a restart.
+ * case. UI sessions don't survive a restart.
  *
  * @param ttl how long a snapshot is kept. An expired snapshot can't be taken.
  */
-public class InMemorySessionStore(
+public class InMemoryUiSessionStore(
     private val ttl: Duration = 30.minutes,
-) : SessionStore {
+) : UiSessionStore {
 
-    private val snapshots = ConcurrentHashMap<String, SessionSnapshot>()
+    private val snapshots = ConcurrentHashMap<String, UiSessionSnapshot>()
 
     /** The number of snapshots held, including expired ones that haven't been evicted yet. */
     public val size: Int get() = snapshots.size
 
-    override suspend fun save(token: String, snapshot: SessionSnapshot) {
+    override suspend fun save(token: String, snapshot: UiSessionSnapshot) {
         evictExpired()
         snapshots[token] = snapshot
     }
 
     // ConcurrentHashMap.remove returns the previous value in one operation, which is the atomicity
     // the interface requires: concurrent callers can't both get the same snapshot.
-    override suspend fun take(token: String): SessionSnapshot? =
+    override suspend fun take(token: String): UiSessionSnapshot? =
         snapshots.remove(token)?.takeUnless { it.isExpired() }
 
     // Sweep on write instead of on a timer. Only hibernation grows this map, so expired entries
@@ -107,6 +110,6 @@ public class InMemorySessionStore(
     }
 
     /** Whether this snapshot is older than [ttl]. */
-    private fun SessionSnapshot.isExpired(): Boolean =
+    private fun UiSessionSnapshot.isExpired(): Boolean =
         System.currentTimeMillis() - savedAtMillis > ttl.inWholeMilliseconds
 }

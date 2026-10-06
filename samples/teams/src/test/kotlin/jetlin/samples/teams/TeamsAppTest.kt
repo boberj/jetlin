@@ -88,12 +88,12 @@ class TeamsAppTest {
                 signedInAs(db, "bob@example.com")
                 onAll(hasTestTag("todo")).assertCount(2)
 
-                // Alice shares the todo from her own, separate session.
+                // Alice shares the todo from her own, separate UI session.
                 val arrival = recordUpdate { with(alice) { rehearse.update { team = alice.team } } }
 
                 onAll(hasTestTag("todo")).assertCount(3)
                 onNode(hasTestTag("todo") and hasText("Rehearse the demo", substring = true)).assertExists()
-                // A share from another session updates the list and nothing else. The chrome
+                // A share from another UI session updates the list and nothing else. The chrome
                 // recomposes, but it produces the same markup, so it emits no ops.
                 arrival.assertUntouched(hasTestTag("principal"), hasTestTag("draft"))
 
@@ -156,8 +156,8 @@ class TeamsAppTest {
             signedInAs(db, "root@example.com")
             onAll(hasTestTag("user")).assertCount(4)
 
-            // Someone else removes their admin role. Nothing notifies this session. The guard read
-            // `admin`.
+            // Someone else removes their admin role. Nothing notifies this UI session. The guard
+            // read `admin`.
             with(root) { root.update { admin = false } }
             awaitIdle()
 

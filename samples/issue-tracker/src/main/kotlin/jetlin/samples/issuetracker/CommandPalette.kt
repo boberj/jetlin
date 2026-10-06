@@ -30,7 +30,7 @@ private class Command(
  *
  * Every keystroke goes to the server, which does the matching. That is the point of showing it here
  * rather than filtering in the browser: the search runs against the live workspace, including
- * issues another session created a second ago, with no index shipped to the client and no API.
+ * issues another UI session created a second ago, with no index shipped to the client and no API.
  * Arrow keys move the highlight on the server too, which is what lets Enter run the same command the
  * user can see highlighted.
  */

@@ -77,7 +77,7 @@ fun main() {
             // default keeps test tags off the wire entirely.
             exposeTestTags = true
             head = STYLES
-            // Load the scripts before the session connects, so the sparkline's implementation is
+            // Load the scripts before the UI session connects, so the sparkline's implementation is
             // registered when the runtime adopts the markup it was served.
             clientSetup = """
                 <script src="/demo/sparkline.js"></script>
@@ -89,8 +89,8 @@ fun main() {
             onError = { throwable ->
                 println("[demo] a session reported: ${throwable::class.simpleName}: ${throwable.message}")
             }
-            // The shell is composed once for the session, above whichever view is current. The nav
-            // isn't rebuilt on every navigation, and anything remembered here outlives one.
+            // The shell is composed once for the UI session, above whichever view is current. The
+            // nav isn't rebuilt on every navigation, and anything remembered here outlives one.
             app { route -> Shell(route) }
             view("/", title = "Todos · Jetlin") { TodoListPage() }
             view("/todo/{id}", title = "Edit · Jetlin") { TodoDetailPage() }
@@ -115,8 +115,9 @@ internal val LocalTodoFilter: ProvidableCompositionLocal<MutableState<String>> =
 /** The page chrome around every view: the nav, the filter, and the reset button. */
 @Composable
 internal fun Shell(content: @Composable () -> Unit) {
-    // Remember the filter in the container, which is composed once for the session, so it's still
-    // here after opening a todo and coming back. The same `remember` inside a view wouldn't be.
+    // Remember the filter in the container, which is composed once for the UI session, so it's
+    // still here after opening a todo and coming back. The same `remember` inside a view wouldn't
+    // be.
     val filter = remember { mutableStateOf("") }
     CompositionLocalProvider(LocalTodoFilter provides filter) {
         Div({ classes("page") }) {
@@ -289,10 +290,11 @@ internal fun TodoDetailPage() {
  * From the outside, two failures look the same: an exception reaches the transport. They're
  * different. A handler that throws leaves the composition intact, so one interaction didn't happen,
  * and everything else still works. A composable that throws stops the recomposer for good, so the
- * session can only be abandoned.
+ * UI session can only be abandoned.
  *
- * Telling them apart is worth the trouble. Treating every failure as fatal throws away sessions that
- * were fine, and treating none as fatal leaves a page that looks live but can never change again.
+ * Telling them apart is worth the trouble. Treating every failure as fatal throws away UI sessions
+ * that were fine, and treating none as fatal leaves a page that looks live but can never change
+ * again.
  */
 @Composable
 internal fun ErrorsPage() {
@@ -628,8 +630,8 @@ internal fun Disclosure() {
 /**
  * Shows an update that the client never asked for.
  *
- * The effect runs on the server for as long as the session lives. Each tick writes state that this
- * composable reads, which recomposes it and produces a patch.
+ * The effect runs on the server for as long as the UI session lives. Each tick writes state that
+ * this composable reads, which recomposes it and produces a patch.
  */
 @Composable
 internal fun ServerClock() {

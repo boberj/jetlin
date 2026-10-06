@@ -27,7 +27,7 @@ import kotlinx.serialization.json.JsonElement
  *
  * @param initialRequest the request the view starts at.
  * @param framePolicy how often the view may recompose. See [FramePolicy].
- * @param restored the state that [hibernate] returned, when waking a hibernated session.
+ * @param restored the state that [hibernate] returned, when waking a hibernated UI session.
  * @param exposeTestTags whether to also write each `testTag` as a `data-test` attribute, so
  *   browser tests can select on it.
  * @param content the view's content. It receives the current request.
@@ -61,7 +61,7 @@ public class LiveView(
     public val title: String? get() = titleState.value
 
     /**
-     * The location this session shows.
+     * The location this UI session shows.
      *
      * It's Compose state, so changing it recomposes whatever reads it, and that's all navigation is:
      * the router matches the new location, the matched view replaces the old one, and the applier
@@ -82,7 +82,7 @@ public class LiveView(
      */
     private val pendingNavigations = ArrayDeque<ServerMessage>()
 
-    /** The URL this session shows, including the query string. */
+    /** The URL this UI session shows, including the query string. */
     public val currentUrl: String get() = request.url
 
     private val navigator = object : Navigator {
@@ -113,13 +113,13 @@ public class LiveView(
                 content(request)
             }
         }
-        // Wait until the session settles, not only until it's applied. The page is rendered from
+        // Wait until the UI session settles, not only until it's applied. The page is rendered from
         // this tree after start() returns, and a socket that adopts the page keeps every op
         // recorded after the drain below (see adopt()). An effect that ran after the drain but
         // before the render would reach the browser twice, once in the markup and once as a patch,
         // and an insert applied twice corrupts the page. Running the queued effects first puts their
         // ops among the ones discarded here. The wait is bounded, so an effect that never lets the
-        // session settle delays the first render instead of preventing it.
+        // UI session settle delays the first render instead of preventing it.
         host.awaitIdle(effectsBudget = START_EFFECTS_BUDGET)
         host.confined { owner.drainOps() }
     }
@@ -129,7 +129,7 @@ public class LiveView(
      *
      * It's `false` after a composable throws. Other failures, such as a handler that threw or a
      * store that was unreachable, leave the view usable. The server uses this property to decide
-     * whether to tell the client that one click failed or that its session is gone.
+     * whether to tell the client that one click failed or that its UI session is gone.
      */
     public val isAlive: Boolean get() = host.isAlive
 
@@ -139,9 +139,9 @@ public class LiveView(
     /**
      * Waits for the view to settle, then runs [block] on the thread that owns the tree.
      *
-     * The composition owns the tree, and the applier changes it on the session's thread. Anything
-     * that examines the tree, such as a test that asserts on what was rendered or a debug endpoint,
-     * must do it from that thread.
+     * The composition owns the tree, and the applier changes it on the UI session's thread.
+     * Anything that examines the tree, such as a test that asserts on what was rendered or a debug
+     * endpoint, must do it from that thread.
      *
      * @return the value [block] returns.
      */
@@ -199,9 +199,9 @@ public class LiveView(
     /**
      * Tells the view that no client is connected anymore.
      *
-     * The composition stays alive, so a client that reconnects finds its session as it left it. But
-     * the view stops recording ops, because the next client to connect receives the whole tree
-     * anyway. Without this, a session with a running timer would pile up updates for a page that
+     * The composition stays alive, so a client that reconnects finds its UI session as it left it.
+     * But the view stops recording ops, because the next client to connect receives the whole tree
+     * anyway. Without this, a UI session with a running timer would pile up updates for a page that
      * nobody will see.
      */
     public suspend fun clientDetached(): Unit = host.confined { owner.stopRecording() }
@@ -209,9 +209,10 @@ public class LiveView(
     /**
      * Captures the state worth keeping, then shuts down the composition.
      *
-     * This is what makes an idle session cheap. The slot table, the node tree, and the coroutines
-     * all go away. What's left is a map small enough to keep in memory for thousands of sessions,
-     * or to write somewhere another server can read it. You can't use the view afterward.
+     * This is what makes an idle UI session cheap. The slot table, the node tree, and the
+     * coroutines all go away. What's left is a map small enough to keep in memory for thousands of
+     * UI sessions, or to write somewhere another server can read it. You can't use the view
+     * afterward.
      *
      * Only values declared with [rememberSaved] survive. Values in `remember` are deliberately left
      * out: they're scratch space, and the point is to recompute them.
@@ -220,12 +221,12 @@ public class LiveView(
      */
     public suspend fun hibernate(): Map<String, JsonElement> {
         // Close the view whatever happens, including during the wait. A composition that has died
-        // throws its failure from awaitIdle. With the wait outside the try, the sessions that most
-        // needed releasing were the only ones never released.
+        // throws its failure from awaitIdle. With the wait outside the try, the UI sessions that
+        // most needed releasing were the only ones never released.
         return try {
-            // Wait until the session settles, so a value that an effect was about to save is saved.
-            // The wait is bounded, because nobody is looking at a hibernating session, and one whose
-            // effects never settle still has to be released.
+            // Wait until the UI session settles, so a value that an effect was about to save is
+            // saved. The wait is bounded, because nobody is looking at a hibernating UI session,
+            // and one whose effects never settle still has to be released.
             host.awaitIdle(effectsBudget = HIBERNATE_EFFECTS_BUDGET)
             host.confined { stateRegistry.performSave() }
         } finally {
@@ -252,7 +253,7 @@ public class LiveView(
     }
 
     /**
-     * Moves the session to [url].
+     * Moves the UI session to [url].
      *
      * @param replace whether the browser should replace the current history entry.
      * @param notifyClient whether to tell the browser to update its address bar.
@@ -279,10 +280,10 @@ public class LiveView(
      */
     public val messages: Flow<ServerMessage> = flow {
         for (signal in owner.dirtySignals) {
-            // Wait until changes are applied, not until the session settles. This runs before every
-            // message the session sends, so it waits only for the recomposition that produced the
-            // ops. Changes that an effect makes later record their own ops, signal again, and go
-            // out in the next message.
+            // Wait until changes are applied, not until the UI session settles. This runs before
+            // every message the UI session sends, so it waits only for the recomposition that
+            // produced the ops. Changes that an effect makes later record their own ops, signal
+            // again, and go out in the next message.
             host.awaitApplied()
             val batch = host.confined {
                 buildList {

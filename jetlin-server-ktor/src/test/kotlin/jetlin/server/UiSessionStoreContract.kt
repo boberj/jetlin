@@ -16,20 +16,20 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
 
 /**
- * Tests what any [SessionStore] has to do.
+ * Tests what any [UiSessionStore] has to do.
  *
  * It's written down so that a second implementation has a contract to meet, instead of a first
  * implementation to imitate. To test an implementation, subclass this and supply a store. Every
  * implementation runs the same tests.
  */
-abstract class SessionStoreContract {
+abstract class UiSessionStoreContract {
 
     /** Returns an empty store whose snapshots expire after [ttl]. */
-    abstract fun createStore(ttl: Duration): SessionStore
+    abstract fun createStore(ttl: Duration): UiSessionStore
 
-    private fun store(ttl: Duration = 30.minutes): SessionStore = createStore(ttl)
+    private fun store(ttl: Duration = 30.minutes): UiSessionStore = createStore(ttl)
 
-    private fun snapshot(url: String = "/", draft: String = "typed") = SessionSnapshot(
+    private fun snapshot(url: String = "/", draft: String = "typed") = UiSessionSnapshot(
         url = url,
         state = mapOf("draft" to JsonPrimitive(draft)),
     )
@@ -89,10 +89,10 @@ abstract class SessionStoreContract {
     /**
      * Tests the property the interface exists for.
      *
-     * Waking a session transfers ownership. Two sockets can send one token at the same time, and if
-     * both got the snapshot, both would build a composition from it, leaving one live, attached, and
-     * invisible to the reaper that should collect it. Implementing `take` as a read followed by a
-     * delete fails this test, which is why it exists.
+     * Waking a UI session transfers ownership. Two sockets can send one token at the same time, and
+     * if both got the snapshot, both would build a composition from it, leaving one live, attached,
+     * and invisible to the reaper that should collect it. Implementing `take` as a read followed by
+     * a delete fails this test, which is why it exists.
      */
     @Test
     fun `concurrent takes hand the snapshot to exactly one caller`(): Unit = runBlocking {
@@ -101,7 +101,7 @@ abstract class SessionStoreContract {
             val token = "token-$attempt"
             store.save(token, snapshot(draft = "contested"))
 
-            val winners = Collections.synchronizedList(mutableListOf<SessionSnapshot>())
+            val winners = Collections.synchronizedList(mutableListOf<UiSessionSnapshot>())
             (1..8).map {
                 async { store.take(token)?.let(winners::add) }
             }.awaitAll()
@@ -121,15 +121,15 @@ abstract class SessionStoreContract {
         store.save("token", original)
 
         val taken = assertNotNull(store.take("token"))
-        val json = Json.encodeToString(SessionSnapshot.serializer(), taken)
-        val decoded = Json.decodeFromString(SessionSnapshot.serializer(), json)
+        val json = Json.encodeToString(UiSessionSnapshot.serializer(), taken)
+        val decoded = Json.decodeFromString(UiSessionSnapshot.serializer(), json)
 
         assertEquals(taken, decoded)
-        assertEquals(SessionSnapshot.CURRENT_VERSION, decoded.version)
+        assertEquals(UiSessionSnapshot.CURRENT_VERSION, decoded.version)
     }
 }
 
-/** Runs the [SessionStoreContract] against [InMemorySessionStore]. */
-class InMemorySessionStoreTest : SessionStoreContract() {
-    override fun createStore(ttl: Duration): SessionStore = InMemorySessionStore(ttl)
+/** Runs the [UiSessionStoreContract] against [InMemoryUiSessionStore]. */
+class InMemorySessionStoreTest : UiSessionStoreContract() {
+    override fun createStore(ttl: Duration): UiSessionStore = InMemoryUiSessionStore(ttl)
 }

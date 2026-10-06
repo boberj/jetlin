@@ -36,7 +36,8 @@ fun main() {
             """.trimIndent()
             clientSetup = """<script src="/issue-tracker/app.js"></script>"""
 
-            // The sidebar, overlays and view state are composed once per session, above the pages.
+            // The sidebar, overlays and view state are composed once per UI session, above the
+            // pages.
             app { route -> Shell(route) }
             view("/", title = "My issues · Acme") { MyIssuesPage() }
             view("/team/{key}/issues", title = "Issues · Acme") { TeamIssuesPage() }

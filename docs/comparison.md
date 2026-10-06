@@ -67,7 +67,7 @@ rows where Jetlin is missing a feature.
 | Debounce and throttle on input | Yes | Yes | Yes | By hand |
 | Immediate client-side behavior | `clientOnly` (fixed commands) | `JS` commands and hooks | Alpine.js | JavaScript interop, by hand |
 | Third-party widget integration | `ClientComponent` | Hooks | `wire:ignore` and Alpine | JavaScript interop |
-| Idle session hibernation | Yes | No | Not applicable (stateless) | No |
+| Idle UI session hibernation | Yes | No | Not applicable (stateless) | No |
 | Test kit without a browser | `jetlin-testing` | `LiveViewTest` | Livewire test helpers | bUnit |
 | Bundled data layer | `jetlin-db` (SQLite, in memory) | Ecto | Eloquent | EF Core |
 | Per-record access control in the data layer | Yes, as Kotlin functions | Ecto scopes, by hand | Policies, by hand | By hand |
@@ -76,7 +76,7 @@ rows where Jetlin is missing a feature.
 | File uploads | No | Yes | Yes | Yes |
 | More than one node | No | Yes | Yes | Yes, with a backplane |
 | Published artifacts | No | Yes | Yes | Yes |
-| Session limit and runaway-client limit | Yes, but not a DoS defense | Yes | At the framework level | Yes |
+| UI session limit and runaway-client limit | Yes, but not a DoS defense | Yes | At the framework level | Yes |
 | Telemetry | No | Yes | Yes | Yes |
 | Ecosystem, components, and documentation | No | Large | Large | Large |
 
@@ -135,18 +135,19 @@ Almost every real application needs them.
 
 ### A single node only
 
-`SessionStore` is designed to allow a shared implementation, and `SessionStoreContract` defines the
-required behavior, but the policy for the windows when a session lives on one node has to be decided
-first. LiveView, Blazor, and Livewire all run behind load balancers today.
+`UiSessionStore` is designed to allow a shared implementation, and `UiSessionStoreContract` defines
+the required behavior, but the policy for the windows when a UI session lives on one node has to be
+decided first. LiveView, Blazor, and Livewire all run behind load balancers today.
 
 ### Limits are global, not per client
 
-A limit on live sessions keeps the process from running out of memory, and an event budget for each
-connection stops a misbehaving page from using a large share of the server. Neither protects against
-a deliberate attacker: one source can use up the session limit so that everyone else is refused, or
-flood many sessions at the allowed rate. Limits for each address require deciding whether to trust
-`X-Forwarded-For`, and for now they belong in a proxy in front of the application. The mature
-frameworks put them there too, but they document it clearly and provide operational guidance.
+A limit on live UI sessions keeps the process from running out of memory, and an event budget for
+each connection stops a misbehaving page from using a large share of the server. Neither protects
+against a deliberate attacker: one source can use up the UI session limit so that everyone else is
+refused, or flood many UI sessions at the allowed rate. Limits for each address require deciding
+whether to trust `X-Forwarded-For`, and for now they belong in a proxy in front of the application.
+The mature frameworks put them there too, but they document it clearly and provide operational
+guidance.
 
 ### The data layer has no second enforcement layer and no indexes
 
@@ -161,9 +162,9 @@ supervision trees. Vaadin sells a commercial component suite. Jetlin has a five-
 ### Elixir has something Kotlin doesn't
 
 On the BEAM, each LiveView runs in an isolated lightweight process, so a crash takes down one process,
-and a supervisor restarts it. Jetlin's equivalent is a single-threaded dispatcher for each session,
-plus the error handling that §7 of the architecture document describes. That handling is careful, but
-it isn't process isolation.
+and a supervisor restarts it. Jetlin's equivalent is a single-threaded dispatcher for each UI
+session, plus the error handling that §7 of the architecture document describes. That handling is
+careful, but it isn't process isolation.
 
 ## Where Jetlin does something the others don't
 
@@ -178,10 +179,10 @@ tests passing, and the one that fails is this assertion.
 
 ### Hibernation
 
-An idle session drops from about 136 kB to about 364 bytes. Values declared with `rememberSaved` are
-stored, and the composition is destroyed. Values declared with `remember` are discarded as temporary.
-That makes an idle user roughly 390 times cheaper to keep. LiveView remounts instead of restoring,
-and Blazor loses the circuit.
+An idle UI session drops from about 136 kB to about 364 bytes. Values declared with `rememberSaved`
+are stored, and the composition is destroyed. Values declared with `remember` are discarded as
+temporary. That makes an idle user roughly 390 times cheaper to keep. LiveView remounts instead of
+restoring, and Blazor loses the circuit.
 
 ### Test tags that cost nothing
 
@@ -202,8 +203,8 @@ Kotlin is statically typed, and Compose already provides an incremental UI runti
   published, documented, and supported.
 - Your users have high latency or unreliable networks. Every framework here suffers in those
   conditions, but the mature ones have years of mitigations. Jetlin has `clientOnly` and little else.
-- Your content is mostly static. Use Hotwire or plain server rendering. Keeping a live session for
-  each reader costs resources and gives nothing in return.
+- Your content is mostly static. Use Hotwire or plain server rendering. Keeping a live UI session
+  for each reader costs resources and gives nothing in return.
 - You need offline support. None of these frameworks can provide it. Use a client-side framework.
 - You're on the JVM and want this approach now. Vaadin Flow is mature and commercially supported. It
   uses component objects instead of a declarative style, which makes code read quite differently, but

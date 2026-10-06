@@ -10,7 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 /**
  * The outcome of checking a route's requirements for a request.
  *
- * This is a return value, not an exception. A view that throws ends the session and reloads the
+ * This is a return value, not an exception. A view that throws ends the UI session and reloads the
  * page, which suits a bug but not an ordinary outcome like "you need to sign in."
  */
 public sealed interface Access {
@@ -32,7 +32,7 @@ public sealed interface Access {
 /**
  * A requirement a request must meet to reach a route.
  *
- * A guard checks the session's [RequestContext], which holds the application's principal. It's a
+ * A guard checks the UI session's [RequestContext], which holds the application's principal. It's a
  * pure function of the request and the principal that the server added to it, so it gives the
  * same answer in the HTTP layer, in the composition, and in a test.
  *
@@ -154,9 +154,9 @@ public val LocalRouteGuards: ProvidableCompositionLocal<RouteGuards> =
  * For the same reason, one guard covers all three ways of reaching a route:
  *
  * - A deep link: the HTTP layer checks the guard first, and this check agrees with it.
- * - Navigation within a session: the request changes, and this composable recomposes.
- * - A hibernated session waking up: the principal is recomputed from the new connection, so a role
- *   revoked while the session was hibernated takes effect on the first recomposition.
+ * - Navigation within a UI session: the request changes, and this composable recomposes.
+ * - A hibernated UI session waking up: the principal is recomputed from the new connection, so a
+ *   role revoked while the UI session was hibernated takes effect on the first recomposition.
  *
  * @param guard the requirement to check, or `null` to allow every request.
  * @param notFound what to show when the guard returns [Access.NotFound].

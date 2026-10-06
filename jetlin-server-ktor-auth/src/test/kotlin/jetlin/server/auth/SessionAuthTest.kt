@@ -147,7 +147,7 @@ class SessionAuthTest {
 
         browser().webSocket(SOCKET) {
             hello(token)
-            assertTrue(awaitMessage<ServerMessage.Error>().fatal, "another browser must not get alice's session")
+            assertTrue(awaitMessage<ServerMessage.Error>().fatal, "another browser must not get alice's UI session")
         }
     }
 
@@ -320,7 +320,9 @@ class SessionAuthTest {
     private suspend fun HttpClient.ticketFor(name: String, next: String = "/"): String =
         ticketFrom(tokenOf("/login?next=$next"), button = name)
 
-    /** Clicks [button] in the session [token], and returns the ticket that the page load carries. */
+    /**
+     * Clicks [button] in the UI session [token], and returns the ticket that the page load carries.
+     */
     private suspend fun HttpClient.ticketFrom(token: String, button: String): String {
         var ticket: String? = null
         webSocket(SOCKET) {
@@ -346,11 +348,11 @@ class SessionAuthTest {
         header("Sec-Fetch-Site", fetchSite)
     }
 
-    /** Renders [url], and returns the page's session token. */
+    /** Renders [url], and returns the page's UI session token. */
     private suspend fun HttpClient.tokenOf(url: String): String {
         val html = get(url).bodyAsText()
         return Regex("""token: "([^"]+)"""").find(html)?.groupValues?.get(1)
-            ?: error("no session token in $url: $html")
+            ?: error("no UI session token in $url: $html")
     }
 
     /** Returns the cookie named [name] that this response sets, with all its attributes. */

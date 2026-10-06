@@ -36,7 +36,7 @@ class LimitsTest {
     fun `page renders are refused once the session limit is reached`(): Unit = testApplication {
         application {
             jetlin {
-                maxSessions = 2
+                maxUiSessions = 2
                 view("/") { Div { Text("a page") } }
             }
         }
@@ -57,7 +57,7 @@ class LimitsTest {
     fun `a reconnect is not refused when the limit is reached`(): Unit = testApplication {
         application {
             jetlin {
-                maxSessions = 1
+                maxUiSessions = 1
                 view("/") { Div { Text("a page") } }
             }
         }
@@ -67,8 +67,8 @@ class LimitsTest {
         // The one slot is taken, and new visitors are turned away.
         assertEquals(HttpStatusCode.ServiceUnavailable, client.get("/").status)
 
-        // Someone who already had a session isn't. Turning them away to make room for new visitors
-        // would be the wrong trade, and they aren't the ones creating the pressure.
+        // Someone who already had a UI session isn't. Turning them away to make room for new
+        // visitors would be the wrong trade, and they aren't the ones creating the pressure.
         client.webSocket("/jetlin") {
             hello(token)
             awaitMessage<ServerMessage.Reset>()
@@ -112,7 +112,7 @@ class LimitsTest {
         val log = LogCapture.of("jetlin.server")
         application {
             jetlin {
-                maxSessions = 1
+                maxUiSessions = 1
                 eventsPerSecond = 1.0
                 eventBurst = 1
                 view("/") {
@@ -137,11 +137,11 @@ class LimitsTest {
         // it protects people from never gets fixed.
         log.use {
             assertTrue(
-                log.contains("At the session limit of 1"),
-                "expected the session cap to be logged, got: ${log.lines}",
+                log.contains("At the UI session limit of 1"),
+                "expected the UI session cap to be logged, got: ${log.lines}",
             )
             assertTrue(
-                log.contains("Throttling session"),
+                log.contains("Throttling UI session"),
                 "expected the throttle to be logged, got: ${log.lines}",
             )
             // And the total on the way out, which says how bad it was.

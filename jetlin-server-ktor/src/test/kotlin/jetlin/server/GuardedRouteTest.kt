@@ -18,10 +18,10 @@ import kotlin.test.assertTrue
 /**
  * Tests guarded routes reached by a deep link, where the guard runs before any composition exists.
  *
- * `GuardTest` in `:jetlin-testing` covers navigation within a session and waking from hibernation.
- * All three paths must agree, and this one has to express the result in HTTP: a redirect is a `302`
- * response, not a page that redirects itself, and a refused route is a `404` that doesn't reveal that
- * the route exists.
+ * `GuardTest` in `:jetlin-testing` covers navigation within a UI session and waking from
+ * hibernation. All three paths must agree, and this one has to express the result in HTTP: a
+ * redirect is a `302` response, not a page that redirects itself, and a refused route is a `404`
+ * that doesn't reveal that the route exists.
  */
 class GuardedRouteTest {
 
@@ -35,7 +35,7 @@ class GuardedRouteTest {
         assertEquals(HttpStatusCode.Found, response.status)
         assertEquals("/login?next=/todos", response.headers[HttpHeaders.Location])
         // No composition was created. Rendering a page for a request that's about to be redirected
-        // would cost a whole session.
+        // would cost a whole UI session.
         assertFalse("jl-session" in response.bodyAsText())
     }
 

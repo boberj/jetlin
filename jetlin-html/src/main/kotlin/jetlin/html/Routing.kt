@@ -11,7 +11,7 @@ import jetlin.runtime.rememberSaveableStateHolder
  * A path pattern with named parameters, such as `/todo/{id}`.
  *
  * Jetlin matches patterns itself instead of using the HTTP routing tree, because navigation inside a
- * live session never reaches the HTTP layer. It only changes composition state.
+ * live UI session never reaches the HTTP layer. It only changes composition state.
  *
  * @property pattern the pattern. A segment in braces, such as `{id}`, is a parameter that matches
  *   any one segment.
@@ -93,7 +93,7 @@ public class Router<T>(routes: List<Pair<RoutePattern, T>>) {
 }
 
 /**
- * Composes [container] once for the session, with the view for the current location inside it.
+ * Composes [container] once for the UI session, with the view for the current location inside it.
  *
  * The composition outlives every navigation, because only the state that names the location
  * changes. So [container], above the route, is the one place where an application can keep
@@ -147,7 +147,7 @@ public fun <T> RouteHost(
 }
 
 /**
- * Moves the session to another location without a page load.
+ * Moves the UI session to another location without a page load.
  *
  * The composition stays alive. Only the state that names the current route changes, so the runtime
  * replaces the matched view and records the resulting DOM changes. The browser is told separately to
@@ -161,12 +161,12 @@ public interface Navigator {
     public fun replace(url: String)
 
     /**
-     * Leaves the session with a real page load of [url].
+     * Leaves the UI session with a real page load of [url].
      *
      * Use it only to reach an HTTP endpoint that has to answer the browser directly, for example to
-     * set a cookie. Everything else should use [push] or [replace], which keep the session alive.
-     * The browser goes after the patch from the current update, and nothing sent after that reaches
-     * it.
+     * set a cookie. Everything else should use [push] or [replace], which keep the UI session
+     * alive. The browser goes after the patch from the current update, and nothing sent after that
+     * reaches it.
      *
      * @param post the fields to submit as a `POST` form, or `null` to follow a link. Put secrets
      *   here instead of in [url], which ends up in access logs and browser history.
@@ -174,6 +174,6 @@ public interface Navigator {
     public fun load(url: String, post: Map<String, String>? = null)
 }
 
-/** The session's [Navigator]. [LiveView] provides it. */
+/** The UI session's [Navigator]. [LiveView] provides it. */
 public val LocalNavigator: ProvidableCompositionLocal<Navigator> =
     staticCompositionLocalOf { error("No Navigator in composition; content must be hosted by a LiveView") }

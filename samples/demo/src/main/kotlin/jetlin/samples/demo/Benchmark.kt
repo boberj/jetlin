@@ -19,61 +19,62 @@ import jetlin.runtime.rememberSaved
 import kotlinx.coroutines.runBlocking
 
 /**
- * Measures the retained heap of each live session, and of each hibernated one.
+ * Measures the retained heap of each live UI session, and of each hibernated one.
  *
  * With UI state on the server, memory grows with the number of connected users, so this number sets
- * the practical limit on how many sessions a node can hold. The benchmark creates many sessions,
- * keeps them all reachable, and compares heap usage before and after.
+ * the practical limit on how many UI sessions a node can hold. The benchmark creates many UI
+ * sessions, keeps them all reachable, and compares heap usage before and after.
  *
- * Set the environment variable `SESSIONS` to change the number of sessions, which defaults to 1,000.
- * Set `PAGE=real` to measure the application's todo list page instead of the synthetic page below.
- * The two results show that a session's cost depends mostly on the size of its page: the synthetic
- * page has 113 nodes and costs about 130 kB, and the todo list has 42 nodes and costs about 65 kB.
- * That's roughly 1.5 kB per node in both cases.
+ * Set the environment variable `SESSIONS` to change the number of UI sessions, which defaults to
+ * 1,000. Set `PAGE=real` to measure the application's todo list page instead of the synthetic page
+ * below. The two results show that a UI session's cost depends mostly on the size of its page: the
+ * synthetic page has 113 nodes and costs about 130 kB, and the todo list has 42 nodes and costs
+ * about 65 kB. That's roughly 1.5 kB per node in both cases.
  *
  * To run it, use `./gradlew :samples:demo:benchmark`.
  */
 fun main() = runBlocking {
-    val sessionCount = System.getenv("SESSIONS")?.toInt() ?: 1000
+    val uiSessionCount = System.getenv("SESSIONS")?.toInt() ?: 1000
     val real = System.getenv("PAGE") == "real"
     val page: @Composable () -> Unit = if (real) ({ TodoListPage() }) else ({ BenchmarkView() })
 
-    // Warm up the runtime, so class loading and JIT compilation don't count as session cost.
+    // Warm up the runtime, so class loading and JIT compilation don't count as UI session cost.
     repeat(20) { LiveView(content = { _ -> page() }).also { it.start() }.close() }
 
     val before = usedHeap()
-    val views = ArrayList<LiveView>(sessionCount)
-    repeat(sessionCount) {
+    val views = ArrayList<LiveView>(uiSessionCount)
+    repeat(uiSessionCount) {
         val view = LiveView(content = { _ -> page() })
         view.start()
         views += view
     }
     val after = usedHeap()
 
-    val perSession = (after - before) / sessionCount
+    val perUiSession = (after - before) / uiSessionCount
     val nodes = countNodes(views.first().owner.snapshotChildren())
 
-    // Now hibernate every session and measure what an idle session costs. This is the whole case
-    // for hibernation: a session that nobody is looking at shouldn't cost what a live one costs.
+    // Now hibernate every UI session and measure what an idle UI session costs. This is the whole
+    // case for hibernation: a UI session that nobody is looking at shouldn't cost what a live one
+    // costs.
     val snapshots = views.map { it.hibernate() }
     // Dropping the references is part of hibernation. In production, the registry forgets the
-    // session, and only the snapshot stays reachable. Measuring with the closed views still held
+    // UI session, and only the snapshot stays reachable. Measuring with the closed views still held
     // would report the cost of the compositions that were just destroyed.
     views.clear()
     val hibernated = usedHeap()
-    val perHibernated = (hibernated - before) / sessionCount
+    val perHibernated = (hibernated - before) / uiSessionCount
 
     println("page:               ${if (real) "the application's todo list" else "synthetic"}")
-    println("sessions:           $sessionCount")
+    println("sessions:           $uiSessionCount")
     println("nodes per session:  $nodes")
     println("heap before:        ${before / 1024 / 1024} MB")
-    println("live:               ${perSession / 1024} kB per session (${(after - before) / 1024 / 1024} MB total)")
+    println("live:               ${perUiSession / 1024} kB per session (${(after - before) / 1024 / 1024} MB total)")
     println("hibernated:         $perHibernated bytes per session (${(hibernated - before) / 1024} kB total)")
-    println("ratio:              ${perSession / perHibernated.coerceAtLeast(1)}x cheaper idle")
+    println("ratio:              ${perUiSession / perHibernated.coerceAtLeast(1)}x cheaper idle")
     println("saved keys:         ${snapshots.first().keys}")
 
     // Keep the snapshots reachable until after the measurement.
-    check(snapshots.size == sessionCount)
+    check(snapshots.size == uiSessionCount)
 }
 
 /** Returns the number of nodes in [specs] and their subtrees. */

@@ -64,7 +64,7 @@ class DbConventionsTest {
      * Reading a policy-filtered collection runs the policy for each record on every read, during
      * composition. Results aren't cached, because a cached decision could outlive the state it was
      * based on and break reactive revocation. A policy that did I/O would put a network round trip
-     * inside recomposition, on the session's only thread.
+     * inside recomposition, on the UI session's only thread.
      */
     @Test
     fun `policies do not suspend or block`() {

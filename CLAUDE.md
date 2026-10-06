@@ -9,8 +9,8 @@ using the Compose runtime with no UI toolkit underneath it. The browser gets ser
 plus a small TypeScript runtime that applies DOM patches and reports events back over a
 WebSocket.
 
-`docs/architecture.md` is the full design doc — read it before touching sessions, hibernation, the
-protocol, or the applier; it explains *why*, not just what, and documents which behaviors are
+`docs/architecture.md` is the full design doc — read it before touching UI sessions, hibernation,
+the protocol, or the applier; it explains *why*, not just what, and documents which behaviors are
 deliberate rather than accidental. `README.md` has the pitch and quick examples. Both can drift from
 the version catalog (e.g. architecture.md discusses a since-superseded Compose pin) — treat
 `gradle/libs.versions.toml` and the build files as the source of truth for versions.
@@ -65,7 +65,7 @@ jetlin-runtime    (CompositionHost, FramePolicy, GlobalSnapshotManager — Compo
       ▲
 jetlin-html       (LiveView, HtmlApplier, virtual DOM, elements, routing, forms, HTML serializer)
       ▲
-jetlin-server-ktor (HTTP + WebSocket endpoints, SessionRegistry, rate limiting)
+jetlin-server-ktor (HTTP + WebSocket endpoints, UiSessionRegistry, rate limiting)
       ▲
 jetlin-server-ktor-auth (Ktor typed session auth: principal, token binding, sign-in/out tickets)
 
@@ -87,22 +87,22 @@ driven directly from a test. Server adapters are additive on top of it.
    an op while the tree is rebuilt. The buffer is drained once per recomposition pass into one patch.
 
 Nothing diffs two tree versions — the ops **are** the diff, because the runtime already knows what
-it changed. The same loop runs for server-originated writes (a timer, a shared store another session
-touched): `GlobalSnapshotManager` is what turns writes made *outside* a composition into apply
-notifications, since nothing does that automatically outside a UI toolkit.
+it changed. The same loop runs for server-originated writes (a timer, a shared store another UI
+session touched): `GlobalSnapshotManager` is what turns writes made *outside* a composition into
+apply notifications, since nothing does that automatically outside a UI toolkit.
 
-Each session runs on `Dispatchers.Default.limitedParallelism(1)` — event handling, recomposition
+Each UI session runs on `Dispatchers.Default.limitedParallelism(1)` — event handling, recomposition
 and patch draining are serialized by construction, not by locking.
 
-### Sessions, hibernation, adoption (`jetlin-server-ktor`)
+### UI sessions, hibernation, adoption (`jetlin-server-ktor`)
 
-- A `GET` renders HTML once and stores the live composition in `SessionRegistry`; the WebSocket
+- A `GET` renders HTML once and stores the live composition in `UiSessionRegistry`; the WebSocket
   reattaches to it by token rather than re-rendering. Adoption walks the server-rendered DOM instead
   of resending the tree — any mismatch falls back to a full `Reset` rather than guessing.
-- Sessions go live → orphaned (socket gone, composition kept for a grace period) → hibernated
-  (`rememberSaved` state persisted via `SessionStore`, composition torn down). `remember` is scratch
-  space and is *not* preserved.
-- Jetlin is single-node by design today — `SessionStore` is shaped for a shared backend, but three
+- UI sessions go live → orphaned (socket gone, composition kept for a grace period) → hibernated
+  (`rememberSaved` state persisted via `UiSessionStore`, composition torn down). `remember` is
+  scratch space and is *not* preserved.
+- Jetlin is single-node by design today — `UiSessionStore` is shaped for a shared backend, but three
   windows (socket attached, render→connect gap, disconnect grace period) are node-local regardless of
   where snapshots are stored, so a shared store alone would not make it multi-node.
 
@@ -114,5 +114,5 @@ never serialized to the DOM unless `JetlinConfig.exposeTestTags` is on) and matc
 testing equivalent and are worth reaching for:
 - `recordUpdate { }.assertOnlyWithin(...)` — asserts which nodes an interaction actually touched;
   catches broken `key(...)` usage that produces correct HTML but re-sends far more than necessary.
-- `hibernateAndRestore()` — drives a session through the real hibernate/wake cycle to check that the
-  right state was (or wasn't) declared with `rememberSaved`.
+- `hibernateAndRestore()` — drives a UI session through the real hibernate/wake cycle to check that
+  the right state was (or wasn't) declared with `rememberSaved`.

@@ -125,7 +125,7 @@ class PersistenceTest {
                         first.settle()
                         second.settle()
 
-                        // Neither session subscribed to the record, and nothing broadcast the
+                        // Neither UI session subscribed to the record, and nothing broadcast the
                         // change. Both read the same cell, so applying the write invalidated both.
                         assertEquals(listOf(Op.SetText(3, "Read it twice")), first.drain())
                         assertEquals(listOf(Op.SetText(3, "Read it twice")), second.drain())

@@ -24,11 +24,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 
 /**
- * Tests a session going all the way down and coming back, over a real socket.
+ * Tests a UI session going all the way down and coming back, over a real socket.
  *
  * The unit tests cover capture and restore separately. This test covers the part only the transport
- * knows: a socket going away eventually hibernates the session, and a later socket that sends the
- * same token gets the user's state back instead of a blank page.
+ * knows: a socket going away eventually hibernates the UI session, and a later socket that sends
+ * the same token gets the user's state back instead of a blank page.
  */
 class HibernationRoundTripTest {
 
@@ -36,10 +36,10 @@ class HibernationRoundTripTest {
 
     @Test
     fun `a draft typed before a disconnect survives hibernation`(): Unit = testApplication {
-        val store = InMemorySessionStore()
+        val store = InMemoryUiSessionStore()
         application {
             jetlin {
-                sessionStore = store
+                uiSessionStore = store
                 disconnectGrace = grace
                 view("/") {
                     val draft = rememberSavedField("", key = "draft")
@@ -79,10 +79,10 @@ class HibernationRoundTripTest {
 
     @Test
     fun `a session with nothing saveable is not stored`(): Unit = testApplication {
-        val store = InMemorySessionStore()
+        val store = InMemoryUiSessionStore()
         application {
             jetlin {
-                sessionStore = store
+                uiSessionStore = store
                 disconnectGrace = grace
                 view("/") { Div { Text("nothing worth keeping") } }
             }
@@ -108,10 +108,10 @@ class HibernationRoundTripTest {
 
     @Test
     fun `a woken session resumes at the location the browser reports`(): Unit = testApplication {
-        val store = InMemorySessionStore()
+        val store = InMemoryUiSessionStore()
         application {
             jetlin {
-                sessionStore = store
+                uiSessionStore = store
                 disconnectGrace = grace
                 view("/") {
                     val draft = rememberSavedField("home", key = "draft")

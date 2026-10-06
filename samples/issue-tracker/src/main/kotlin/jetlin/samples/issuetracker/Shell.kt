@@ -14,10 +14,11 @@ import jetlin.html.Span
 import jetlin.html.Text
 
 /**
- * The frame every page sits in: the sidebar, the overlays, and the session's [UiState].
+ * The frame every page sits in: the sidebar, the overlays, and the UI session's [UiState].
  *
- * Composed once per session by `app { }`, so navigating leaves the sidebar alone — it recomposes to
- * move the highlight and emits a couple of class changes, rather than being torn out and rebuilt.
+ * Composed once per UI session by `app { }`, so navigating leaves the sidebar alone — it recomposes
+ * to move the highlight and emits a couple of class changes, rather than being torn out and
+ * rebuilt.
  */
 @Composable
 fun Shell(content: @Composable () -> Unit) {

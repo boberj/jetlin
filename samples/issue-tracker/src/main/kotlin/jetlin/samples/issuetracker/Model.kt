@@ -70,8 +70,8 @@ sealed class Entry(val actor: User, val at: Instant) {
 }
 
 /**
- * One issue. Every field that can be edited is Compose state, so each session showing it recomposes
- * when any session changes it — the store is shared across the whole process.
+ * One issue. Every field that can be edited is Compose state, so each UI session showing it
+ * recomposes when any UI session changes it — the store is shared across the whole process.
  */
 class Issue(
     val id: Int,

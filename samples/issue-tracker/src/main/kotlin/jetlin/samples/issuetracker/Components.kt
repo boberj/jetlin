@@ -354,7 +354,7 @@ fun LabelsMenu(id: String, current: List<Label>, triggerClass: String, panelClas
  * A dialog over the page, shown by being composed and dismissed by not being.
  *
  * Not a `<dialog>`: showing one modally is a DOM method call, which Jetlin deliberately has no way
- * to make. Escape is app.js clicking the session's dismiss button, and focus is its autofocus.
+ * to make. Escape is app.js clicking the UI session's dismiss button, and focus is its autofocus.
  */
 @Composable
 fun Modal(tag: String, onDismiss: () -> Unit, panelClass: String, content: @Composable () -> Unit) {

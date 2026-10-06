@@ -27,7 +27,7 @@ internal const val INNER_HTML: String = "innerHTML"
  * that create, configure, and parent each node.
  */
 public sealed class HtmlNode {
-    /** The node's ID, unique within its session. */
+    /** The node's ID, unique within its UI session. */
     public abstract val id: NodeId
     internal var parent: ElementNode? = null
 
@@ -228,9 +228,10 @@ internal data class ElementData(
 )
 
 /**
- * Owns one session's tree: it allocates node IDs, finds nodes to route events to, and buffers ops.
+ * Owns one UI session's tree: it allocates node IDs, finds nodes to route events to, and buffers
+ * ops.
  *
- * IDs are local to the session and only increase. That keeps them small on the wire and makes
+ * IDs are local to the UI session and only increase. That keeps them small on the wire and makes
  * protocol traces readable.
  */
 public class HtmlOwner {
@@ -277,9 +278,10 @@ public class HtmlOwner {
     /**
      * The most ops to buffer before dropping them and resending the whole tree instead.
      *
-     * Without a limit, a client that stops reading, or reads much slower than the session produces
-     * updates, would hold on to unbounded memory. Past the limit, the buffer is dropped and the next
-     * message is the full tree. The session falls back to coarser updates instead of failing.
+     * Without a limit, a client that stops reading, or reads much slower than the UI session
+     * produces updates, would hold on to unbounded memory. Past the limit, the buffer is dropped
+     * and the next message is the full tree. The UI session falls back to coarser updates instead
+     * of failing.
      */
     public var maxBufferedOps: Int = 10_000
 

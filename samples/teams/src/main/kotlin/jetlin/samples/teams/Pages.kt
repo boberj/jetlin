@@ -28,7 +28,7 @@ import jetlin.runtime.rememberAction
 import jetlin.server.auth.SessionControls
 
 /**
- * The page chrome. It's composed once per session, around whichever view is current.
+ * The page chrome. It's composed once per UI session, around whichever view is current.
  *
  * `IfPermitted` hides the admin link with the same guard that protects the route, so the link and
  * the route can't disagree about who can use them.
@@ -58,9 +58,9 @@ fun Shell(hub: Hub?, session: SessionControls<TeamsSession>, content: @Composabl
             }
         }
         // Show external data in the chrome, which is where an announcement banner usually goes. One
-        // Fetch serves the whole process, so a hundred sessions showing the banner share one request
-        // per interval. When the announcement changes, the write that stores the new value
-        // recomposes all of those sessions.
+        // Fetch serves the whole process, so a hundred UI sessions showing the banner share one
+        // request per interval. When the announcement changes, the write that stores the new value
+        // recomposes all of those UI sessions.
         if (principal != null && hub != null) Announcement(hub)
         content()
     }
@@ -76,11 +76,11 @@ fun Shell(hub: Hub?, session: SessionControls<TeamsSession>, content: @Composabl
  * On the first page load after a restart, the banner is missing from the server-rendered HTML and
  * appears a moment later. The first read starts the fetch, and the first paint doesn't wait for
  * network calls. After that, the whole process caches the value, so every later page load includes
- * it in the server-rendered HTML, even in other sessions.
+ * it in the server-rendered HTML, even in other UI sessions.
  *
  * `fresh` keeps the value current. While any page shows the banner, the value is fetched again
  * periodically, and the polling stops when the last such page closes. The value counts its
- * watchers, not each session, so ten viewers cost the same as one.
+ * watchers, not each UI session, so ten viewers cost the same as one.
  */
 @Composable
 private fun Announcement(hub: Hub) {
@@ -305,8 +305,8 @@ fun HubPage(hub: Hub) {
         }
 
         H2 { Text("Announcement") }
-        // The announcement is the same for everyone, so one Fetch serves every session. A hundred
-        // sessions reading it share its requests.
+        // The announcement is the same for everyone, so one Fetch serves every UI session. A
+        // hundred UI sessions reading it share its requests.
         P({ testTag("announcement") }) { Text(hub.announcement.value.say { it }) }
 
         H2 { Text("Your status") }
@@ -331,7 +331,7 @@ fun HubPage(hub: Hub) {
         }
         // Show errors the application couldn't predict, next to the control that caused them. The
         // action catches the exception, so a failed command produces only this message, and the
-        // session carries on.
+        // UI session carries on.
         (save.state as? Run.Failed)?.let { failed ->
             P({ classes("muted"); testTag("status-error") }) { Text(failed.cause.message.orEmpty()) }
         }

@@ -41,9 +41,9 @@ public sealed interface Fetched<out V> {
 /**
  * A single value from a slow source, such as an HTTP API, held in snapshot state.
  *
- * Reading [value] subscribes the current composable. When the value arrives, every session in this
- * process that read it recomposes. There's no subscription code: a stored record is reactive through
- * the same mechanism, so this class needs only a state cell and a coroutine.
+ * Reading [value] subscribes the current composable. When the value arrives, every UI session in
+ * this process that read it recomposes. There's no subscription code: a stored record is reactive
+ * through the same mechanism, so this class needs only a state cell and a coroutine.
  *
  * ```kotlin
  * class Hub(private val client: HttpClient, private val scope: CoroutineScope) {
@@ -71,9 +71,9 @@ public sealed interface Fetched<out V> {
  * 1. Reading writes no snapshot state. The in-flight marker is a plain atomic, and the attempt time
  *    is a plain field. If a composition wrote state it had just read, the write would invalidate the
  *    composition again on every pass, and it would never settle.
- * 2. The fetch doesn't run on the session's thread. [scope] belongs to the owner of this object and
- *    should dispatch to another thread. Each session composes on one thread, so a network call
- *    there would stall the whole session.
+ * 2. The fetch doesn't run on the UI session's thread. [scope] belongs to the owner of this object
+ *    and should dispatch to another thread. Each UI session composes on one thread, so a network
+ *    call there would stall the whole UI session.
  * 3. The arrival is a single write. The fetched value is one object, assigned once, so a response
  *    causes one recomposition and one patch however many fields it has.
  *
@@ -83,12 +83,12 @@ public sealed interface Fetched<out V> {
  * and a call to [invalidate] or [refresh]. Nothing happens by itself when a value expires. A read
  * happens only when the composable that reads the value recomposes. So a page that nobody
  * interacts with keeps showing the expired value until something else recomposes it, such as
- * another state change, a click, a navigation, or a hibernated session waking up.
+ * another state change, a click, a navigation, or a hibernated UI session waking up.
  *
  * In other words, [ttl] is the oldest value a read accepts, not a refresh interval. Polling by
  * default would spend requests on values that nobody is looking at, and [invalidate] doesn't fetch
  * for the same reason. If a page needs to stay current while it's open, use [fresh]. Its polling
- * stops when the page goes away, and every session showing the same value shares it.
+ * stops when the page goes away, and every UI session showing the same value shares it.
  *
  * A failed attempt records its time, just like a successful one. Otherwise, a page that keeps
  * recomposing would send a request to a broken endpoint on every pass. As a result, with the
@@ -103,7 +103,7 @@ public sealed interface Fetched<out V> {
  * but the result is still correct.
  *
  * @param scope the scope that fetches run in. It should dispatch to a thread other than the
- *   session's.
+ *   UI session's.
  * @param ttl the maximum age of a value that a read accepts before it triggers a revalidation. The
  *   default, [Duration.INFINITE], never revalidates by itself.
  * @param now the clock, in nanoseconds. Tests replace it.
@@ -151,7 +151,7 @@ public class Fetch<V>(
      *
      * Reading it schedules a fetch if there's no value yet or the value is stale. The read also
      * subscribes the composable, so it recomposes when the value arrives. Several reads in one pass,
-     * or concurrent reads from several sessions, share one fetch.
+     * or concurrent reads from several UI sessions, share one fetch.
      */
     public val value: Fetched<V>
         get() {
@@ -202,7 +202,8 @@ public class Fetch<V>(
      *
      * However many watchers there are, one loop runs on this object's scope. A second caller joins
      * the existing schedule, and the loop stops when the last watcher stops. Because the value is
-     * shared, two sessions that show it cost one request per interval between them, not one each.
+     * shared, two UI sessions that show it cost one request per interval between them, not one
+     * each.
      *
      * While anyone is watching, [every] takes precedence over [ttl]. A watcher states how fresh it
      * wants the value, which is a stronger requirement than the oldest value a read accepts. If
@@ -220,9 +221,9 @@ public class Fetch<V>(
             val shortens = watchers.minOrNull()?.let { every < it } ?: true
             watchers += every
             // Restart the loop only if this watcher needs a shorter interval than the current one.
-            // Usually a second session opens the same page with the same interval, and it joins the
-            // running loop. Restarting for every new watcher would reset the delay each time, and a
-            // busy page might never reach the end of it.
+            // Usually a second UI session opens the same page with the same interval, and it joins
+            // the running loop. Restarting for every new watcher would reset the delay each time,
+            // and a busy page might never reach the end of it.
             if (polling == null || shortens) {
                 polling?.cancel()
                 polling = scope.launch { poll() }
@@ -300,7 +301,7 @@ public fun interface Watch {
  *
  * Use this to poll while the user is looking. It needs no lifecycle code, because the composition
  * is the lifecycle. The watch starts when the composable enters the composition and stops when it
- * leaves, whether the session navigated away, closed, or hibernated.
+ * leaves, whether the UI session navigated away, closed, or hibernated.
  *
  * ```kotlin
  * @Composable
@@ -313,12 +314,12 @@ public fun interface Watch {
  * }
  * ```
  *
- * The [Fetch] counts its watchers, not each composition, so sessions that show the same value share
- * one loop and one request per interval. Ten people viewing a dashboard cost the same as one, and the
- * requests stop when the last of them closes the page.
+ * The [Fetch] counts its watchers, not each composition, so UI sessions that show the same value
+ * share one loop and one request per interval. Ten people viewing a dashboard cost the same as one,
+ * and the requests stop when the last of them closes the page.
  *
- * Hibernating a session stops its watch, as intended: the composition is torn down, so nobody is
- * looking. When the session wakes and recomposes, it starts watching again, and the first read
+ * Hibernating a UI session stops its watch, as intended: the composition is torn down, so nobody is
+ * looking. When the UI session wakes and recomposes, it starts watching again, and the first read
  * revalidates any value that went stale in the meantime.
  */
 @Composable

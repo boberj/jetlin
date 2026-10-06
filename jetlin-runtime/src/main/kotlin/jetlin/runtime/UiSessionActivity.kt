@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * Tracks whether a session still has work queued, by counting tasks instead of asking the
+ * Tracks whether a UI session still has work queued, by counting tasks instead of asking the
  * [androidx.compose.runtime.Recomposer] for its state.
  *
  * ## Why not `Recomposer.currentState`
@@ -31,8 +31,8 @@ import kotlinx.coroutines.flow.update
  *
  * In both cases the state reads `PendingWork` indefinitely, while nothing is pending and the loop
  * sleeps. A host that waits for `Idle` then waits until some unrelated change derives the state
- * again. In a server session, that change might never come: the inbound loop handles one event at a
- * time, and the sender waits before every patch. The session deadlocks.
+ * again. In a server UI session, that change might never come: the inbound loop handles one event
+ * at a time, and the sender waits before every patch. The UI session deadlocks.
  *
  * Compose UI never hits this, because nothing in it waits for `Idle`. Android reads `currentState`
  * only to check that the loop is alive. The desktop scene and both test harnesses decide idleness
@@ -41,7 +41,7 @@ import kotlinx.coroutines.flow.update
  *
  * ## What it counts
  *
- * Each task dispatched to the session is counted from the moment it's queued until it finishes.
+ * Each task dispatched to the UI session is counted from the moment it's queued until it finishes.
  * There are two lanes over the same serial dispatcher:
  *
  * - [Lane.Recompose] counts the recomposition loop and everything the host runs to touch the
@@ -51,25 +51,25 @@ import kotlinx.coroutines.flow.update
  *
  * Two lanes let the host tell "the patch is ready" apart from "everything has settled." Because
  * both lanes share one dispatcher, their tasks still never run at the same time, which is the point
- * of confining a session to one thread. The desktop scene splits its recompose and effect
+ * of confining a UI session to one thread. The desktop scene splits its recompose and effect
  * dispatchers the same way, over one shared thread.
  *
  * A `delay()` isn't a task. When the timer fires, it dispatches the coroutine again, and only then
- * is it counted. An effect that ticks once a second therefore never makes the session look busy
+ * is it counted. An effect that ticks once a second therefore never makes the UI session look busy
  * between ticks. The desktop dispatcher draws the same line between immediate and delayed tasks.
  *
  * ## Why waiters are woken by events
  *
  * The desktop test harness polls: it checks, renders a frame, sleeps, and checks again. A window
  * already renders at frame rate, so polling costs it nothing. A server holds thousands of mostly
- * idle sessions and waits for idleness on every event and before every patch, so polling would add
- * CPU time and latency to all of them. Instead, when a lane reaches zero it advances [generation],
- * and each waiter checks again. When nobody is waiting, which is the usual case, a drained lane
- * costs one atomic read.
+ * idle UI sessions and waits for idleness on every event and before every patch, so polling would
+ * add CPU time and latency to all of them. Instead, when a lane reaches zero it advances
+ * [generation], and each waiter checks again. When nobody is waiting, which is the usual case, a
+ * drained lane costs one atomic read.
  */
-internal class SessionActivity {
+internal class UiSessionActivity {
 
-    /** The two kinds of task the session counts separately. See the class description. */
+    /** The two kinds of task the UI session counts separately. See the class description. */
     enum class Lane { Recompose, Effects }
 
     /** The number of tasks queued or running on [Lane.Recompose]. */
@@ -112,7 +112,8 @@ internal class SessionActivity {
     }
 
     /**
-     * A counter that advances when a lane empties while someone is waiting, and when the session ends.
+     * A counter that advances when a lane empties while someone is waiting, and when the UI session
+     * ends.
      *
      * It's a counter instead of an event so that no waiter can miss a wake-up. A waiter reads the
      * counter, checks its condition, and then suspends until the counter differs from the value it
@@ -125,7 +126,7 @@ internal class SessionActivity {
     fun track(dispatcher: CoroutineDispatcher, lane: Lane): CoroutineDispatcher =
         // Forward delays when the wrapped dispatcher implements Delay, so a dispatcher with its own
         // clock keeps it. Otherwise the wrapper would send every delay() to the default timer
-        // without anyone noticing. The default session dispatcher, limitedParallelism(1), is a
+        // without anyone noticing. The default UI session dispatcher, limitedParallelism(1), is a
         // Delay that forwards to the default timer anyway, so for it the result is the same.
         if (dispatcher is Delay) DelayingTrackedDispatcher(dispatcher, dispatcher, this, lane)
         else TrackedDispatcher(dispatcher, this, lane)
@@ -145,7 +146,7 @@ internal class SessionActivity {
         waiting.decrementAndGet()
     }
 
-    /** Wakes every waiter unconditionally. The host calls this when the session ends. */
+    /** Wakes every waiter unconditionally. The host calls this when the UI session ends. */
     fun wakeAll() {
         drains.update { it + 1 }
     }
@@ -176,8 +177,8 @@ internal class SessionActivity {
  */
 private open class TrackedDispatcher(
     private val delegate: CoroutineDispatcher,
-    private val activity: SessionActivity,
-    private val lane: SessionActivity.Lane,
+    private val activity: UiSessionActivity,
+    private val lane: UiSessionActivity.Lane,
 ) : CoroutineDispatcher() {
 
     override fun isDispatchNeeded(context: CoroutineContext): Boolean = delegate.isDispatchNeeded(context)
@@ -194,8 +195,8 @@ private open class TrackedDispatcher(
         try {
             delegate.dispatch(context, counted)
         } catch (t: Throwable) {
-            // A task that was never queued never finishes. If it stayed counted, the session would
-            // look busy forever.
+            // A task that was never queued never finishes. If it stayed counted, the UI session
+            // would look busy forever.
             activity.finished(lane)
             throw t
         }
@@ -209,6 +210,6 @@ private open class TrackedDispatcher(
 private class DelayingTrackedDispatcher(
     delegate: CoroutineDispatcher,
     delay: Delay,
-    activity: SessionActivity,
-    lane: SessionActivity.Lane,
+    activity: UiSessionActivity,
+    lane: UiSessionActivity.Lane,
 ) : TrackedDispatcher(delegate, activity, lane), Delay by delay

@@ -10,7 +10,8 @@ class Todo(id: Int, title: String, notes: String = "", done: Boolean = false) {
     val id: Int = id
 
     // The fields are Compose state, so any composable that reads one runs again when it changes,
-    // including composables in other users' sessions, because the whole process shares this store.
+    // including composables in other users' UI sessions, because the whole process shares this
+    // store.
     var title: String by mutableStateOf(title)
     var notes: String by mutableStateOf(notes)
     var done: Boolean by mutableStateOf(done)
@@ -20,8 +21,8 @@ class Todo(id: Int, title: String, notes: String = "", done: Boolean = false) {
  * A shared in-memory store that stands in for a database.
  *
  * It's deliberately shared by the whole process: open the demo in two browser windows, and an edit
- * in one appears in the other. Nothing subscribes or broadcasts. Both sessions read the same state
- * objects, so both recompose.
+ * in one appears in the other. Nothing subscribes or broadcasts. Both UI sessions read the same
+ * state objects, so both recompose.
  */
 object TodoStore {
     private var nextId = 1
@@ -40,8 +41,8 @@ object TodoStore {
      * as a visitor who deleted everything or a test that just finished. Instead of making callers
      * clean up after themselves, one button puts it back.
      *
-     * Every open session sees this immediately, because they read the same state objects, so they
-     * all recompose.
+     * Every open UI session sees this immediately, because they read the same state objects, so
+     * they all recompose.
      */
     fun reset() {
         todos.clear()

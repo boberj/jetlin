@@ -21,7 +21,7 @@ public val LocalHtmlOwner: ProvidableCompositionLocal<HtmlOwner> =
  * Whether [AttrsScope.testTag] also writes the tag into the markup as `data-test`.
  *
  * It's off by default, so test tags cost nothing in production. It's a static local because it's
- * fixed for the life of a session, so reading it in every element doesn't need invalidation
+ * fixed for the life of a UI session, so reading it in every element doesn't need invalidation
  * tracking.
  */
 public val LocalTestTagsExposed: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { false }
@@ -147,7 +147,7 @@ public class AttrsScope internal constructor(
     /** Sets the `name` attribute. */
     public fun name(value: String): Unit = attr("name", value)
 
-    /** Sets the `href` attribute. For navigation within the session, use [Link]. */
+    /** Sets the `href` attribute. For navigation within the UI session, use [Link]. */
     public fun href(value: String): Unit = attr("href", value)
 
     /** Disables the element if [value] is `true`. A disabled element has the `disabled` attribute. */
@@ -450,7 +450,7 @@ public fun Form(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () 
 public fun Label(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
     Element("label", attrs, content)
 
-/** Emits an `<a>`. For navigation within the session, use [Link]. */
+/** Emits an `<a>`. For navigation within the UI session, use [Link]. */
 @Composable
 public fun A(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable () -> Unit = {}): Unit =
     Element("a", attrs, content)
@@ -623,12 +623,12 @@ public fun Dialog(attrs: (AttrsScope.() -> Unit)? = null, content: @Composable (
     Element("dialog", attrs, content)
 
 /**
- * Emits a link that navigates within the live session instead of reloading the page.
+ * Emits a link that navigates within the live UI session instead of reloading the page.
  *
  * It renders as an ordinary `<a href>`, so it's a real link. Crawlers follow it, middle-click and
  * "Open in new tab" work, and with JavaScript turned off it falls back to a normal request, which
- * starts a new session on the same path. When the client is running, it intercepts the click and
- * the session moves to [href] without a page load.
+ * starts a new UI session on the same path. When the client is running, it intercepts the click and
+ * the UI session moves to [href] without a page load.
  *
  * @param href the location to navigate to.
  * @param attrs declares the link's other attributes and handlers. An [AttrsScope.onClick] handler

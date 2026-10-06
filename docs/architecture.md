@@ -13,10 +13,14 @@ a release.
 
 ## 1. How it works
 
-Each user session has a composition that runs on the server for as long as the session lasts. When
-state in the composition changes, the Compose runtime recomposes the affected parts and updates its
-node tree. Jetlin's node tree is a virtual DOM, and every change the runtime makes to it is recorded
-as an operation, or op. Jetlin sends the ops to the browser.
+Each page that a browser loads gets a UI session: a composition that runs on the server for as long
+as the UI session lasts. Navigating within the page keeps the UI session, and reloading starts a new
+one. A UI session isn't a sign-in session, which is a cookie that covers every page of a browser and
+that `jetlin-server-ktor-auth` manages (see [Signing in](#signing-in)).
+
+When state in the composition changes, the Compose runtime recomposes the affected parts and updates
+its node tree. Jetlin's node tree is a virtual DOM, and every change the runtime makes to it is
+recorded as an operation, or op. Jetlin sends the ops to the browser.
 
 ```
  user clicks                                                    DOM updated
@@ -44,10 +48,10 @@ a diff. Incrementing a counter produces one `SetText` op. Reordering a keyed lis
 and leaves the nodes themselves unchanged.
 
 The same steps run when an update doesn't come from the browser. When a coroutine writes state, for
-example a timer, a message from another user's session, or a committed database transaction, the
+example a timer, a message from another user's UI session, or a committed database transaction, the
 composables that read that state are invalidated, and a patch goes out. Pushing updates to a
 connected client needs no separate API. `jetlin-db` relies on this: a stored record is composition
-state, so committing a write recomposes every session that read it. See [`db.md`](db.md).
+state, so committing a write recomposes every UI session that read it. See [`db.md`](db.md).
 
 ## 2. Modules
 
@@ -79,11 +83,11 @@ instead of a set of views.
 
 Three details are important.
 
-### One thread per session
+### One thread per UI session
 
-Each session runs on `Dispatchers.Default.limitedParallelism(1)`. Event handling, recomposition, and
-sending patches all run there, so they can't interleave. That prevents a class of race conditions
-without locks, and it also applies back-pressure to each session for free.
+Each UI session runs on `Dispatchers.Default.limitedParallelism(1)`. Event handling, recomposition,
+and sending patches all run there, so they can't interleave. That prevents a class of race
+conditions without locks, and it also applies back-pressure to each UI session for free.
 
 ### Each handler runs in one mutable snapshot
 
@@ -101,9 +105,10 @@ conflated, so a burst of writes wakes the recomposers once.
 
 `FramePolicy` controls how quickly state changes turn into patches. `Immediate` recomposes as soon as
 there's work. `Paced(interval)` limits the rate, which helps when a fast server-side source feeds a
-session, and the client can't make use of every change. Each frame sends at most one patch message.
+UI session, and the client can't make use of every change. Each frame sends at most one patch
+message.
 
-### Knowing when a session has finished its work
+### Knowing when a UI session has finished its work
 
 This doesn't use the recomposer's state at all. `Recomposer.currentState` is a cached value, updated
 only at certain points. Two code paths that involve movable content empty the recomposer's work
@@ -111,26 +116,27 @@ queues without updating it: composing movable content in the first frame, and re
 content. After either, the state reports `PendingWork` indefinitely, even though nothing is pending
 and the loop is asleep.
 
-A host that waited for `Idle` would wait until something unrelated happened. In a live session, this
-caused a deadlock, because the inbound loop handles one event at a time, and the sender waits before
-every patch. The same code is still present in Compose 1.13.0-alpha02.
+A host that waited for `Idle` would wait until something unrelated happened. In a live UI session,
+this caused a deadlock, because the inbound loop handles one event at a time, and the sender waits
+before every patch. The same code is still present in Compose 1.13.0-alpha02.
 
 So `CompositionHost` uses `Recomposer.hasPendingWork`, which is computed when it's read, combined with
-a count of the tasks still queued on the session's dispatcher, which `SessionActivity` keeps. The
-Compose desktop scene and both Compose test harnesses use the same combination. There are two waits,
-both on the session's serial dispatcher:
+a count of the tasks still queued on the UI session's dispatcher, which `UiSessionActivity` keeps.
+The Compose desktop scene and both Compose test harnesses use the same combination. There are two
+waits, both on the UI session's serial dispatcher:
 
 - `awaitApplied()` waits until everything signaled so far has been recomposed and applied. The server
   calls it for every client event and before every outgoing message, so it waits for nothing more.
-- `awaitIdle()` waits until the session has settled: queued effects have run, and writes made outside
-  a snapshot have been published. Tests use it, and so do the first render and hibernation. The last
-  two have a time limit, so an effect that never settles delays them instead of hanging them.
+- `awaitIdle()` waits until the UI session has settled: queued effects have run, and writes made
+  outside a snapshot have been published. Tests use it, and so do the first render and hibernation.
+  The last two have a time limit, so an effect that never settles delays them instead of hanging
+  them.
 
 The task count and the pending-work condition can't be read together atomically. So the check reads
 the count before and after the condition, along with a dispatch sequence number, and trusts the
 condition only if no task could have run in between. Waiters are woken when the dispatcher's queue
-drains, not by polling, because a server might have thousands of mostly idle sessions, and it waits on
-every event.
+drains, not by polling, because a server might have thousands of mostly idle UI sessions, and it
+waits on every event.
 
 > [!NOTE]
 > When a composable throws, the recomposer ends up `Inactive`, not `ShutDown`. So the recomposer's
@@ -194,7 +200,7 @@ The server sends these messages:
 - `ready{rev}`: the server accepted the client's request to keep the server-rendered markup. See
   [§7](#reusing-the-markup-the-browser-already-has).
 - `reset{rev, children}`: the full tree, sent when a client can't keep its markup.
-- `nav{url, replace, title}`: the session moved, and the address bar should follow.
+- `nav{url, replace, title}`: the UI session moved, and the address bar should follow.
 - `error{message, fatal}`: something failed. See [Failures](#failures).
 
 The client sends these messages:
@@ -245,11 +251,12 @@ otherwise. Nothing else in the runtime treats SVG differently. `setAttribute`, `
 `closest` work the same on SVG elements, and the runtime doesn't use the properties that behave
 differently, mainly `className`.
 
-## 7. Sessions and transport
+## 7. UI sessions and transport
 
-A `GET` request renders the composition to HTML, and returns it with a session token. The composition
-stays alive in the `SessionRegistry`. When the WebSocket connects with that token, it takes over the
-existing composition, so each page is composed once per session, not once per request.
+A `GET` request renders the composition to HTML, and returns it with a UI session token. The
+composition stays alive in the `UiSessionRegistry`. When the WebSocket connects with that token, it
+takes over the existing composition, so each page is composed once per UI session, not once per
+request.
 
 ### Reusing the markup the browser already has
 
@@ -278,8 +285,8 @@ all. So the markup includes extra information that the parser would otherwise lo
 Only the first WebSocket that connects to the composition that rendered the page reuses the markup.
 The server decides this, instead of relying on what the client asks for. A reconnecting browser holds
 markup that the server has since changed without recording the changes, because the server stops
-recording when the previous socket disconnects. A session woken from hibernation has been composed
-again, with node IDs unrelated to the `data-jl` values in the page. Both receive a `Reset`.
+recording when the previous socket disconnects. A UI session woken from hibernation has been
+composed again, with node IDs unrelated to the `data-jl` values in the page. Both receive a `Reset`.
 
 The walk is best-effort. If anything in the markup doesn't match, such as an element without an ID
 or a text child that the markers don't account for, the client abandons the walk and asks for the
@@ -289,66 +296,67 @@ whether markup reuse is involved in a bug.
 
 ### Routes
 
-A session is bound to the whole route table, not to a single view. `RouteHost` matches the current
-path against the registered patterns and composes the matching view, keyed on the pattern. Navigating
-between two different routes rebuilds the view. Navigating between two locations of the same route,
-such as `/todo/1` to `/todo/2`, keeps the view and runs it again with the new parameters. Because the
-current route is composition state, navigating is only a state change: the view is replaced inside
-the live composition, and the applier records the difference. There's no page load and no new
-session, and the same WebSocket carries on.
+A UI session is bound to the whole route table, not to a single view. `RouteHost` matches the
+current path against the registered patterns and composes the matching view, keyed on the pattern.
+Navigating between two different routes rebuilds the view. Navigating between two locations of the
+same route, such as `/todo/1` to `/todo/2`, keeps the view and runs it again with the new
+parameters. Because the current route is composition state, navigating is only a state change: the
+view is replaced inside the live composition, and the applier records the difference. There's no
+page load and no new UI session, and the same WebSocket carries on.
 
 ### Origins
 
 The browser's same-origin policy doesn't apply to WebSockets, so any page on any site can open one.
 The socket handler checks the `Origin` header against the request's `Host` before it looks up a
-session, and refuses the connection if they don't match. `JetlinConfig.allowedOrigins` allows other
-origins, for deployments where the page and the socket use different hostnames.
+UI session, and refuses the connection if they don't match. `JetlinConfig.allowedOrigins` allows
+other origins, for deployments where the page and the socket use different hostnames.
 
-Sessions are cleaned up on a timer. If no WebSocket connects, or the socket disconnects and doesn't
-reconnect within the grace period, the session hibernates. See [§9](#hibernation).
+UI sessions are cleaned up on a timer. If no WebSocket connects, or the socket disconnects and
+doesn't reconnect within the grace period, the UI session hibernates. See [§9](#hibernation).
 
 ### Binding tokens to the browser
 
-The session token is embedded in the page, so it can leak through a saved page, a log, or a
-screenshot. On its own, it would let whoever found it drive the session. `JetlinConfig.bindSessions`
-closes that gap: it returns a value that identifies the browser, which the registry records when the
-page is rendered and compares, in constant time, when a socket attaches. A socket from another browser
-gets the same fatal "unknown session" error as a wrong token, and the session stays available to its
-own browser. Hibernated snapshots keep the binding, so waking checks it too. A snapshot presented from
-the wrong browser goes back to the store instead of being consumed.
+The UI session token is embedded in the page, so it can leak through a saved page, a log, or a
+screenshot. On its own, it would let whoever found it drive the UI session.
+`JetlinConfig.bindUiSessions` closes that gap: it returns a value that identifies the browser, which
+the registry records when the page is rendered and compares, in constant time, when a socket
+attaches. A socket from another browser gets the same fatal "unknown session" error as a wrong
+token, and the UI session stays available to its own browser. Hibernated snapshots keep the binding,
+so waking checks it too. A snapshot presented from the wrong browser goes back to the store instead
+of being consumed.
 
-`jetlin-server-ktor-auth` binds each session to a SHA-256 hash of the sign-in cookie's session ID. It's
-a hash because snapshots may be persisted, and the ID itself is a credential. Applications that don't
-set a binding keep the old behavior: an unbound session attaches with the token alone.
+`jetlin-server-ktor-auth` binds each UI session to a SHA-256 hash of the sign-in cookie's session
+ID. It's a hash because snapshots may be persisted, and the ID itself is a credential. Applications
+that don't set a binding keep the old behavior: an unbound UI session attaches with the token alone.
 
-`SessionRegistry.endSessions(binding)` ends every live session of one browser. An attached socket gets
-`Error(fatal = true)`, and the client reloads as whoever it is now. A session in its grace period is
-closed and never hibernates. Hibernated snapshots are left alone, because they can't be woken without
-the binding that the browser no longer presents.
+`UiSessionRegistry.endUiSessions(binding)` ends every live UI session of one browser. An attached
+socket gets `Error(fatal = true)`, and the client reloads as whoever it is now. A UI session in its
+grace period is closed and never hibernates. Hibernated snapshots are left alone, because they can't
+be woken without the binding that the browser no longer presents.
 
 ### Signing in
 
 Event handlers run over the WebSocket, which can't set a cookie, so signing in from a handler needs a
 real HTTP request. `jetlin-server-ktor-auth` builds that on Ktor's typed session authentication, with
-a `CookieId` transport: the cookie holds only an opaque ID, and the session stays in a Ktor
+a `CookieId` transport: the cookie holds only an opaque ID, and the sign-in session stays in a Ktor
 `SessionStorage` on the server.
 
 1. The handler calls `signIn(session, next)` on the `SessionControls` that
-   `SessionAuth.rememberControls()` returned. The server stores the session under a one-time ticket,
-   32 random bytes that expire after 60 seconds.
+   `SessionAuth.rememberControls()` returned. The server stores the sign-in session under a one-time
+   ticket, 32 random bytes that expire after 60 seconds.
 2. The socket sends `ServerMessage.Load("/jetlin/auth", post = {ticket})`. The client submits a
    hidden form. It's a form rather than `fetch` because a form submission is a top-level navigation,
    so the browser applies the response's `Set-Cookie` and follows its redirect. The ticket goes in the
    body, not the URL, which keeps it out of access logs.
 3. `POST /jetlin/auth` refuses anything that isn't same-origin, by `Sec-Fetch-Site` and `Origin`,
-   which stops login CSRF. It spends the ticket whatever the outcome, ends the live sessions of the
-   browser's previous identity, and sets the new session with a new ID. Ktor would otherwise reuse the
-   ID the request arrived with, which allows session fixation. It redirects with `303` to `next` if
-   that's a path on this site, and to `/` otherwise, so the sign-in page can't be used as an open
-   redirect.
+   which stops login CSRF. It spends the ticket whatever the outcome, ends the live UI sessions of
+   the browser's previous identity, and sets the new sign-in session with a new ID. Ktor would
+   otherwise reuse the ID the request arrived with, which allows session fixation. It redirects with
+   `303` to `next` if that's a path on this site, and to `/` otherwise, so the sign-in page can't be
+   used as an open redirect.
 
-Signing out is the same flow. It clears the session and ends every live session of the browser, so
-another tab can't go on as the user who left.
+Signing out is the same flow. It clears the sign-in session and ends every live UI session of the
+browser, so another tab can't go on as the user who left.
 
 Applications usually set this up with one call, `authentication(Principals) { session -> … }`. It
 builds the scheme with a `CookieId` transport over in-memory storage by default. The cookie is always
@@ -366,26 +374,26 @@ Ktor's type.
 
 Jetlin's page renders and socket are registered under `authenticateWithOptional(scheme)`.
 Authentication is optional because route guards decide who may see what, and they redirect to the
-sign-in page with the original URL in `next`. A cookie whose session no longer validates, for example
-because its user was deleted, is cleared, and the browser is sent back to the same URL as nobody,
-instead of getting `401` on every request until the cookie expires.
+sign-in page with the original URL in `next`. A cookie whose sign-in session no longer validates,
+for example because its user was deleted, is cleared, and the browser is sent back to the same URL
+as nobody, instead of getting `401` on every request until the cookie expires.
 
 ### Failures
 
 Three kinds of failure can happen on an open socket, and each is handled differently.
 
 A message that can't be parsed is dropped with a warning. Messages come from the browser, which
-might not behave. Ending the session over one would let a client end its own session with a typo, and
-would turn a protocol version mismatch into an outage instead of a log entry.
+might not behave. Ending the UI session over one would let a client end its own UI session with a
+typo, and would turn a protocol version mismatch into an outage instead of a log entry.
 
 A handler that throws affects only that one interaction. The composition isn't affected, because the
 exception came from the event handler, not from recomposition. The page is still correct, and the
-session keeps working. The client receives `ServerMessage.Error(fatal = false)` and carries on.
+UI session keeps working. The client receives `ServerMessage.Error(fatal = false)` and carries on.
 
-A composable that throws ends the session. The recomposer stops permanently, so nothing the session
-does afterward can succeed. The client receives `Error(fatal = true)` and reloads into a new session.
-Leaving the session connected would be worse, because the page would look live but could never change
-again.
+A composable that throws ends the UI session. The recomposer stops permanently, so nothing the UI
+session does afterward can succeed. The client receives `Error(fatal = true)` and reloads into a new
+UI session. Leaving the UI session connected would be worse, because the page would look live but
+could never change again.
 
 `CompositionHost.isAlive` distinguishes the second case from the third, and it's the only thing that
 can, because both reach the transport as an exception from `dispatch`.
@@ -411,15 +419,15 @@ That's the state that the fatal-error path normally avoids, entered on purpose. 
 `jetlin.reload()` to start over. From that point, the code that cancelled the event decides what the
 user sees.
 
-If a view throws during its initial composition, no session is created. `create` closes the partly
-built view before rethrowing, so a failing page doesn't leak a dispatcher thread on every request, and
-the HTTP layer returns its own error. If a session's composition fails later, the reaper closes it the
-next time it runs. `hibernate` waits for the session to settle inside its `try` block, because a failed
-composition reports its failure from that wait. Before that change, the sessions that most needed
-releasing were the only ones that never were.
+If a view throws during its initial composition, no UI session is created. `create` closes the
+partly built view before rethrowing, so a failing page doesn't leak a dispatcher thread on every
+request, and the HTTP layer returns its own error. If a UI session's composition fails later, the
+reaper closes it the next time it runs. `hibernate` waits for the UI session to settle inside its
+`try` block, because a failed composition reports its failure from that wait. Before that change,
+the UI sessions that most needed releasing were the only ones that never were.
 
 The demo's `/errors` page shows both cases side by side: a button that throws in its handler next to a
-counter that keeps working, and a button that throws in the view and ends the session.
+counter that keeps working, and a button that throws in the view and ends the UI session.
 
 ## 8. Writing views
 
@@ -446,7 +454,7 @@ State and effects are standard Compose: `remember`, `derivedStateOf`, `LaunchedE
 ### Routes, context, and navigation
 
 You register views for path patterns. `Link` renders a real `<a href>`, and Jetlin intercepts clicks
-on it to navigate within the session:
+on it to navigate within the UI session:
 
 ```kotlin
 jetlin {
@@ -471,12 +479,12 @@ principal. The application declares the principal's `AttributeKey` and supplies 
 originating HTTP request with `principal(key) { call -> … }`, which avoids passing a type parameter
 through the whole configuration DSL. `jetlin-server-ktor-auth` does this from a Ktor session scheme
 (see [Signing in](#signing-in)). The principal is computed when the page is rendered, and again only
-when a WebSocket wakes a hibernated session, where it has to be recomputed instead of trusted from a
-snapshot. A socket that reconnects to a running composition keeps the existing context.
+when a WebSocket wakes a hibernated UI session, where it has to be recomputed instead of trusted
+from a snapshot. A socket that reconnects to a running composition keeps the existing context.
 
 Because `Link` renders a real anchor, it also works without JavaScript. Middle-click and **Open in new
 tab** behave normally, crawlers follow it, and with scripting turned off it falls back to a normal
-request that starts a new session on that path.
+request that starts a new UI session on that path.
 
 ### What survives navigation
 
@@ -499,11 +507,11 @@ jetlin {
 }
 ```
 
-It's composed once per session, so `remember` in it survives every navigation, and `rememberSaved` in
-it also survives hibernation. The `app { }` composable is never disposed, so its providers are still
-registered when the session collects state to save. The application decides how views read that
-state, usually through a `CompositionLocal` it defines. The framework provides the place to keep the
-state, not its structure.
+It's composed once per UI session, so `remember` in it survives every navigation, and
+`rememberSaved` in it also survives hibernation. The `app { }` composable is never disposed, so its
+providers are still registered when the UI session collects state to save. The application decides
+how views read that state, usually through a `CompositionLocal` it defines. The framework provides
+the place to keep the state, not its structure.
 
 Views get their own saved state back through a `SaveableStateHolder`. Each route is composed with a
 child registry, initialized from what that route saved last time, and leaving the route saves it
@@ -512,7 +520,7 @@ what the back button needs and what the name suggests. The holder is keyed on th
 same key that `key(pattern)` uses, so a view's registry lives exactly as long as the view. With
 different keys, restored state would be composed against an empty registry. The holder keeps the 32
 most recently left routes, because the caller chooses the keys, and keeping every one for the life of
-a session could leak memory.
+a UI session could leak memory.
 
 A view's saved values are captured when its providers unregister, not only when the holder asks for
 them. A view disposing its own effects is normal, and the runtime decides the order that `onDispose`
@@ -561,15 +569,15 @@ fun Status(hub: Hub, of: User) {
 }
 ```
 
-Reading the value subscribes the composable, the arrival recomposes every session that read it, and
-composition never waits for it. A committed transaction uses the same mechanism. What `Fetch` adds is
-correct handling of three details that fail silently when done wrong:
+Reading the value subscribes the composable, the arrival recomposes every UI session that read it,
+and composition never waits for it. A committed transaction uses the same mechanism. What `Fetch`
+adds is correct handling of three details that fail silently when done wrong:
 
 1. Reading writes no snapshot state. The in-flight marker is a plain atomic. If a pass wrote state
    that it had read, the write would invalidate the reader again on the next pass, indefinitely, and
-   the session would never settle.
-2. The fetch runs in a scope that the caller owns, not on the session's thread. A session composes
-   on a single thread, and a network request there would stall the whole session.
+   the UI session would never settle.
+2. The fetch runs in a scope that the caller owns, not on the UI session's thread. A UI session
+   composes on a single thread, and a network request there would stall the whole UI session.
 3. The arrival is a single write. One response fills one object, so it causes one recomposition and
    one patch, however many fields it has.
 
@@ -589,11 +597,11 @@ when (val profile = hub.profile(principal).fresh(every = 10.seconds)) { … }
 ```
 
 `fresh` is Jetlin's equivalent of Android's `collectAsStateWithLifecycle`, with the composition as the
-lifecycle. While the page is composed, the value is watched. When the session navigates away, closes,
-or hibernates, the composition is disposed, and the watch stops. The value counts its watchers, not
-each session, so ten people viewing the same dashboard share one polling loop and one request per
-interval, and the requests stop when the last of them closes the tab. If two watchers ask for
-different intervals, the shorter one wins.
+lifecycle. While the page is composed, the value is watched. When the UI session navigates away,
+closes, or hibernates, the composition is disposed, and the watch stops. The value counts its
+watchers, not each UI session, so ten people viewing the same dashboard share one polling loop and
+one request per interval, and the requests stop when the last of them closes the tab. If two
+watchers ask for different intervals, the shorter one wins.
 
 Writes to an external system are commands, not property assignments: they take arguments, they can
 fail, and they can't be batched into a snapshot. A command is an ordinary `suspend fun`, which also
@@ -614,8 +622,8 @@ Button({ disabled(save.state is Run.Running); onClick { save() } }) { Text("Save
 
 `Run` is one of `Idle`, `Running`, `Failed`, or `Done`. With one field instead of three, the page can
 never be asked to render an impossible combination. Failures are caught inside the launched coroutine,
-because an exception escaping it would cancel the composition's scope and end the session. A refused
-command should produce only an error message.
+because an exception escaping it would cancel the composition's scope and end the UI session. A
+refused command should produce only an error message.
 
 `samples/teams/src/main/kotlin/jetlin/samples/teams/Hub.kt` avoids needing access control. Its profile
 cache is keyed by principal, so Bob has no way to refer to a profile fetched with Alice's credential.
@@ -673,9 +681,9 @@ initial value, and the browser ignores it after the user has interacted with the
 ## 9. Memory, hibernation, and back-pressure
 
 Because UI state is held on the server, memory use grows with the number of connected users, and the
-memory cost of each session limits how many sessions one node can hold.
+memory cost of each UI session limits how many UI sessions one node can hold.
 
-These figures come from `./gradlew :samples:demo:benchmark`, with 1,000 concurrent sessions of a
+These figures come from `./gradlew :samples:demo:benchmark`, with 1,000 concurrent UI sessions of a
 113-node view:
 
 ```
@@ -685,18 +693,18 @@ hibernated:         364 bytes per session (356 kB total)
 
 ### Hibernation
 
-A session goes through three states:
+A UI session goes through three states:
 
 - Live: the composition is in memory, and a WebSocket is connected.
 - Orphaned: the socket has disconnected, but the composition is kept for a grace period, because most
   disconnections are brief, such as a train going through a tunnel or a laptop going to sleep, and
   reconnecting to a running composition is instant and loses nothing.
 - Hibernated: the grace period has expired, so the values declared with `rememberSaved` are written to
-  a `SessionStore`, and the composition is destroyed, which releases its slot table, node tree, and
-  coroutines.
+  a `UiSessionStore`, and the composition is destroyed, which releases its slot table, node tree,
+  and coroutines.
 
-That's where the difference of roughly 400 times in the figures above comes from: an idle session no
-longer costs what a live one does, only what its saved state costs.
+That's where the difference of roughly 400 times in the figures above comes from: an idle UI session
+no longer costs what a live one does, only what its saved state costs.
 
 The code makes the difference explicit. `remember` is temporary and doesn't survive hibernation.
 `rememberSaved` does. Keeping this explicit means the saved state is small by default, and developers
@@ -707,16 +715,16 @@ val draft = rememberSavedField("", key = "draft")   // Survives, because the use
 val expanded = remember { mutableStateOf(false) }   // Doesn't, because recomputing it costs nothing.
 ```
 
-Sessions are stored through a `SessionStore`. The default in-memory implementation covers a dropped
-connection or a closed laptop lid, but not a server restart.
+UI sessions are stored through a `UiSessionStore`. The default in-memory implementation covers a
+dropped connection or a closed laptop lid, but not a server restart.
 
-Waking a session transfers ownership of it, so the interface provides `take`, which removes and returns
-the session atomically, instead of separate load and delete operations. Two sockets can present the
-same token at the same time, for example a reconnect racing a retry, or two tabs restored from the same
-saved page, and exactly one of them must end up with the session. Otherwise, both build a composition
-from the same snapshot, and one of them is left live and connected, but invisible to the reaper that
-should clean it up. `SessionStoreContract` includes a test that fails for any implementation that
-reads and deletes in separate steps.
+Waking a UI session transfers ownership of it, so the interface provides `take`, which removes and
+returns the UI session atomically, instead of separate load and delete operations. Two sockets can
+present the same token at the same time, for example a reconnect racing a retry, or two tabs
+restored from the same saved page, and exactly one of them must end up with the UI session.
+Otherwise, both build a composition from the same snapshot, and one of them is left live and
+connected, but invisible to the reaper that should clean it up. `UiSessionStoreContract` includes a
+test that fails for any implementation that reads and deletes in separate steps.
 
 Two more details:
 
@@ -727,55 +735,58 @@ Two more details:
   value overwrite the other without an error.
 - Old snapshots: stored state outlives deployments, so a snapshot written by an older version of the
   code is normal. A value that can no longer be deserialized falls back to its initial value, instead
-  of failing the session.
+  of failing the UI session.
 
-When a session wakes, the browser's current URL takes priority over the stored location, because the
-user might have pressed the back button while disconnected. If a session has no saved state, nothing
-is stored. There's nothing to restore, so the client is told directly, and starts a new session.
+When a UI session wakes, the browser's current URL takes priority over the stored location, because
+the user might have pressed the back button while disconnected. If a UI session has no saved state,
+nothing is stored. There's nothing to restore, so the client is told directly, and starts a new UI
+session.
 
 ### Running on more than one node
 
-Jetlin assumes a single node. A shared session store would be the obvious next step, and would let
-sessions survive a restart. But on its own, it wouldn't make Jetlin work across several nodes, which is
-worth stating clearly, because it's easy to assume otherwise.
+Jetlin assumes a single node. A shared UI session store would be the obvious next step, and would
+let UI sessions survive a restart. But on its own, it wouldn't make Jetlin work across several
+nodes, which is worth stating clearly, because it's easy to assume otherwise.
 
-A store only ever holds hibernated sessions. A session exists only on its node during three periods,
-wherever snapshots are stored: while a socket is connected, between rendering the page and the socket
-connecting, and during the disconnect grace period, when the composition is deliberately kept. A
-request that reaches a different node during any of these finds nothing. Sign-in tickets are also kept
-on one node, for the few hundred milliseconds between a handler issuing one and the browser posting it.
-Ending a browser's sessions on sign-out reaches only the live sessions on the node that handled it.
+A store only ever holds hibernated UI sessions. A UI session exists only on its node during three
+periods, wherever snapshots are stored: while a socket is connected, between rendering the page and
+the socket connecting, and during the disconnect grace period, when the composition is deliberately
+kept. A request that reaches a different node during any of these finds nothing. Sign-in tickets are
+also kept on one node, for the few hundred milliseconds between a handler issuing one and the
+browser posting it. Ending a browser's UI sessions on sign-out reaches only the live UI sessions on
+the node that handled it.
 
 Handling those periods requires a policy decision, not more storage. The options are sticky routing;
 hibernating immediately on disconnect, and paying for a new render after every brief interruption; or
-a handoff protocol, in which the receiving node asks the owning node to release the session. Each has
-different trade-offs, and one has to be chosen before a shared store is useful.
+a handoff protocol, in which the receiving node asks the owning node to release the UI session. Each
+has different trade-offs, and one has to be chosen before a shared store is useful.
 
 ### Limits
 
 There are two limits. Both degrade service instead of defending against attacks. The goal is that when
 one client hits a limit, everyone else is unaffected.
 
-#### Sessions
+#### UI sessions
 
-`JetlinConfig.maxSessions` limits how many sessions are held at once. Every page render creates a
-session, whether or not a WebSocket ever connects to claim it, and unclaimed sessions are removed only
-when the handoff timeout expires.
+`JetlinConfig.maxUiSessions` limits how many UI sessions are held at once. Every page render creates
+a UI session, whether or not a WebSocket ever connects to claim it, and unclaimed UI sessions are
+removed only when the handoff timeout expires.
 
 Without a limit, memory settles at roughly `arrival rate × handoff timeout × cost per session`. It
-levels off instead of growing forever, because the reaper removes sessions at the same rate. At about
-136 kB per session and a 30-second timeout, 100 requests per second levels off at about 400 MB, and
-1,000 requests per second at 4 GB, which is enough to crash the process. The limit turns an
+levels off instead of growing forever, because the reaper removes UI sessions at the same rate. At
+about 136 kB per UI session and a 30-second timeout, 100 requests per second levels off at about 400
+MB, and 1,000 requests per second at 4 GB, which is enough to crash the process. The limit turns an
 unaffordable plateau into refusals the server can afford: over the limit, a page render gets a `503`
 response with a `Retry-After` header.
 
-Reconnects are deliberately not limited. A client that's reconnecting already had a session and isn't
-the cause of the pressure. Refusing it to make room for new visitors would be the wrong trade-off.
+Reconnects are deliberately not limited. A client that's reconnecting already had a UI session and
+isn't the cause of the pressure. Refusing it to make room for new visitors would be the wrong
+trade-off.
 
 The limit is approximate. Two requests that arrive at the same moment can both see room and both
-create a session, so the real maximum is `maxSessions` plus the requests in progress. Making it exact
-would require putting every page render behind a lock, to prevent a small, bounded overshoot that does
-no harm.
+create a UI session, so the real maximum is `maxUiSessions` plus the requests in progress. Making it
+exact would require putting every page render behind a lock, to prevent a small, bounded overshoot
+that does no harm.
 
 #### Events
 
@@ -792,35 +803,35 @@ page that ignores the first warning will ignore the rest too.
 This isn't an attack defense, and shouldn't be described as one. The message loop was never
 unbounded: `dispatch` suspends until recomposition is applied, so a client could never queue unlimited
 work in the composition, and unread messages back up in socket buffers until TCP flow control stops
-the sender. The bucket also doesn't stop a determined attacker. With the session limit at ten
-thousand, an attacker can open many sessions and flood each one at the allowed rate. If a
+the sender. The bucket also doesn't stop a determined attacker. With the UI session limit at ten
+thousand, an attacker can open many UI sessions and flood each one at the allowed rate. If a
 recomposition takes a millisecond, that's still twenty sessions' worth of work per core.
 
 What it does protect against is the common case: a client that has gone wrong, such as application
 JavaScript stuck in a loop, a `ClientComponent` that sends an event on every animation frame, a retry
 with no backoff, or an `onInput` connected to something that fires continuously. None of these are
 attacks, and all of them happen. Without a limit, one user's broken page takes a share of the server
-until someone notices a latency graph. The limit also turns "a session costs an unbounded amount" into
-a number you can multiply by the expected number of users, which is what makes capacity planning
-possible.
+until someone notices a latency graph. The limit also turns "a UI session costs an unbounded amount"
+into a number you can multiply by the expected number of users, which is what makes capacity
+planning possible.
 
 Real protection against deliberate abuse belongs in front of the application, in nginx or a load
 balancer, which is also where you configure limits for each address.
 
 #### Logging
 
-Both limits are logged, so that someone finds out when they're hit. Reaching the session limit and
-throttling a connection are both logged at `WARN`. Both can happen at request rate, so they go through
-a `LogThrottle` that writes at most one line per minute, including a count of the events it covers.
-The throttling log line names the page and the first eight characters of the session token. The token
-is truncated deliberately: it's a bearer credential, and a leaked log shouldn't allow a session
-takeover. A connection that dropped messages also logs its total when it closes.
-`SessionRegistry.rejectedCount` and `liveCount` expose the same information to monitoring.
+Both limits are logged, so that someone finds out when they're hit. Reaching the UI session limit
+and throttling a connection are both logged at `WARN`. Both can happen at request rate, so they go
+through a `LogThrottle` that writes at most one line per minute, including a count of the events it
+covers. The throttling log line names the page and the first eight characters of the UI session
+token. The token is truncated deliberately: it's a bearer credential, and a leaked log shouldn't
+allow a UI session takeover. A connection that dropped messages also logs its total when it closes.
+`UiSessionRegistry.rejectedCount` and `liveCount` expose the same information to monitoring.
 
 ### Back-pressure
 
-A composition outlives its socket, so a session with a running timer keeps producing updates whether
-or not anyone is connected. Two rules apply:
+A composition outlives its socket, so a UI session with a running timer keeps producing updates
+whether or not anyone is connected. Two rules apply:
 
 - When no client is connected, changes aren't recorded at all. The next client to connect receives
   the whole tree anyway, so recording the changes in between would use memory to describe a page that
@@ -828,18 +839,18 @@ or not anyone is connected. Two rules apply:
 - When a client is connected but falls too far behind, the buffer is discarded once it exceeds
   `maxBufferedOps`, which is 10,000 by default, and the next message is the full tree instead of a
   patch. Sending the tree again costs more bytes once, but it limits how much memory one slow client
-  can make the server hold. The session falls back to coarser updates instead of failing.
+  can make the server hold. The UI session falls back to coarser updates instead of failing.
 
 ## 10. Design decisions
 
-### Sessions are stateful, and hibernate when idle
+### UI sessions are stateful, and hibernate when idle
 
 The composition lives in server memory while the user is connected. That makes fine-grained updates,
 long-running effects, and server-initiated updates work naturally, at the cost of memory for each user
-and the need to handle disconnects. Hibernation complements this: after a disconnect, the session's
-saved state is captured, the composition is dropped, and it's restored on reconnect. A shared session
-store would let a session wake on another node, or after a rolling deployment. See
-[Running on more than one node](#running-on-more-than-one-node) for what else that needs.
+and the need to handle disconnects. Hibernation complements this: after a disconnect, the UI
+session's saved state is captured, the composition is dropped, and it's restored on reconnect. A
+shared UI session store would let a UI session wake on another node, or after a rolling deployment.
+See [Running on more than one node](#running-on-more-than-one-node) for what else that needs.
 
 ### The API is HTML-first
 
@@ -1003,9 +1014,9 @@ There are two deliberate restrictions:
 
 Unmounting is required. A widget that's never told it's being removed keeps its listeners, timers, and
 observers, and a list that re-renders leaks a set of them on every render. `JetlinConfig.clientSetup`
-is where an application loads its registrations. It's added after the runtime and before the session
-connects, because a component whose implementation isn't registered by the time the markup is
-processed renders nothing.
+is where an application loads its registrations. It's added after the runtime and before the UI
+session connects, because a component whose implementation isn't registered by the time the markup
+is processed renders nothing.
 
 `jetlin-testing` covers the server side of this: `hasClientComponent` finds a component, `assertProps`
 checks the props the server sent, and `pushFromClient` sends an event from the component, so you can
@@ -1037,14 +1048,14 @@ nothing.
   catches a class of bug that no other kind of assertion can see: keying a list by a value that
   changes renders exactly the same HTML, but sends the whole list again on every edit. Breaking
   `key(todo.id)` in the sample leaves 15 of its 16 tests passing, and the one that fails is this one.
-- Whether the right state was declared as saved. `hibernateAndRestore()` takes the session through
-  the hibernation cycle that [§9](#hibernation) describes, so a test can check that a half-typed draft
-  survives and that temporary state doesn't.
+- Whether the right state was declared as saved. `hibernateAndRestore()` takes the UI session
+  through the hibernation cycle that [§9](#hibernation) describes, so a test can check that a
+  half-typed draft survives and that temporary state doesn't.
 
 A view reached through a route declares its pattern, as in `setContent(route = "/todo/{id}")`. Path
-parameters are extracted by matching the session's URL against the pattern, so you write the ID only
-once. Tests that navigate between views use `setRoutes` instead, which follows the session from view to
-view.
+parameters are extracted by matching the UI session's URL against the pattern, so you write the ID
+only once. Tests that navigate between views use `setRoutes` instead, which follows the UI session
+from view to view.
 
 The matchers hide places where HTML is inconsistent about where state is stored. `hasValue` reads the
 `value` property, which is what `bind` sets, while `isDisabled` reads the `disabled` attribute.
@@ -1059,21 +1070,21 @@ The gaps are grouped by what each one prevents, not by how much work it is.
 
 ### Blocks a production deployment
 
-- The limits are global, not per client. `maxSessions` keeps the process from running out of memory,
-  and the token bucket for each connection keeps a misbehaving page from using a large share of the
-  server. Neither defends against a deliberate attacker: one source can fill the session limit so that
-  everyone else is refused, and can flood many sessions at the allowed rate. Limits for each address
-  require deciding whether to trust `X-Forwarded-For`, which is a security question of its own,
-  because behind a proxy, every request otherwise appears to come from the proxy. Until then, rate
-  limiting belongs in front of the application, in nginx or a load balancer, which is where limits for
-  each address are usually configured anyway.
+- The limits are global, not per client. `maxUiSessions` keeps the process from running out of
+  memory, and the token bucket for each connection keeps a misbehaving page from using a large share
+  of the server. Neither defends against a deliberate attacker: one source can fill the UI session
+  limit so that everyone else is refused, and can flood many UI sessions at the allowed rate. Limits
+  for each address require deciding whether to trust `X-Forwarded-For`, which is a security question
+  of its own, because behind a proxy, every request otherwise appears to come from the proxy. Until
+  then, rate limiting belongs in front of the application, in nginx or a load balancer, which is
+  where limits for each address are usually configured anyway.
 - Nothing is published. There are no Maven coordinates, no versioning scheme, and no
   binary-compatibility checks. Nothing outside this repository can depend on Jetlin, which matters
   more than any feature below.
 - CI isn't running. The pipeline is written and kept in `ci/github-actions.yml`. Enabling it requires
   someone with the `workflow` scope to move it to `.github/workflows/`.
-- No telemetry. Nothing reports session counts, patch sizes, recomposition time, hibernation and wake
-  rates, or how often a buffer overflowed. All of this is available inside `HtmlOwner` and
+- No telemetry. Nothing reports UI session counts, patch sizes, recomposition time, hibernation and
+  wake rates, or how often a buffer overflowed. All of this is available inside `HtmlOwner` and
   `CompositionHost`, but none of it is exported.
 
 ### Blocks a real application
@@ -1084,7 +1095,8 @@ The gaps are grouped by what each one prevents, not by how much work it is.
   changes through relations aren't propagated to pages already open, SQLite provides no second layer
   of enforcement below the policies, and there are no indexes.
 - File uploads. A WebSocket isn't suited to large binary transfers, so uploads need a separate HTTP
-  endpoint, progress reporting, and a way to associate the upload with the session that started it.
+  endpoint, progress reporting, and a way to associate the upload with the UI session that started
+  it.
 - Few event types. There are six handlers (`onClick`, `onInput`, `onChange`, `onChecked`, `onSubmit`,
   and `onKeyDown`) and four kinds of extracted data (value, checked, key, and form). Missing: focus
   and blur, mouse and pointer events, key-up, paste, radio groups, multi-select, and anything that
@@ -1105,21 +1117,21 @@ The gaps are grouped by what each one prevents, not by how much work it is.
 
 ### Blocks scaling beyond one machine
 
-- Running on more than one node. `SessionStore` is designed to allow a shared implementation, and
-  `SessionStoreContract` defines its behavior, so a store backed by Redis or a database is mostly a
-  matter of passing that test suite. The real obstacle isn't storage, but the policy for the periods
-  when a session lives on one node, which [§9](#running-on-more-than-one-node) describes, and which
-  has to be decided first. Two changes should come with it: a generation counter on snapshots, so two
-  processes can't restore each other's state, and moving `SessionStore` out of `jetlin-server-ktor`,
-  so implementations don't have to depend on Ktor.
+- Running on more than one node. `UiSessionStore` is designed to allow a shared implementation, and
+  `UiSessionStoreContract` defines its behavior, so a store backed by Redis or a database is mostly
+  a matter of passing that test suite. The real obstacle isn't storage, but the policy for the
+  periods when a UI session lives on one node, which [§9](#running-on-more-than-one-node) describes,
+  and which has to be decided first. Two changes should come with it: a generation counter on
+  snapshots, so two processes can't restore each other's state, and moving `UiSessionStore` out of
+  `jetlin-server-ktor`, so implementations don't have to depend on Ktor.
 - The in-memory record graph belongs to one process. An application that uses `jetlin-db` keeps its
   data in memory as live Compose state, so a second node would have its own copy: two graphs accepting
-  writes to one file, each recomposing only its own sessions. This is a bigger obstacle to running on
-  several nodes than `SessionStore`. A shared session store is an implementation task, but this is a
-  design question, with answers such as one writer with followers, or a shared log that every node
-  applies. `jetlin-db` detects the situation instead of tolerating it: if `PRAGMA data_version` changes
-  unexpectedly, the write is refused (see [`db.md`](db.md) §6), so the problem shows up as an error,
-  instead of the graphs drifting apart without anyone noticing.
+  writes to one file, each recomposing only its own UI sessions. This is a bigger obstacle to
+  running on several nodes than `UiSessionStore`. A shared UI session store is an implementation
+  task, but this is a design question, with answers such as one writer with followers, or a shared
+  log that every node applies. `jetlin-db` detects the situation instead of tolerating it: if
+  `PRAGMA data_version` changes unexpectedly, the write is refused (see [`db.md`](db.md) §6), so the
+  problem shows up as an error, instead of the graphs drifting apart without anyone noticing.
 
 ### Known and accepted
 
@@ -1136,11 +1148,11 @@ The gaps are grouped by what each one prevents, not by how much work it is.
 - `clientOnly` can target only the element itself or an ancestor, by class. There's no targeting of
   siblings, and no node references. Targeting a sibling requires a handle to a node that might not
   have been composed yet, which is a design problem, not only an implementation task.
-- Without a binding, the session token is a bearer token. It's generated with `SecureRandom`, never
-  reused, and appears only in the page it belongs to. An application that uses
+- Without a binding, the UI session token is a bearer token. It's generated with `SecureRandom`,
+  never reused, and appears only in the page it belongs to. An application that uses
   `jetlin-server-ktor-auth` binds it to the sign-in cookie (see
   [Binding tokens to the browser](#binding-tokens-to-the-browser)). One that doesn't, and doesn't call
-  `bindSessions` itself, still has a token that anyone who finds it can use.
+  `bindUiSessions` itself, still has a token that anyone who finds it can use.
 
 ### Wanted, but not urgent
 

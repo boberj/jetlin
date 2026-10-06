@@ -43,8 +43,9 @@ in between: the validation rule and the code that uses it are the same Kotlin co
 
 ## How it works
 
-Each session has a composition that runs on the server for as long as the session lasts. An update
-works like this:
+Each page that a browser loads gets a UI session: a composition that runs on the server for as long
+as the UI session lasts. It isn't the sign-in session, which is a cookie that covers every page of a
+browser (see [Sign users in](#sign-users-in)). An update works like this:
 
 1. The browser sends an event that names a node and an event type. The server calls the handler
    lambda it holds for that node and event.
@@ -102,18 +103,18 @@ field, where it survives reconnects and hibernation.
 
 ### How long state lives
 
-The composition runs for the whole session, and navigating replaces the current view inside it. How
-long a value lasts depends on where you declare it:
+The composition runs for the whole UI session, and navigating replaces the current view inside it.
+How long a value lasts depends on where you declare it:
 
 | Declared with | Lasts until |
 |---|---|
 | `remember` in a view | The user navigates away from the view. |
-| `rememberSaved` in a view | The user navigates away. It's restored when they come back, and when the session wakes from hibernation. |
-| `remember` in `app { }` | The session ends. |
-| `rememberSaved` in `app { }` | The session ends. It also survives hibernation. |
+| `rememberSaved` in a view | The user navigates away. It's restored when they come back, and when the UI session wakes from hibernation. |
+| `remember` in `app { }` | The UI session ends. |
+| `rememberSaved` in `app { }` | The UI session ends. It also survives hibernation. |
 
-`app { }` is a composable that wraps every view. It's composed once per session, and it's the only
-place where `remember` survives navigation:
+`app { }` is a composable that wraps every view. It's composed once per UI session, and it's the
+only place where `remember` survives navigation:
 
 ```kotlin
 jetlin {
@@ -141,7 +142,7 @@ Jetlin is at an early stage. The core is built and has end-to-end browser tests.
 context, navigation without reloads, forms, and hibernation are built on top of it.
 
 - [`docs/architecture.md`](docs/architecture.md) describes the design: the update path, the
-  protocol, sessions, input handling, and the reasoning behind the main decisions. Its §13 lists
+  protocol, UI sessions, input handling, and the reasoning behind the main decisions. Its §13 lists
   what's missing. The biggest gaps: nothing is published to Maven, there are no file uploads, and it
   runs only on a single node.
 - [`docs/db.md`](docs/db.md) does the same for `jetlin-db`: entities, policies, route guards, and
@@ -151,24 +152,25 @@ context, navigation without reloads, forms, and hibernation are built on top of 
 - [`docs/comparison.md`](docs/comparison.md) compares Jetlin with Phoenix LiveView, Livewire, Blazor
   Server, and others, including where Jetlin falls short.
 
-Session state is kept in server memory, so the memory cost of each session determines how many users
-one node can handle. With `jetlin-db`, stored records are also kept in memory, in the same heap:
+UI session state is kept in server memory, so the memory cost of each UI session determines how many
+users one node can handle. With `jetlin-db`, stored records are also kept in memory, in the same
+heap:
 
 | | Each | Per 1,000 |
 |---|---|---|
-| Live session | 136 kB | 133 MB |
-| Hibernated session | 364 bytes | 356 kB |
+| Live UI session | 136 kB | 133 MB |
+| Hibernated UI session | 364 bytes | 356 kB |
 | Stored record (`jetlin-db`) | 1.1 kB | 1 MB |
 
-A session's memory cost is roughly proportional to the size of its page, at about 1.5 kB per node. A
-page that renders a large collection costs more than one that doesn't. Storing a large collection
-that pages don't render in full is comparatively cheap.
+A UI session's memory cost is roughly proportional to the size of its page, at about 1.5 kB per
+node. A page that renders a large collection costs more than one that doesn't. Storing a large
+collection that pages don't render in full is comparatively cheap.
 
-When a session's WebSocket disconnects, the session stays live for a short grace period, because
-most disconnects are brief, such as a train going through a tunnel or a laptop going to sleep. After
-that, the session hibernates: the values declared with `rememberSaved` are stored, and the
-composition is destroyed. Values declared with `remember` are discarded, which keeps the stored state
-small.
+When a UI session's WebSocket disconnects, the UI session stays live for a short grace period,
+because most disconnects are brief, such as a train going through a tunnel or a laptop going to
+sleep. After that, the UI session hibernates: the values declared with `rememberSaved` are stored,
+and the composition is destroyed. Values declared with `remember` are discarded, which keeps the
+stored state small.
 
 ```kotlin
 val draft = rememberSavedField("", key = "draft")   // Survives, because the user typed it.
@@ -194,10 +196,10 @@ To run the samples, use the following commands:
 - A panel that opens without contacting the server.
 - A chart that JavaScript draws from numbers the server holds.
 - A page of markup that's tricky to hand back to a browser.
-- An `/errors` page, where you can make a handler throw, then make the whole session fail, and
+- An `/errors` page, where you can make a handler throw, then make the whole UI session fail, and
   compare what happens.
 
-All sessions share the todo store. If you open two windows, edits in one appear in the other, and
+All UI sessions share the todo store. If you open two windows, edits in one appear in the other, and
 **Reset demo data** resets every open window at once. The store is an in-memory list instead of
 `jetlin-db`, because this sample is about the view layer. `samples/teams` shows stored data.
 
@@ -265,8 +267,8 @@ works with any test runner.
 ## Store data
 
 `jetlin-db` stores records as ordinary Kotlin objects. Reading a field subscribes the composable that
-read it. Writing a field commits the change to SQLite first, and only then recomposes the sessions
-that read it, so no page ever shows a value that the database rejected.
+read it. Writing a field commits the change to SQLite first, and only then recomposes the UI
+sessions that read it, so no page ever shows a value that the database rejected.
 
 ```kotlin
 @Entity
@@ -292,7 +294,7 @@ Access control is reactive. Suppose Alice unshares a todo from her team:
 with(alice) { todo.update { team = null } }
 ```
 
-Bob has his todo list open in another session. His list iterated a policy-filtered collection, so
+Bob has his todo list open in another UI session. His list iterated a policy-filtered collection, so
 Alice's write invalidates the compositions that read the state the policy depends on, and the todo
 disappears from Bob's page. The application needs no subscriptions, broadcasts, or invalidation
 code. Route guards work the same way: if someone's admin role is revoked while they're on
@@ -305,7 +307,8 @@ missing.
 
 Some data on a page comes from systems you don't control. A value from an HTTP API is held in a
 `Fetch`, which is snapshot state that a coroutine updates. Reading it subscribes the composable. When
-the value arrives, every session that read it recomposes. Composition never waits for the request.
+the value arrives, every UI session that read it recomposes. Composition never waits for the
+request.
 
 ```kotlin
 when (val profile = hub.profile(principal).value) {
@@ -355,12 +358,12 @@ fun SignInPage(session: SessionControls<AppSession>) {
 
 Handlers run over the WebSocket, which can't set a cookie. So `signIn` and `signOut` hand the browser
 a one-time ticket, and the browser posts it to an HTTP endpoint that sets the cookie with a new session
-ID and redirects to `next`. Signing out ends the browser's other tabs as well. Every session token is
-bound to the cookie, so a token that leaks from a page is no use in another browser.
+ID and redirects to `next`. Signing out ends the browser's other tabs as well. Every UI session
+token is bound to the cookie, so a token that leaks from a page is no use in another browser.
 
 The cookie is named `jetlin_session`, and it's `Secure`, `HttpOnly`, and `SameSite=Lax`. Browsers
-treat `http://localhost` as secure, so local development over plain HTTP still works. Sessions are
-kept in memory. Pass `storage` to keep them across restarts. This builds on
+treat `http://localhost` as secure, so local development over plain HTTP still works. Sign-in
+sessions are kept in memory. Pass `storage` to keep them across restarts. This builds on
 Ktor's experimental typed session authentication. Jetlin opts in for you, so a Ktor upgrade can change
 it. An application that needs more control can build the Ktor scheme itself and pass it to
 `authentication(scheme, Principals)`. [`docs/architecture.md`](docs/architecture.md) §7 describes the
@@ -399,9 +402,9 @@ The browser tests cover the following:
   unmounts balanced.
 - State in the chrome and a view's saved state, both restored by the back button.
 - SVG that renders correctly whether the browser parsed it or the client built it from an operation.
-- A failing handler costing one interaction, while a failing view ends the session and reloads the
-  page, unless the page cancels the error event to handle it itself. Listening for the event alone
-  doesn't count.
+- A failing handler costing one interaction, while a failing view ends the UI session and reloads
+  the page, unless the page cancels the error event to handle it itself. Listening for the event
+  alone doesn't count.
 
 Each browser test resets the demo's shared store first, so tests can assert exact counts and contents
 whatever earlier tests did. Hibernation is tested at the integration level with a real WebSocket
@@ -414,14 +417,14 @@ instead, because a browser reconnects too quickly for the grace period to expire
 | `jetlin-runtime` | `CompositionHost`, `FramePolicy`, `GlobalSnapshotManager`, `Fetch`, and `Action`: running a Compose composition on the JVM without a UI toolkit |
 | `jetlin-protocol` | Ops and messages (kotlinx.serialization) |
 | `jetlin-html` | `LiveView`, `HtmlApplier`, the virtual DOM, element composables, routing, route guards, forms, and the HTML serializer |
-| `jetlin-server-ktor` | HTTP and WebSocket endpoints, and the session registry |
+| `jetlin-server-ktor` | HTTP and WebSocket endpoints, and the UI session registry |
 | `jetlin-server-ktor-auth` | Sign-in sessions on Ktor's typed session authentication: principal, token binding, and sign-in and sign-out from handlers |
 | `jetlin-client` | The TypeScript browser runtime (`npm run build` produces the committed `jetlin.js`) |
 | `jetlin-testing` | Runs views without a browser, for testing an application's own UI logic |
 | `jetlin-db` | Records, cells, the identity map, policies, the gate, snapshot transactions, and SQLite |
 | `jetlin-db-ksp` | KSP processor: tables, column objects, drafts, policy-checked accessors, and the schema snapshot |
 | `jetlin-db-gradle` | `dbDiff`, `dbMigrate`, `dbVerify`, and the migration engine behind them |
-| `samples/demo` | A runnable five-page demo, and the session memory benchmark |
+| `samples/demo` | A runnable five-page demo, and the UI session memory benchmark |
 | `jetlin-db-testing` | Tests `jetlin-db` policies for loopholes, such as users who can make themselves admins, in many small, random databases |
 | `samples/teams` | A sample with several users, with owner-only records, team-shared records, and an admin-only column |
 | `samples/issue-tracker` | An issue tracker in the style of Linear: list, board, projects, ⌘K palette, Tailwind styling |

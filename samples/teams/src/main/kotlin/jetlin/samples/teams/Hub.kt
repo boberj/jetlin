@@ -40,12 +40,12 @@ import kotlinx.serialization.json.put
  * against policies. The hub's data is different. It belongs to another system, arrives over HTTP
  * after a delay, and sometimes doesn't arrive at all. This file shows that the framework needs very
  * little extra to support it. A [Fetch] is snapshot state updated by a coroutine, so when a value
- * arrives, every session that read it recomposes, as they do after a committed transaction.
+ * arrives, every UI session that read it recomposes, as they do after a committed transaction.
  *
  * ## Why there's no policy here
  *
  * Stored records have to go through the gate because the identity map holds one shared object per
- * row, visible to every session. This cache is different. Each profile is fetched with the
+ * row, visible to every UI session. This cache is different. Each profile is fetched with the
  * credentials of the principal who requested it, and cached under that principal's key, so no other
  * principal can reach it. How the cache is keyed answers the access question, which is why this
  * sample needs only one authorization model.
@@ -76,11 +76,11 @@ class Hub(
      */
     val refreshEvery: Duration = 15.seconds,
     /**
-     * The scope that fetches run in. It must not use a session's dispatcher.
+     * The scope that fetches run in. It must not use a UI session's dispatcher.
      *
-     * Each session composes on a single thread, so a network request on that thread would stall the
-     * whole session. This scope also outlives individual sessions, which is what lets several
-     * sessions share one fetch.
+     * Each UI session composes on a single thread, so a network request on that thread would stall
+     * the whole UI session. This scope also outlives individual UI sessions, which is what lets
+     * several UI sessions share one fetch.
      */
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : AutoCloseable {
@@ -89,9 +89,9 @@ class Hub(
      * The announcement, which is the same for everyone and is fetched with the application's own
      * credential.
      *
-     * There's one [Fetch] for the whole process, so a hundred sessions cost the same requests as one.
-     * This is what §11.5 of the plan calls the application-token case, and it's the only case where a
-     * cache shared between principals is safe.
+     * There's one [Fetch] for the whole process, so a hundred UI sessions cost the same requests as
+     * one. This is what §11.5 of the plan calls the application-token case, and it's the only case
+     * where a cache shared between principals is safe.
      */
     val announcement: Fetch<String> = Fetch(scope, ttl = 1.minutes) {
         val body = client.get("$baseUrl/hub/announcement") { bearer(APPLICATION_TOKEN) }.orRefuse()
@@ -155,7 +155,9 @@ class Hub(
  */
 data class Profile(val status: String, val updates: Int)
 
-/** Thrown when the hub refuses a request. The page shows the message, and the session continues. */
+/**
+ * Thrown when the hub refuses a request. The page shows the message, and the UI session continues.
+ */
 class HubRefused(message: String) : RuntimeException(message)
 
 /** The application's own credential, used for data that is the same for every user. */

@@ -16,7 +16,7 @@ import kotlinx.serialization.serializer
 /**
  * Holds the state that outlives a composition.
  *
- * A session's composition can be torn down while the user is away and rebuilt when they return,
+ * A UI session's composition can be torn down while the user is away and rebuilt when they return,
  * possibly on a different server. Everything held in `remember` is lost then, because it lived in
  * the discarded slot table. Only what was registered here survives. That's why the code has to make
  * the difference visible: `remember` is scratch space, and [rememberSaved] is state the user would
@@ -136,7 +136,7 @@ internal val SavedStateJson: Json = Json {
  * cheap to recompute in plain `remember`, so the saved state stays small.
  *
  * A saved value that no longer deserializes, because its type changed after it was written, falls
- * back to [init] instead of failing the session. Saved state outlives deployments, so meeting an
+ * back to [init] instead of failing the UI session. Saved state outlives deployments, so meeting an
  * older shape is normal, not exceptional.
  *
  * @param serializer the serializer for the value.

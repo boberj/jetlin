@@ -34,9 +34,9 @@ import kotlinx.serialization.json.JsonElement
  * dispatchers, and virtual time would skip waits that the recomposer needs. No test needs to sleep:
  * every interaction returns once the recomposition it caused has settled.
  *
- * @param url where the session starts. A view reached through a route declares its pattern in
+ * @param url where the UI session starts. A view reached through a route declares its pattern in
  *   [ViewTest.setContent], which extracts the path parameters from this URL.
- * @param request the request the session starts with. Pass it when the view reads headers or
+ * @param request the request the UI session starts with. Pass it when the view reads headers or
  *   application attributes.
  * @param framePolicy how often the view may recompose.
  * @param body the test.
@@ -80,7 +80,7 @@ public class ViewTest internal constructor(
      * Composes one view and waits for the first pass to finish. Call it once, before anything else.
      *
      * If the test navigates, use [setRoutes] instead. A single view set here stays composed wherever
-     * the session goes, which isn't what the application does.
+     * the UI session goes, which isn't what the application does.
      *
      * @param route the pattern the view is registered at, such as `/todo/{id}`. Pass it whenever the
      *   view reads a path parameter. The parameters come from matching the test's URL against it, so
@@ -112,7 +112,7 @@ public class ViewTest internal constructor(
         get() = view ?: error("No content set; call setContent { ... } first")
 
     /**
-     * Sets a session attribute, usually the principal.
+     * Sets a UI session attribute, usually the principal.
      *
      * ```kotlin
      * setAttribute(PrincipalKey, root)
@@ -120,9 +120,9 @@ public class ViewTest internal constructor(
      * ```
      *
      * The attribute applies to every view composed after this call, including the one that
-     * [hibernateAndRestore] creates. That lets you test waking from hibernation. A woken session
+     * [hibernateAndRestore] creates. That lets you test waking from hibernation. A woken UI session
      * recomputes its attributes from the new connection, so changing the principal and then calling
-     * [hibernateAndRestore] simulates a role revoked while the session was hibernated.
+     * [hibernateAndRestore] simulates a role revoked while the UI session was hibernated.
      */
     public fun <T> setAttribute(key: AttributeKey<T>, value: T?) {
         request = request.with(key, value)
@@ -228,7 +228,7 @@ public class ViewTest internal constructor(
     }
 
     /**
-     * Hibernates the session and wakes it again, as a dropped connection or a deployment would.
+     * Hibernates the UI session and wakes it again, as a dropped connection or a deployment would.
      *
      * What the view declared with `rememberSaved` survives, and everything in `remember` is
      * recomputed. The application decides which is which, and this is how you check the decision.

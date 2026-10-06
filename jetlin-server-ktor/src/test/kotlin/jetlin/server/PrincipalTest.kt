@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
 /**
  * Tests when the application's `principal` resolver runs.
  *
- * The resolver is where the principal enters a session, so an application can reasonably do real
+ * The resolver is where the principal enters a UI session, so an application can reasonably do real
  * work there, such as a directory lookup or a database read. How often it runs is part of its
  * contract, not an implementation detail.
  */
@@ -36,7 +36,7 @@ class PrincipalTest {
             val client = createClient { install(WebSockets) }
 
             val token = client.tokenFromPage()
-            assertEquals(1, runs.get(), "the page render is what computes a session's principal")
+            assertEquals(1, runs.get(), "the page render is what computes a UI session's principal")
 
             client.webSocket("/jetlin") {
                 hello(token)

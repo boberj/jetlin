@@ -403,7 +403,7 @@ class PolicyTest {
             val project = db.store(Project(alice, "Inbox", shared = true))
             with(alice) { db.store(Task(alice, "shared").also { it.project = project }) }
 
-            // Bob's session, reading a collection filtered by what Bob can see.
+            // Bob's UI session, reading a collection filtered by what Bob can see.
             harness {
                 Div {
                     with(bob) {
@@ -449,7 +449,8 @@ class PolicyTest {
             // Obtained for Alice through the gate.
             with(alice) { assertEquals(task, db.tasks.single()) }
 
-            // Read as Bob, who never obtained it. This simulates a reference leaking out of Alice's session.
+            // Read as Bob, who never obtained it. This simulates a reference leaking out of Alice's
+            // UI session.
             val failure = assertFailsWith<LeakDetected> { CurrentPrincipal.with(bob) { task.title } }
 
             assertContains(failure.message.orEmpty(), "never obtained it")
@@ -516,7 +517,7 @@ class PolicyTest {
     }
 }
 
-/** Returns the text of the first `<span>`, for checking what the session shows. */
+/** Returns the text of the first `<span>`, for checking what the UI session shows. */
 private suspend fun Harness.textOfFirstSpan(): String = html().substringAfter("<span").substringAfter('>')
     .substringBefore("</span>")
 
@@ -537,7 +538,7 @@ private fun withDb(block: (Db) -> Unit) {
     }
 }
 
-/** Like the function above, for tests that run a live session. */
+/** Like the function above, for tests that run a live UI session. */
 @OptIn(ExperimentalPathApi::class)
 private suspend fun withLiveDb(block: suspend (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-db")

@@ -13,7 +13,7 @@ import jetlin.protocol.Op
  * Nodes are inserted bottom-up. Compose finishes building a subtree before it adds the subtree to
  * its parent, so the subtree is complete when the client first sees it, and it goes out as one op.
  *
- * @param owner the session's tree. The applier records its ops there.
+ * @param owner the UI session's tree. The applier records its ops there.
  */
 public class HtmlApplier(private val owner: HtmlOwner) : AbstractApplier<HtmlNode>(owner.root) {
 

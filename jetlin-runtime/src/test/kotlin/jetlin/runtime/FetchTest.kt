@@ -26,9 +26,9 @@ import kotlinx.coroutines.test.runTest
 /**
  * Tests [Fetch] from the point of view of a composition.
  *
- * The assertions check observable session behavior instead of the internal state machine: whether
- * the placeholder was rendered, whether the arrival caused exactly one recomposition, and whether a
- * second reader caused a second request.
+ * The assertions check observable UI session behavior instead of the internal state machine:
+ * whether the placeholder was rendered, whether the arrival caused exactly one recomposition, and
+ * whether a second reader caused a second request.
  *
  * Two of these tests hang instead of failing if reading ever writes snapshot state. Such a write
  * would invalidate the reader on every pass, so [CompositionHost.awaitIdle] would never return.
@@ -37,7 +37,9 @@ import kotlinx.coroutines.test.runTest
  */
 class FetchTest {
 
-    /** The scope that fetches run in. It's deliberately separate from the session's dispatcher. */
+    /**
+     * The scope that fetches run in. It's deliberately separate from the UI session's dispatcher.
+     */
     private val fetches = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     @AfterTest
@@ -281,7 +283,7 @@ class FetchTest {
         val both = calls.get()
 
         // A 30 ms loop runs about six times in 200 ms. Two separate loops would send about a dozen
-        // requests. One shared loop means the sessions share each request.
+        // requests. One shared loop means the UI sessions share each request.
         assertTrue(both in 2..9, "expected one loop's worth of requests, got $both")
 
         // One watcher stops. The other is still watching, so polling continues.

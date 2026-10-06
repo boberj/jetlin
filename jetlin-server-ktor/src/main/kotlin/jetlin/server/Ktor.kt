@@ -48,11 +48,11 @@ import org.slf4j.LoggerFactory
 
 /** The configuration that [jetlin] builds. Set its properties and register views inside `jetlin { }`. */
 public class JetlinConfig {
-    /** How often each session may recompose. See [FramePolicy]. */
+    /** How often each UI session may recompose. See [FramePolicy]. */
     public var framePolicy: FramePolicy = FramePolicy.Immediate
 
     /**
-     * The origins allowed to open a session socket, written as full origins, such as
+     * The origins allowed to open a UI session socket, written as full origins, such as
      * `https://app.example`.
      *
      * When the set is empty, only the same origin is allowed, checked against the request's `Host`
@@ -69,8 +69,11 @@ public class JetlinConfig {
      */
     public var head: String = ""
 
-    /** Where hibernated sessions are kept. For sessions to survive a restart, use a shared store. */
-    public var sessionStore: SessionStore = InMemorySessionStore()
+    /**
+     * Where hibernated UI sessions are kept. For UI sessions to survive a restart, use a shared
+     * store.
+     */
+    public var uiSessionStore: UiSessionStore = InMemoryUiSessionStore()
 
     /**
      * Whether to also write every `testTag` into the markup as a `data-test` attribute.
@@ -82,7 +85,7 @@ public class JetlinConfig {
     public var exposeTestTags: Boolean = false
 
     /**
-     * Markup placed after the runtime loads and before the session connects.
+     * Markup placed after the runtime loads and before the UI session connects.
      *
      * Register client components here, because the order matters. The first thing a connection does
      * is adopt the markup it was served, and a component whose implementation isn't registered by
@@ -106,19 +109,19 @@ public class JetlinConfig {
     public var onError: (Throwable) -> Unit = { }
 
     /**
-     * The maximum number of live sessions to hold at once.
+     * The maximum number of live UI sessions to hold at once.
      *
-     * Every page render creates a session, about 136 kB in the demo sample, whether or not a socket
-     * ever arrives to claim it. An unclaimed session is released only when the handoff timeout runs
-     * out. Without a limit, a stream of unauthenticated requests would grow memory until the process
-     * died.
+     * Every page render creates a UI session, about 136 kB in the demo sample, whether or not a
+     * socket ever arrives to claim it. An unclaimed UI session is released only when the handoff
+     * timeout runs out. Without a limit, a stream of unauthenticated requests would grow memory
+     * until the process died.
      *
-     * Set it from the measured cost of a session and the available heap. The default is chosen to
-     * stay out of the way of real traffic, not to suit any particular deployment. At the limit, page
-     * renders get a `503` response. Reconnects are still accepted, because someone reconnecting
-     * already has a session.
+     * Set it from the measured cost of a UI session and the available heap. The default is chosen
+     * to stay out of the way of real traffic, not to suit any particular deployment. At the limit,
+     * page renders get a `503` response. Reconnects are still accepted, because someone
+     * reconnecting already has a UI session.
      */
-    public var maxSessions: Int = 10_000
+    public var maxUiSessions: Int = 10_000
 
     /**
      * The sustained number of messages per second that one connection may send. A value of `0` or
@@ -142,8 +145,8 @@ public class JetlinConfig {
      * How long a composition keeps running after its socket closes.
      *
      * The default is long enough that a browser coming out of a tunnel or a sleeping laptop
-     * reconnects to a running composition. After the grace period, the session hibernates into
-     * [sessionStore].
+     * reconnects to a running composition. After the grace period, the UI session hibernates into
+     * [uiSessionStore].
      */
     public var disconnectGrace: Duration = 30.seconds
 
@@ -214,7 +217,7 @@ public class JetlinConfig {
     }
 
     /**
-     * Supplies the session's principal from the HTTP call that created it.
+     * Supplies the UI session's principal from the HTTP call that created it.
      *
      * Views and guards read it back with `LocalRequest.current[key]`, or through `Principals`. It's
      * computed on the HTTP call, because that's the only point where Ktor's call context, and so its
@@ -222,10 +225,10 @@ public class JetlinConfig {
      * only if you authenticate some other way.
      *
      * [resolve] runs once when the page is rendered. It runs again only if a socket wakes a
-     * hibernated session, because the principal then has to be recomputed from the new connection
-     * instead of trusted from a snapshot that might be minutes old. A socket that reconnects to a
-     * running composition doesn't call it, because that session already has its principal. So it can
-     * do real work, but it should be idempotent.
+     * hibernated UI session, because the principal then has to be recomputed from the new
+     * connection instead of trusted from a snapshot that might be minutes old. A socket that
+     * reconnects to a running composition doesn't call it, because that UI session already has its
+     * principal. So it can do real work, but it should be idempotent.
      *
      * @param key the attribute key that holds the principal, or `null` when nobody is signed in.
      * @param resolve returns the principal for the call, or `null`.
@@ -248,22 +251,22 @@ public class JetlinConfig {
     }
 
     /**
-     * Binds each session token to the browser that the page was rendered for.
+     * Binds each UI session token to the browser that the page was rendered for.
      *
      * [binding] returns an opaque value that identifies the browser, such as a hash of its sign-in
-     * cookie's session ID. A socket can attach to a session only if its own request returns the same
-     * value, so a token that leaks from the page is no use without the cookie as well. Return a hash,
-     * not the ID itself, because hibernated sessions keep the value in the [sessionStore].
-     * `jetlin-server-ktor-auth` sets this for you.
+     * cookie's session ID. A socket can attach to a UI session only if its own request returns the
+     * same value, so a token that leaks from the page is no use without the cookie as well. Return
+     * a hash, not the ID itself, because hibernated UI sessions keep the value in the
+     * [uiSessionStore]. `jetlin-server-ktor-auth` sets this for you.
      */
-    public fun bindSessions(binding: suspend (ApplicationCall) -> String?) {
-        check(bindingSource == null) { "Session binding is already configured" }
+    public fun bindUiSessions(binding: suspend (ApplicationCall) -> String?) {
+        check(bindingSource == null) { "UI session binding is already configured" }
         bindingSource = binding
     }
 
     /**
-     * Wraps every view in a container that's composed once for the session. [content] decides where
-     * the view goes.
+     * Wraps every view in a container that's composed once for the UI session. [content] decides
+     * where the view goes.
      *
      * Navigation replaces the view inside a composition that stays alive, so this container is the
      * one place where `remember` outlives a page change:
@@ -307,10 +310,10 @@ internal class ViewRegistration(
 /**
  * Installs Jetlin's HTTP and WebSocket endpoints.
  *
- * A `GET` request returns server-rendered HTML and a session token. A single WebSocket endpoint
- * takes over the session that the token names, then exchanges events for updates. A session is
- * bound to the whole route table instead of one view, which is what lets navigation replace views
- * inside the live composition instead of loading a new page.
+ * A `GET` request returns server-rendered HTML and a UI session token. A single WebSocket endpoint
+ * takes over the UI session that the token names, then exchanges events for updates. A UI session
+ * is bound to the whole route table instead of one view, which is what lets navigation replace
+ * views inside the live composition instead of loading a new page.
  *
  * @param configure sets up the configuration and registers the views.
  */
@@ -324,13 +327,13 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
     // thousand times buries the one line someone needed to read.
     val capacityLog = LogThrottle(60_000_000_000L)
 
-    val registry = SessionRegistry(
+    val registry = UiSessionRegistry(
         scope = this,
-        store = config.sessionStore,
+        store = config.uiSessionStore,
         framePolicy = config.framePolicy,
         disconnectGrace = config.disconnectGrace,
         exposeTestTags = config.exposeTestTags,
-        maxSessions = config.maxSessions,
+        maxUiSessions = config.maxUiSessions,
     ) { current ->
         CompositionLocalProvider(LocalRouteGuards provides guards) {
             RouteHost(router, current, config.appContainer, { NotFound(it) }) { registration ->
@@ -338,7 +341,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             }
         }
     }
-    attributes.put(JetlinSessionsKey, registry)
+    attributes.put(UiSessionsKey, registry)
 
     routing {
         get("/jetlin/jetlin.js") {
@@ -349,29 +352,31 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
         }
 
         // Page renders and the socket go under the same wrapper, because the socket recomputes what
-        // the render computed, such as the principal and the session binding.
+        // the render computed, such as the principal and the UI session binding.
         val routes: Route.() -> Unit = {
             for (registration in config.views) {
                 get(registration.pattern.pattern) {
                     val request = call.toRequestContext(config)
                 val binding = config.bindingSource?.invoke(call)
-                    // Check the guard before creating a session. A redirect costs only a response header,
-                    // while rendering a page for someone about to be redirected costs a whole composition.
+                    // Check the guard before creating a UI session. A redirect costs only a
+                    // response header, while rendering a page for someone about to be redirected
+                    // costs a whole composition.
                     val access = registration.guard?.check(request) ?: Access.Allow
                     if (access is Access.Redirect) {
                         call.respondRedirect(access.to)
                         return@get
                     }
 
-                    val session = try {
+                    val uiSession = try {
                         registry.create(request, binding)
-                    } catch (e: SessionLimitReachedException) {
+                    } catch (e: UiSessionLimitReachedException) {
                         // Refuse the request. Otherwise memory grows past what the heap can hold, which
-                        // takes down everyone's session, not only this one. Reaching the limit isn't
-                        // normal, so log it, but at most once a minute, with a count of the refusals.
+                        // takes down everyone's UI session, not only this one. Reaching the limit
+                        // isn't normal, so log it, but at most once a minute, with a count of the
+                        // refusals.
                         capacityLog.attempt()?.let { suppressed ->
                             logger.warn(
-                                "At the session limit of {}: refusing page renders. " +
+                                "At the UI session limit of {}: refusing page renders. " +
                                     "{} live, {} refused since this message, {} refused in total.",
                                 e.limit,
                                 registry.liveCount,
@@ -390,7 +395,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                     call.respondText(
                         // Prefer the title that the composition set. Only the composition knows what the
                         // route loaded and whether this principal may see it.
-                        renderPage(config, session.view.title ?: registration.title, session),
+                        renderPage(config, uiSession.view.title ?: registration.title, uiSession),
                         ContentType.Text.Html,
                         // A route that refused this principal responds as if the page doesn't exist.
                         if (access == Access.NotFound) HttpStatusCode.NotFound else HttpStatusCode.OK,
@@ -401,7 +406,7 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
             webSocket("/jetlin") {
                 // The browser's same-origin policy doesn't cover WebSockets, so a page on any site can
                 // open one to this endpoint. Without this check, a hostile page that obtained a token
-                // could drive a victim's session.
+                // could drive a victim's UI session.
                 if (!originAllowed(
                         origin = call.request.headers["Origin"],
                         host = call.request.headers["Host"],
@@ -414,14 +419,15 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
 
                 val hello = receiveMessage() as? ClientMessage.Hello ?: return@webSocket
                 // The socket's own request supplies the headers and the attributes derived from them, so
-                // a session woken from storage recomputes its principal instead of trusting a stale one.
-                val session = registry.attach(
+                // a UI session woken from storage recomputes its principal instead of trusting a
+                // stale one.
+                val uiSession = registry.attach(
                     token = hello.token,
                     base = { call.toRequestContext(config) },
                     url = hello.url,
                     binding = config.bindingSource?.invoke(call),
                 )
-                if (session == null) {
+                if (uiSession == null) {
                     sendMessage(ServerMessage.Error("Unknown or already-attached session", fatal = true))
                     return@webSocket
                 }
@@ -434,18 +440,18 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                     // rendered opened this socket, the browser holds that composition's markup and can
                     // keep it. Anything that changed since then follows as a normal patch. Claim the
                     // adoption whatever the client asked, so the right to adopt is used up either way.
-                    val mayAdopt = session.claimAdoption()
-                    sendMessage(if (mayAdopt && hello.adopt) session.view.adopt() else session.view.reset())
+                    val mayAdopt = uiSession.claimAdoption()
+                    sendMessage(if (mayAdopt && hello.adopt) uiSession.view.adopt() else uiSession.view.reset())
 
                     val sender = launch {
-                        session.view.messages.collect { sendMessage(it.withTitle(router)) }
+                        uiSession.view.messages.collect { sendMessage(it.withTitle(router)) }
                     }
 
-                    // The registry ends a session when its browser signs out elsewhere. The
+                    // The registry ends a UI session when its browser signs out elsewhere. The
                     // composition is already closed, so tell the client, which reloads as whoever it
                     // is now, and hang up. Closing the socket ends the loop below.
                     val watcher = launch {
-                        session.ended.await()
+                        uiSession.ended.await()
                         sendMessage(ServerMessage.Error(SESSION_ENDED, fatal = true))
                         close()
                     }
@@ -466,16 +472,17 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                             dropped++
                             if (!throttled) {
                                 throttled = true
-                                // Identify the session well enough to find the page. A page sending faster
-                                // than a person can click almost always has a loop in application
-                                // JavaScript, and knowing which page is most of the work of fixing it. The
-                                // token is truncated on purpose: it's a bearer credential, and a leaked log
-                                // shouldn't allow a session takeover. Eight characters are enough to
-                                // correlate log lines, but not enough to use.
+                                // Identify the UI session well enough to find the page. A page
+                                // sending faster than a person can click almost always has a loop
+                                // in application JavaScript, and knowing which page is most of the
+                                // work of fixing it. The token is truncated on purpose: it's a
+                                // bearer credential, and a leaked log shouldn't allow a UI session
+                                // takeover. Eight characters are enough to correlate log lines, but
+                                // not enough to use.
                                 logger.warn(
-                                    "Throttling session {} on {}: sending faster than {}/s",
-                                    session.token.take(8),
-                                    session.view.currentUrl,
+                                    "Throttling UI session {} on {}: sending faster than {}/s",
+                                    uiSession.token.take(8),
+                                    uiSession.view.currentUrl,
                                     config.eventsPerSecond,
                                 )
                                 sendMessage(ServerMessage.Error(TOO_FAST, fatal = false))
@@ -488,18 +495,18 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                             JetlinJson.decodeFromString(ClientMessage.serializer(), frame.readText())
                         } catch (t: Throwable) {
                             // Frames come from a browser, which might not behave. Drop a frame that can't
-                            // be read. Ending the session over it would let anyone end their own session
-                            // with a malformed message, and would turn a protocol version mismatch into
-                            // an outage instead of a warning.
+                            // be read. Ending the UI session over it would let anyone end their own
+                            // UI session with a malformed message, and would turn a protocol
+                            // version mismatch into an outage instead of a warning.
                             logger.warn("Ignoring a frame that could not be read", t)
                             continue
                         }
 
                         try {
-                            session.view.dispatch(message)
+                            uiSession.view.dispatch(message)
                         } catch (t: Throwable) {
                             config.onError(t)
-                            if (session.view.isAlive) {
+                            if (uiSession.view.isAlive) {
                                 // A handler threw. The composition is intact and the page is still
                                 // correct. Only this one interaction didn't happen, and only the client
                                 // needs to know that.
@@ -507,9 +514,9 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                                 sendMessage(ServerMessage.Error(HANDLER_FAILED, fatal = false))
                             } else {
                                 // A composable threw, which stops the recomposer for good. Nothing this
-                                // session does from now on can succeed, so say so, instead of leaving a
-                                // page that looks live.
-                                logger.error("The composition failed; the session cannot continue", t)
+                                // UI session does from now on can succeed, so say so, instead of
+                                // leaving a page that looks live.
+                                logger.error("The composition failed; the UI session cannot continue", t)
                                 sendMessage(ServerMessage.Error(SESSION_FAILED, fatal = true))
                                 break
                             }
@@ -523,19 +530,20 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
                     // much it came to.
                     if (dropped > 0) {
                         logger.warn(
-                            "Dropped {} events for exceeding {}/s: session {} on {}",
+                            "Dropped {} events for exceeding {}/s: UI session {} on {}",
                             dropped,
                             config.eventsPerSecond,
-                            session.token.take(8),
-                            session.view.currentUrl,
+                            uiSession.token.take(8),
+                            uiSession.view.currentUrl,
                         )
                     }
-                    // Stop recording before releasing the session. The composition keeps running during
-                    // the grace period, and whoever reconnects receives the whole tree anyway. An ended
-                    // session has already been closed and released, so there's nothing to stop.
-                    if (!session.ended.isCompleted) {
-                        session.view.clientDetached()
-                        registry.detach(session)
+                    // Stop recording before releasing the UI session. The composition keeps running
+                    // during the grace period, and whoever reconnects receives the whole tree
+                    // anyway. An ended UI session has already been closed and released, so there's
+                    // nothing to stop.
+                    if (!uiSession.ended.isCompleted) {
+                        uiSession.view.clientDetached()
+                        registry.detach(uiSession)
                     }
                 }
             }
@@ -544,20 +552,20 @@ public fun Application.jetlin(configure: JetlinConfig.() -> Unit) {
     }
 }
 
-/** Where [jetlin] keeps its [SessionRegistry], so [jetlinSessions] can find it. */
-private val JetlinSessionsKey = KtorAttributeKey<SessionRegistry>("jetlin.sessions")
+/** Where [jetlin] keeps its [UiSessionRegistry], so [uiSessions] can find it. */
+private val UiSessionsKey = KtorAttributeKey<UiSessionRegistry>("jetlin.uiSessions")
 
 /**
- * The live sessions of the application's Jetlin installation.
+ * The live UI sessions of the application's Jetlin installation.
  *
- * Use it to end the sessions of a browser that signed out through a route of your own, with
- * [SessionRegistry.endSessions]. `jetlin-server-ktor-auth` does this for you when you sign out through
- * it.
+ * Use it to end the UI sessions of a browser that signed out through a route of your own, with
+ * [UiSessionRegistry.endUiSessions]. `jetlin-server-ktor-auth` does this for you when you sign out
+ * through it.
  *
  * @throws IllegalStateException if [jetlin] hasn't been installed yet.
  */
-public val Application.jetlinSessions: SessionRegistry
-    get() = checkNotNull(attributes.getOrNull(JetlinSessionsKey)) { "Jetlin is not installed" }
+public val Application.uiSessions: UiSessionRegistry
+    get() = checkNotNull(attributes.getOrNull(UiSessionsKey)) { "Jetlin is not installed" }
 
 /** The logger for the server's endpoints. */
 private val logger = LoggerFactory.getLogger("jetlin.server")
@@ -570,13 +578,19 @@ private val logger = LoggerFactory.getLogger("jetlin.server")
  */
 private const val HANDLER_FAILED: String = "That action could not be completed."
 
-/** The message a client gets when its session was ended, for example by signing out in another tab. */
+/**
+ * The message a client gets when its UI session was ended, for example by signing out in another
+ * tab.
+ */
 private const val SESSION_ENDED: String = "This session has ended."
 
 /** The message a client gets when it sends faster than [JetlinConfig.eventsPerSecond] allows. */
 private const val TOO_FAST: String = "Too many messages; some were ignored."
 
-/** The page served at the session limit. It's static, because rendering a view needs a session. */
+/**
+ * The page served at the UI session limit. It's static, because rendering a view needs a UI
+ * session.
+ */
 private val AT_CAPACITY_PAGE: String = """
     <!doctype html>
     <html lang="en">
@@ -588,7 +602,10 @@ private val AT_CAPACITY_PAGE: String = """
     </html>
 """.trimIndent()
 
-/** The message a client gets when its session has stopped for good, and reloading is the only option. */
+/**
+ * The message a client gets when its UI session has stopped for good, and reloading is the only
+ * option.
+ */
 private const val SESSION_FAILED: String = "This session ended unexpectedly."
 
 /** The page for a path that no route matches. */
@@ -664,9 +681,9 @@ private fun escapeTitle(title: String): String = buildString(title.length) {
     }
 }
 
-/** Renders the full HTML page for [session], with the runtime script and the session token. */
-private suspend fun renderPage(config: JetlinConfig, title: String, session: JetlinSession): String {
-    val body = session.view.renderHtml()
+/** Renders the full HTML page for [uiSession], with the runtime script and the UI session token. */
+private suspend fun renderPage(config: JetlinConfig, title: String, uiSession: UiSession): String {
+    val body = uiSession.view.renderHtml()
     return """
         <!doctype html>
         <html lang="en">
@@ -677,10 +694,10 @@ private suspend fun renderPage(config: JetlinConfig, title: String, session: Jet
         ${config.head}
         </head>
         <body>
-        <div id="jetlin-root"${rootAttributes(session.view.owner)}>$body</div>
+        <div id="jetlin-root"${rootAttributes(uiSession.view.owner)}>$body</div>
         <script src="/jetlin/jetlin.js"></script>
         ${config.clientSetup}
-        <script>window.jetlin = Jetlin.connect({ token: "${session.token}" });</script>
+        <script>window.jetlin = Jetlin.connect({ token: "${uiSession.token}" });</script>
         </body>
         </html>
     """.trimIndent()

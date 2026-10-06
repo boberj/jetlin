@@ -17,9 +17,9 @@ import kotlin.test.assertEquals
  * Tests how a guarded route handles a principal it refuses.
  *
  * There are three ways to reach a route, and all must give the same result: a deep link, navigation
- * within a session, and a hibernated session waking up. The third is the easiest to get wrong. A
- * woken session resumes on the URL it was on, so the guard has to run again on wake, not only when
- * the route is entered.
+ * within a UI session, and a hibernated UI session waking up. The third is the easiest to get
+ * wrong. A woken UI session resumes on the URL it was on, so the guard has to run again on wake,
+ * not only when the route is entered.
  *
  * The principal here is a plain object that holds snapshot state, not a database record. These tests
  * don't test storage. Moving the user off a page works because the guard reads live state.
@@ -110,8 +110,9 @@ class GuardTest {
             }
             onNode(hasTestTag("page")).assertExists()
 
-            // Someone else removes this user's admin role, and nothing notifies this session. The guard
-            // read `admin`, which is snapshot state, so the write invalidates the guard and nothing else.
+            // Someone else removes this user's admin role, and nothing notifies this UI session.
+            // The guard read `admin`, which is snapshot state, so the write invalidates the guard
+            // and nothing else.
             root.admin = false
             awaitIdle()
 
@@ -129,8 +130,8 @@ class GuardTest {
             }
             onNode(hasTag("h1")).assertText("Users")
 
-            // The role is revoked while the session is hibernated. On wake, the principal is recomputed
-            // from the new connection instead of restored from an outdated snapshot.
+            // The role is revoked while the UI session is hibernated. On wake, the principal is
+            // recomputed from the new connection instead of restored from an outdated snapshot.
             setAttribute(PersonKey, Person("Root", admin = false))
             hibernateAndRestore()
 

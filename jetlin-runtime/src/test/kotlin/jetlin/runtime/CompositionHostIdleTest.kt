@@ -26,8 +26,8 @@ import kotlinx.coroutines.yield
  *
  * There are two ways to get this wrong, and the tests cover both. Ending a wait early sends a patch,
  * or lets a test assert, before the tree has caught up, so each test that waits checks the tree
- * afterward, not only that the wait returned. Never ending a wait deadlocks a session, so every wait
- * here runs under a timeout that turns a hang into a failure that names what hung.
+ * afterward, not only that the wait returned. Never ending a wait deadlocks a UI session, so every
+ * wait here runs under a timeout that turns a hang into a failure that names what hung.
  *
  * The tests use `runBlocking` instead of `runTest`. The host runs on real dispatchers and real
  * timers, and virtual time would skip exactly the throttles and delays these tests need to wait
@@ -89,7 +89,7 @@ class CompositionHostIdleTest {
                 }
             }
             // A clock that the page reads, as a real one would be. While it's suspended in delay()
-            // it has no queued work, so the session settles between ticks instead of never.
+            // it has no queued work, so the UI session settles between ticks instead of never.
             repeat(5) { within("a session with a ticking clock") { host.awaitIdle() } }
         }
     }
@@ -139,7 +139,7 @@ class CompositionHostIdleTest {
      *
      * This isn't what proves that a wait can't end early. The race that matters sits between two
      * adjacent reads, and this test passed three runs out of three against a version of the check with
-     * those reads in the unsafe order. [SessionActivityTest] covers that race by forcing it.
+     * those reads in the unsafe order. [UiSessionActivityTest] covers that race by forcing it.
      */
     @Test
     fun `writes from other threads never end a wait early`(): Unit = runBlocking {
@@ -150,8 +150,8 @@ class CompositionHostIdleTest {
         CompositionHost(TestApplier(root)).use { host ->
             host.setContent { Leaf("mine $mine noise-seen ${noise >= 0}") }
 
-            // As far as this session can tell, this is another session's traffic: state it reads,
-            // written continuously from a thread it doesn't own, arriving through the global
+            // As far as this UI session can tell, this is another UI session's traffic: state it
+            // reads, written continuously from a thread it doesn't own, arriving through the global
             // snapshot, and waking its recomposer at moments it can't control.
             //
             // The writer pauses briefly between writes. Without any gap, a writer can keep the
@@ -167,8 +167,8 @@ class CompositionHostIdleTest {
             try {
                 repeat(500) { i ->
                     within("transaction $i under concurrent writes") { host.transact { mine = i } }
-                    // Read on the session's own thread right after the wait, while the writer keeps the
-                    // recomposer busy. An early return shows up as the previous value.
+                    // Read on the UI session's own thread right after the wait, while the writer
+                    // keeps the recomposer busy. An early return shows up as the previous value.
                     val rendered = host.confined { root.render() }
                     assertEquals("root(mine $i noise-seen true)", rendered, "after transaction $i")
                 }

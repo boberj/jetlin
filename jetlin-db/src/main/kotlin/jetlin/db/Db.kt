@@ -20,7 +20,7 @@ import kotlin.reflect.KClass
  *
  * The order is what matters. If the database rejects a write, because of a constraint violation, a
  * failed flush, or an exception from the block, the snapshot is discarded, and no composition ever
- * sees the change. No session renders a value that the database refused, so there's nothing to
+ * sees the change. No UI session renders a value that the database refused, so there's nothing to
  * revert on screen. With the common approach of updating optimistically and reverting on failure,
  * the user briefly sees a wrong value. Here, they never do. That's the main reason for the design,
  * and any change that applies the snapshot before committing would lose it.
@@ -29,9 +29,9 @@ import kotlin.reflect.KClass
  *
  * Every stored record stays in memory as a live object for the life of the process. Following a
  * relation is a field access, so there are no queries, no N+1 problem, and, most importantly, no
- * reads that block the single thread a session composes on. The cost is memory, which the live
- * sessions share, and which limits how much data an application can hold. `docs/db.md` §6 has the
- * measured figures.
+ * reads that block the single thread a UI session composes on. The cost is memory, which the live
+ * UI sessions share, and which limits how much data an application can hold. `docs/db.md` §6 has
+ * the measured figures.
  *
  * ## Limitations
  *
@@ -43,7 +43,7 @@ import kotlin.reflect.KClass
  *   all checked against policies. Guards are an extra layer on top of those checks, not a
  *   replacement.
  * - Holding a record reference grants access to it. Access is checked when code obtains a record,
- *   not each time it reads a field. A record that outlives the session that obtained it, for
+ *   not each time it reads a field. A record that outlives the UI session that obtained it, for
  *   example in a companion object cache, a long-lived closure, or a field, can be read by whoever
  *   ends up holding it. [LeakDetector] can find such leaks in development and test builds, but
  *   nothing prevents them.

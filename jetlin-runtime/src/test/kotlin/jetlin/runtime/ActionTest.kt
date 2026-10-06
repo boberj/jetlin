@@ -22,9 +22,9 @@ import kotlinx.coroutines.withTimeout
  * Tests [Action] from the point of view of a composition.
  *
  * The most important tests cover failures: a command that throws must produce an error message
- * instead of ending the session, and clicking a busy button again must do nothing. These depend on
- * where the `try` is and on when `invoke` returns early, and nobody would notice a mistake in either
- * until something failed.
+ * instead of ending the UI session, and clicking a busy button again must do nothing. These depend
+ * on where the `try` is and on when `invoke` returns early, and nobody would notice a mistake in
+ * either until something failed.
  */
 class ActionTest {
 
@@ -176,8 +176,8 @@ class ActionTest {
  * Waits for an attempt to finish, then for the page to update.
  *
  * `awaitIdle` alone isn't enough. While the action is suspended waiting on something outside the
- * session, the session has no queued work and really is idle, which is the point of an action. So
- * this waits for the outcome itself, with a time limit.
+ * UI session, the UI session has no queued work and really is idle, which is the point of an
+ * action. So this waits for the outcome itself, with a time limit.
  */
 private suspend fun CompositionHost.awaitRun(action: Action<*>) {
     withContext(Dispatchers.Default) {

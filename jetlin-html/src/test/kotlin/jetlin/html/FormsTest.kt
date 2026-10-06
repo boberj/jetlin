@@ -108,11 +108,11 @@ class FormsTest {
     }
 }
 
-/** Builds a field outside a composition, for the parts that need no session. */
+/** Builds a field outside a composition, for the parts that need no UI session. */
 private fun field(initial: String, validate: (String) -> String?): Field<String> =
     Field(mutableStateOf(initial), mutableStateOf(false), validate)
 
-/** Sends an input event through the session, as the transport would. */
+/** Sends an input event through the UI session, as the transport would. */
 private suspend fun LiveView.typeInto(node: Int, value: String) {
     dispatch(
         ClientMessage.Event(

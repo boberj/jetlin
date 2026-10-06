@@ -83,8 +83,9 @@ class EntityRouteTest {
                 setTaskRoutes(db)
                 onNode(hasTag("h1")).assertText("shared plan")
 
-                // Alice unshares the project. Nothing notifies Bob's session directly. Looking up the
-                // route's subject read `project.shared` through the policy, so the write invalidates it.
+                // Alice unshares the project. Nothing notifies Bob's UI session directly. Looking
+                // up the route's subject read `project.shared` through the policy, so the write
+                // invalidates it.
                 with(alice) { project.update { shared = false } }
                 awaitIdle()
 

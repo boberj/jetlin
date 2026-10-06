@@ -9,13 +9,13 @@ import kotlin.reflect.KClass
  * The in-memory graph: one live object per stored row, indexed by type and ID.
  *
  * With every record in memory, following a relation is a field access. Composables run on a
- * session's single thread, so a lazily loaded relation would either block that thread or have to
+ * UI session's single thread, so a lazily loaded relation would either block that thread or have to
  * become asynchronous. Keeping the data in memory avoids both, at the cost of memory, which the live
- * sessions share, and which limits how much data an application can hold.
+ * UI sessions share, and which limits how much data an application can hold.
  *
  * Each type's records are kept in a [SnapshotStateList]. So adding or removing a record invalidates
- * every composition that iterated the list, in every session, because the whole process shares the
- * map, and the lists are ordinary snapshot state.
+ * every composition that iterated the list, in every UI session, because the whole process shares
+ * the map, and the lists are ordinary snapshot state.
  *
  * ## Why most members are internal
  *

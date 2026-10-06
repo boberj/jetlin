@@ -3,7 +3,7 @@ package jetlin.protocol
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/** Identifies one DOM node within one session. The server assigns it. */
+/** Identifies one DOM node within one UI session. The server assigns it. */
 public typealias NodeId = Int
 
 /** The ID of the root node, which is the element the page's content is mounted in. */

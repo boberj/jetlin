@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
  * Open it in two windows, sign in as Alice in one and Bob in the other, and share one of Alice's
  * todos with the team. It appears in Bob's window as soon as it's shared, and disappears when it's
  * unshared. There's no polling, subscription, or invalidation code: the write that stores the change
- * is also what recomposes the sessions that can see the record.
+ * is also what recomposes the UI sessions that can see the record.
  *
  * Signing in is real session handling: the cookie holds an opaque session ID, the session stays on
  * the server, and signing out ends the user's other tabs. What isn't real is proving who you are.
@@ -47,11 +47,11 @@ fun main() {
             exposeTestTags = true
             head = STYLES
 
-            // Sign in with a cookie that holds an opaque session ID, and supply the session's principal
-            // from it. It's looked up for the initial HTTP request, and again when a WebSocket wakes a
-            // hibernated session. So the principal is recomputed from the new connection instead of
-            // restored from a snapshot that might be out of date. If a role was revoked while a laptop
-            // was asleep, the change takes effect when the laptop wakes.
+            // Sign in with a cookie that holds an opaque session ID, and supply each UI session's
+            // principal from it. It's looked up for the initial HTTP request, and again when a
+            // WebSocket wakes a hibernated UI session. So the principal is recomputed from the new
+            // connection instead of restored from a snapshot that might be out of date. If a role
+            // was revoked while a laptop was asleep, the change takes effect when the laptop wakes.
             //
             // The lookup uses `authenticate`, the framework's one unchecked lookup. It needs it because
             // there's no principal yet to check the lookup against. A session whose user no longer
@@ -192,11 +192,11 @@ internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve
 }
 
 /**
- * Makes the session's principal available as a context parameter to [content].
+ * Makes the UI session's principal available as a context parameter to [content].
  *
  * Context parameters are lexically scoped, and they aren't passed through a
- * `@Composable () -> Unit`, so the principal stored in the session has to be brought back into scope
- * explicitly. Call this once at the root of each page.
+ * `@Composable () -> Unit`, so the principal stored in the UI session has to be brought back into
+ * scope explicitly. Call this once at the root of each page.
  *
  * If there's no principal, nothing is rendered. In practice that doesn't happen: pages that need a
  * principal declare `requires = Principals.signedIn`, so the guard has already redirected.

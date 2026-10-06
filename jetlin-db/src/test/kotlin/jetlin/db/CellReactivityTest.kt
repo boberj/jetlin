@@ -21,11 +21,11 @@ import kotlinx.coroutines.test.runTest
  * Everything else in the module depends on this: if reading a field doesn't subscribe the
  * composable that read it, storage doesn't help. The tests compare exact op lists instead of
  * checking what they contain, so a write that updates more of the page than the changed field fails
- * here, instead of wasting bandwidth in every session.
+ * here, instead of wasting bandwidth in every UI session.
  *
  * Every write in this file comes from the test thread, outside any composition or snapshot. That's
- * how a background job, a load at startup, or another user's session writes. Such writes reach the
- * recomposer through `GlobalSnapshotManager`, without any subscription or broadcast.
+ * how a background job, a load at startup, or another user's UI session writes. Such writes reach
+ * the recomposer through `GlobalSnapshotManager`, without any subscription or broadcast.
  */
 class CellReactivityTest {
 

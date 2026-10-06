@@ -2,9 +2,9 @@
 
 `jetlin-db` is the storage layer for Jetlin applications. Entities are ordinary Kotlin objects kept in
 memory, backed by Compose snapshot state, and stored in SQLite. Reading a field subscribes the
-composable that read it. Writing a field commits the change to disk, then recomposes every session
-that read it. You declare who can see and change each entity's records, usually with rules that
-read like sentences, and the framework enforces them whenever application code reads or writes.
+composable that read it. Writing a field commits the change to disk, then recomposes every UI
+session that read it. You declare who can see and change each entity's records, usually with rules
+that read like sentences, and the framework enforces them whenever application code reads or writes.
 
 `jetlin-db` is built and tested, but no production application uses it yet. `samples/teams` shows it
 in use. [§8](#8-whats-missing) lists what's missing, in order of how likely each gap is to block a
@@ -25,13 +25,13 @@ The design rests on three mechanisms. The second is the least obvious.
 
 Every stored row is loaded into memory as one live object, and stays there for the life of the
 process. Following a relation is a field access, so there's no N+1 problem, no lazy loading, and,
-most importantly, no read that can block the single thread a session composes on.
+most importantly, no read that can block the single thread a UI session composes on.
 
 ### Cells
 
 A record's mutable fields are stored in named snapshot state, called cells. Reading a cell in a
 composable subscribes that composable. Writing a cell invalidates every composable that read it, in
-every session, because the whole process shares the identity map, and cells are ordinary Compose
+every UI session, because the whole process shares the identity map, and cells are ordinary Compose
 state.
 
 ### Transactions are snapshots
@@ -53,7 +53,7 @@ snapshot:
 
 The order of steps 3 and 4 is the key point. If the database rejects a write, because of a
 constraint violation, a policy refusal, or an exception in the block, no composition ever sees the
-change. No session renders a value that the database refused, so nothing has to be reverted on
+change. No UI session renders a value that the database refused, so nothing has to be reverted on
 screen. The common approach, updating the UI optimistically and reverting on failure, briefly shows a
 wrong value. This approach never does.
 
@@ -856,11 +856,11 @@ the field should sometimes be empty.
 ## 3. Getting a principal, and protecting routes
 
 `authentication(Principals) { session -> … }`, from `jetlin-server-ktor-auth`, signs users in with a
-session cookie and adds the principal to each Jetlin session. Its `validate` lambda finds the user with
+session cookie and adds the principal to each UI session. Its `validate` lambda finds the user with
 `authenticate`, the one unchecked lookup, because there's no principal yet to check it against. The
 principal is looked up for the initial HTTP request, and again when a WebSocket wakes a hibernated
-session, so it's recomputed from the new connection instead of restored from a snapshot that might be
-minutes old.
+UI session, so it's recomputed from the new connection instead of restored from a snapshot that
+might be minutes old.
 
 ```kotlin
 val Principals = Principals<User>(signIn = "/login")
@@ -879,7 +879,7 @@ jetlin {
 ```
 
 The principal is nullable. Pages such as a sign-in page or a marketing page must be reachable without
-signing in. Authentication is a requirement of individual routes, not of having a session.
+signing in. Authentication is a requirement of individual routes, not of having a UI session.
 
 `db.authenticate(User::class) { it.email == email }` is the framework's one privileged entry point. It
 looks up a record without a principal, because otherwise there'd be no way to establish the first
@@ -900,8 +900,8 @@ public sealed interface Access {
 }
 ```
 
-A view that throws ends the session and reloads the page. That's right for a bug, but wrong for an
-ordinary case like "you need to sign in," so guards return a value instead of throwing.
+A view that throws ends the UI session and reloads the page. That's right for a bug, but wrong for
+an ordinary case like "you need to sign in," so guards return a value instead of throwing.
 
 A failed role check returns `NotFound`, not a forbidden page. A `403` on `/admin/users` would confirm
 that an admin panel exists. Revealing that should be an explicit choice, never the default.
@@ -932,8 +932,8 @@ this repository checks the title separately.
 
 | Entry | What happens |
 |---|---|
-| Deep link | The guard runs in the HTTP layer. A redirect is a `302` response, and no session is created. A refusal is a `404`. |
-| Navigation within a session | There's no page load. The guard runs in the composition and redirects on the client. |
+| Deep link | The guard runs in the HTTP layer. A redirect is a `302` response, and no UI session is created. A refusal is a `404`. |
+| Navigation within a UI session | There's no page load. The guard runs in the composition and redirects on the client. |
 | Waking from hibernation | The principal is looked up again, and the guard for the current route runs again, not only guards on routes being entered. A role revoked while a laptop was asleep takes effect when it wakes. |
 
 Guards aren't the security boundary. Record policies are. A guard improves the user experience and
@@ -1074,7 +1074,7 @@ policy read. So revoking access is only a write:
 with(alice) { todo.update { team = null } }
 ```
 
-Bob has `/` open in another session. His page iterated `db.todos`, whose filter read
+Bob has `/` open in another UI session. His page iterated `db.todos`, whose filter read
 `record.team == principal.team`. Alice's write invalidates exactly the compositions that read it, so
 Bob's list recomposes, and the todo disappears from his page. There are no subscriptions, broadcasts,
 or invalidation code anywhere in the application.
@@ -1120,7 +1120,7 @@ serialized, and never block.
 
 ### Memory is the limit
 
-All records are held in memory, in the same heap as the live session compositions. Two benchmarks
+All records are held in memory, in the same heap as the live UI session compositions. Two benchmarks
 measure the two parts:
 
 ```
@@ -1139,15 +1139,15 @@ reference, and strings of typical length. The figure stays nearly constant betwe
 records, so 100,000 records would take about 110 MB, and a million about 1 GB. Memory becomes a real
 concern somewhere in the hundreds of thousands of records, not the thousands.
 
-A session costs roughly what its page costs, about 1.5 kB per node in both measurements. That cost is
-the virtual DOM and the composition around it, and the database adds nothing to it. So the size of
-what a page renders matters more than the size of the collection. Each record is counted once in the
-graph, then again in each session, for each record that the session renders.
+A UI session costs roughly what its page costs, about 1.5 kB per node in both measurements. That
+cost is the virtual DOM and the composition around it, and the database adds nothing to it. So the
+size of what a page renders matters more than the size of the collection. Each record is counted
+once in the graph, then again in each UI session, for each record that the UI session renders.
 
 Reading a policy-filtered collection does add to a composition's read set. The policy runs for every
 record, so a page that filters a large table subscribes to cells in every record it scanned. The
-measured cost is about 30 bytes per scanned record per session. That's a real cost, but about an order
-of magnitude less than rendering the record.
+measured cost is about 30 bytes per scanned record per UI session. That's a real cost, but about an
+order of magnitude less than rendering the record.
 
 If memory ever becomes a problem, there's a way out that doesn't change the model. A cell that starts
 out empty can render a placeholder instead of blocking, so rarely used tables could move out of
@@ -1238,13 +1238,13 @@ the model.
 ### A single process only
 
 The in-memory graph belongs to one process. A second node would hold its own copy, and the two would
-drift apart. This is a harder obstacle to running on several nodes than the session store, and
-`architecture.md` §13 lists it next to the session store.
+drift apart. This is a harder obstacle to running on several nodes than the UI session store, and
+`architecture.md` §13 lists it next to the UI session store.
 
 ### Navigating to a route for one record shows the route's fallback title
 
-When the user navigates within a session, the title is sent in the navigation message, which is built
-from the route table before the new view has looked up its record. Page loads and waking from
+When the user navigates within a UI session, the title is sent in the navigation message, which is
+built from the route table before the new view has looked up its record. Page loads and waking from
 hibernation show the correct title. Fixing this requires a protocol change.
 
 ## 9. Modules

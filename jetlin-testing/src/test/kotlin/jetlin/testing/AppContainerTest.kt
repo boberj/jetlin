@@ -20,8 +20,8 @@ import kotlin.test.Test
  *
  * Three lifetimes meet here, and an application has to be able to tell them apart. A `remember` in a
  * view lasts until the user navigates away from the view. A `rememberSaved` in a view comes back when
- * the view does. A `remember` in the container lasts as long as the session, because the container
- * is composed once, above the route, and never torn down.
+ * the view does. A `remember` in the container lasts as long as the UI session, because the
+ * container is composed once, above the route, and never torn down.
  */
 class AppContainerTest {
 
@@ -123,8 +123,8 @@ class AppContainerTest {
         onNode(hasTestTag("search")).type("tug")
         hibernateAndRestore()
 
-        // The container is never disposed, so its providers are still registered when the session is
-        // asked what it wants to keep.
+        // The container is never disposed, so its providers are still registered when the UI
+        // session is asked what it wants to keep.
         onNode(hasTestTag("search")).assertValue("tug")
     }
 

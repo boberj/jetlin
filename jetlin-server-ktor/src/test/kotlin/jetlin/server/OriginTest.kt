@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Tests which origins may open a session socket. See [originAllowed]. */
+/** Tests which origins may open a UI session socket. See [originAllowed]. */
 class OriginTest {
 
     @Test

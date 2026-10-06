@@ -37,7 +37,7 @@ public interface SaveableStateHolder {
  * Remembers a [SaveableStateHolder] that keeps state for the [maxKeys] most recently left keys.
  *
  * The limit exists because the caller chooses the keys, and nothing bounds how many it uses. Keeping
- * every key for the life of a session could leak memory, and the state that matters is nearly
+ * every key for the life of a UI session could leak memory, and the state that matters is nearly
  * always on a page the user has just left.
  *
  * The holder saves itself into the enclosing [LocalSaveableStateRegistry], if there is one, so the
@@ -55,7 +55,7 @@ public fun rememberSaveableStateHolder(maxKeys: Int = 32): SaveableStateHolder {
         }
     }
 
-    // Save everything the holder keeps as one value in the enclosing registry, so a session that
+    // Save everything the holder keeps as one value in the enclosing registry, so a UI session that
     // hibernates on a page takes the other pages' saved state with it.
     if (parent != null) {
         DisposableEffect(parent, holder) {
@@ -101,9 +101,9 @@ private class DefaultSaveableStateHolder(private val maxKeys: Int) : SaveableSta
     /**
      * Returns everything worth keeping, or `null` if there's nothing.
      *
-     * It returns `null` instead of an empty object because a session with empty state isn't written
-     * to the store at all. A holder that always returned something would store every session that
-     * ever rendered a page.
+     * It returns `null` instead of an empty object because a UI session with empty state isn't
+     * written to the store at all. A holder that always returned something would store every UI
+     * session that ever rendered a page.
      */
     fun save(): JsonElement? {
         val all = LinkedHashMap<String, Map<String, JsonElement>>(stashes)

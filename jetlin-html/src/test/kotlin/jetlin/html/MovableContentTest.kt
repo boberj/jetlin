@@ -24,14 +24,14 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
 /**
- * Tests views that use `movableContentOf`, which could once stop a session for good.
+ * Tests views that use `movableContentOf`, which could once stop a UI session for good.
  *
  * The Recomposer publishes its state as a cached value, and two paths that involve movable content
  * leave that value at `PendingWork` after the work is done: composing movable content in the first
  * frame, and removing it. A host that waited for `Idle` waited until something unrelated happened.
- * In a live session, nothing unrelated has to happen, because the inbound loop handles one event at
- * a time, and the sender waits before every patch. So the page stopped responding. The first two
- * tests reproduce exactly those two paths. See `SessionActivity` for the mechanism and the fix.
+ * In a live UI session, nothing unrelated has to happen, because the inbound loop handles one event
+ * at a time, and the sender waits before every patch. So the page stopped responding. The first two
+ * tests reproduce exactly those two paths. See `UiSessionActivity` for the mechanism and the fix.
  *
  * Every wait runs under a timeout, so a regression fails with a message instead of hanging the
  * build.
@@ -72,8 +72,9 @@ class MovableContentTest {
                 it.dispatch(ClientMessage.Event(node = button, event = "click", seq = 1))
             }
 
-            // And the session is still sending. The sender waits before every message, so a stuck wait
-            // would stop this too, and a page that doesn't update is the symptom a user sees.
+            // And the UI session is still sending. The sender waits before every message, so a
+            // stuck wait would stop this too, and a page that doesn't update is the symptom a user
+            // sees.
             val patch = within("the patch for the removal") { it.messages.first() }
             val removal = assertIs<Op.Remove>(assertIs<ServerMessage.Patch>(patch).ops.single())
             assertEquals(1, removal.count)

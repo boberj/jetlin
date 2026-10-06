@@ -27,28 +27,28 @@ import kotlinx.coroutines.withTimeoutOrNull
  * that paces the work. This class provides all three. Compose doesn't need a screen to maintain a
  * tree of nodes, and in Jetlin that tree is a virtual DOM.
  *
- * Each host is one live session. All work runs on a single-threaded [dispatcher], so event handling,
- * recomposition, and patch recording never interleave. That rules out a class of races without any
- * locks, and it gives each session back-pressure for free.
+ * Each host is one live UI session. All work runs on a single-threaded [dispatcher], so event
+ * handling, recomposition, and patch recording never interleave. That rules out a class of races
+ * without any locks, and it gives each UI session back-pressure for free.
  *
- * ## Waiting for a session
+ * ## Waiting for a UI session
  *
  * Callers wait for one of two conditions, and the difference matters:
  *
  * - [awaitApplied] returns when every change already signaled has been recomposed and applied. A
  *   patch needs exactly this. The server calls it on every client event and before every outgoing
  *   message, so it waits for nothing else.
- * - [awaitIdle] returns when the session has settled: recomposition is applied, queued effects have
- *   run, and writes made outside a snapshot are visible. Tests that assert on the tree, the first
- *   render, and hibernation need this.
+ * - [awaitIdle] returns when the UI session has settled: recomposition is applied, queued effects
+ *   have run, and writes made outside a snapshot are visible. Tests that assert on the tree, the
+ *   first render, and hibernation need this.
  *
  * Neither method reads [Recomposer.currentState], because that value can't be trusted to reach
- * `Idle`; [SessionActivity] explains why. Both combine [Recomposer.hasPendingWork], which is computed
- * when read, with a count of the tasks still queued on the session's dispatcher.
+ * `Idle`; [UiSessionActivity] explains why. Both combine [Recomposer.hasPendingWork], which is
+ * computed when read, with a count of the tasks still queued on the UI session's dispatcher.
  *
  * @param applier the applier that receives the composition's tree changes.
  * @param framePolicy how often recomposition may run. See [FramePolicy].
- * @param dispatcher the session's dispatcher. It must run one task at a time. The host wraps it
+ * @param dispatcher the UI session's dispatcher. It must run one task at a time. The host wraps it
  *   twice, once for recomposition and once for effects, so it can count the two separately. Both
  *   wrappers queue onto the same dispatcher, so their tasks still never run concurrently.
  */
@@ -59,7 +59,7 @@ public class CompositionHost(
     dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
 ) : AutoCloseable {
 
-    private val activity = SessionActivity()
+    private val activity = UiSessionActivity()
     private val clock = framePolicy.toClock()
 
     /**
@@ -67,7 +67,7 @@ public class CompositionHost(
      * content, transactions, and confined reads. It deliberately leaves out [job].
      */
     private val context: CoroutineContext =
-        activity.track(dispatcher, SessionActivity.Lane.Recompose) + clock
+        activity.track(dispatcher, UiSessionActivity.Lane.Recompose) + clock
 
     /**
      * The context the [Recomposer] launches effects in. It runs on the same thread as [context] but
@@ -75,7 +75,7 @@ public class CompositionHost(
      * finish its work.
      */
     private val effectContext: CoroutineContext =
-        activity.track(dispatcher, SessionActivity.Lane.Effects) + clock
+        activity.track(dispatcher, UiSessionActivity.Lane.Effects) + clock
 
     private val job = Job()
     private val scope = CoroutineScope(context + job)
@@ -99,9 +99,9 @@ public class CompositionHost(
      * Whether this composition can still do work.
      *
      * This becomes `false` once a composable throws. The recomposer then stops for good, and the
-     * only thing left to do with the session is discard it. A throwing event handler is different:
-     * it leaves the composition healthy. The caller uses this property to tell whether one
-     * interaction failed or the whole session is gone.
+     * only thing left to do with the UI session is discard it. A throwing event handler is
+     * different: it leaves the composition healthy. The caller uses this property to tell whether
+     * one interaction failed or the whole UI session is gone.
      */
     public val isAlive: Boolean get() = failure == null && runnerJob?.isActive != false
 
@@ -120,7 +120,7 @@ public class CompositionHost(
                 // close() cancelled the loop. This is a normal shutdown.
             } catch (t: Throwable) {
                 // Record the failure instead of rethrowing it. The next wait then reports it to
-                // whoever drives the session, rather than the global uncaught-exception handler.
+                // whoever drives the UI session, rather than the global uncaught-exception handler.
                 failure = t
             }
         }
@@ -155,7 +155,7 @@ public class CompositionHost(
     }
 
     /**
-     * Runs [block] on the session's thread.
+     * Runs [block] on the UI session's thread.
      *
      * Use this for anything that touches mutable state the composition owns, such as draining the
      * patch buffer or reading the node tree. Code that skips it races the recomposer.
@@ -163,30 +163,31 @@ public class CompositionHost(
     public suspend fun <T> confined(block: () -> T): T = withContext(context) { block() }
 
     /**
-     * Suspends until every change already signaled to this session has been recomposed and applied.
+     * Suspends until every change already signaled to this UI session has been recomposed and
+     * applied.
      *
      * This is the cheap wait, and the server calls it on every client event and before every
      * outgoing message. It doesn't wait for effects. It also doesn't flush writes made outside a
-     * snapshot: those reach the session through [GlobalSnapshotManager] and produce their own patch.
-     * If the session is already quiet, this returns without dispatching or allocating.
+     * snapshot: those reach the UI session through [GlobalSnapshotManager] and produce their own
+     * patch. If the UI session is already quiet, this returns without dispatching or allocating.
      *
      * @throws Throwable the failure that killed the composition, if a composable threw.
      */
     public suspend fun awaitApplied() {
-        awaitUntil { activity.quietWhile(SessionActivity.Lane.Recompose) { !recomposer.hasPendingWork } }
+        awaitUntil { activity.quietWhile(UiSessionActivity.Lane.Recompose) { !recomposer.hasPendingWork } }
     }
 
     /**
-     * Suspends until the session has settled.
+     * Suspends until the UI session has settled.
      *
-     * A settled session has applied its recomposition, run the effects that were already queued,
+     * A settled UI session has applied its recomposition, run the effects that were already queued,
      * and made state written outside any snapshot visible. Use this when the tree must reflect
      * everything that has happened so far: in a test that asserts on what a user sees, for the first
      * render, and before hibernating. Timers don't count as work. An effect suspended in `delay()`
-     * isn't queued, so a ticking clock doesn't keep a session from settling.
+     * isn't queued, so a ticking clock doesn't keep a UI session from settling.
      *
      * An effect that never stops producing work, such as a loop that suspends without delaying or a
-     * collector on a stream that never pauses, keeps a session from ever settling.
+     * collector on a stream that never pauses, keeps a UI session from ever settling.
      *
      * @param effectsBudget how long to wait for effects after recomposition is applied. When the
      *   budget runs out, this returns with recomposition applied and effects still running. The
@@ -195,16 +196,16 @@ public class CompositionHost(
      * @throws Throwable the failure that killed the composition, if a composable threw.
      */
     public suspend fun awaitIdle(effectsBudget: Duration = Duration.INFINITE) {
-        // Writes made outside a snapshot, by a test or by a store that several sessions share, stay
-        // invisible to the recomposer until something publishes them. Publishing here, instead of
-        // waiting for GlobalSnapshotManager to do it, makes this wait deterministic.
+        // Writes made outside a snapshot, by a test or by a store that several UI sessions share,
+        // stay invisible to the recomposer until something publishes them. Publishing here, instead
+        // of waiting for GlobalSnapshotManager to do it, makes this wait deterministic.
         Snapshot.sendApplyNotifications()
         awaitApplied()
         withTimeoutOrNull(effectsBudget) {
             awaitUntil {
                 // Publish again on every check. An effect that just ran might have written state
-                // outside a snapshot, and the session hasn't settled until that recomposition has
-                // happened too. Publishing before the quiet check starts means any task it
+                // outside a snapshot, and the UI session hasn't settled until that recomposition
+                // has happened too. Publishing before the quiet check starts means any task it
                 // dispatches is already counted and can't spoil the check.
                 Snapshot.sendApplyNotifications()
                 activity.quietWhile(lane = null) { !recomposer.hasPendingWork }
@@ -214,15 +215,15 @@ public class CompositionHost(
     }
 
     /**
-     * Suspends until [ready] returns `true`, checking again only when a lane of the session's
+     * Suspends until [ready] returns `true`, checking again only when a lane of the UI session's
      * dispatcher drains.
      *
      * Both callers build [ready] by wrapping [Recomposer.hasPendingWork] in
-     * [SessionActivity.quietWhile]. That combination is sound because of two facts about the
+     * [UiSessionActivity.quietWhile]. That combination is sound because of two facts about the
      * Recomposer:
      *
      * - Work leaves the collections that `hasPendingWork` reads only inside a task running on the
-     *   session's dispatcher.
+     *   UI session's dispatcher.
      * - Work arriving from another thread, such as from a snapshot apply observer, is added to those
      *   collections before the task that processes it is dispatched.
      *

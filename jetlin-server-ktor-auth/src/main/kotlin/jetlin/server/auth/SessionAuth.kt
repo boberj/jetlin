@@ -44,7 +44,7 @@ import jetlin.html.AttributeKey
 import jetlin.html.LocalNavigator
 import jetlin.html.Principals
 import jetlin.server.JetlinConfig
-import jetlin.server.jetlinSessions
+import jetlin.server.uiSessions
 import jetlin.server.originAllowed
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -55,10 +55,10 @@ import kotlin.time.TimeSource
 /**
  * Signs the browser in and out from an event handler.
  *
- * A handler runs over the session's WebSocket, which can't set a cookie. So each call hands the
+ * A handler runs over the UI session's WebSocket, which can't set a cookie. So each call hands the
  * browser to an HTTP endpoint with a real page load. The endpoint sets or clears the cookie and
- * redirects to `next`. The page the user is on goes away, and the destination starts a new session
- * as whoever the browser is now.
+ * redirects to `next`. The page the user is on goes away, and the destination starts a new UI
+ * session as whoever the browser is now.
  *
  * Get one with [SessionAuth.rememberControls]. It's an interface so that tests of a sign-in page can
  * record the calls instead of performing them.
@@ -81,7 +81,7 @@ public interface SessionControls<S : Any> {
     /**
      * Signs the browser out, and then goes to [next].
      *
-     * Every live session of this browser ends, not only the one that called this, so another tab
+     * Every live UI session of this browser ends, not only the one that called this, so another tab
      * can't go on acting as the user who signed out. Those tabs reload as whoever the browser is now.
      */
     public fun signOut(next: String = "/")
@@ -92,7 +92,7 @@ public interface SessionControls<S : Any> {
  *
  * [authentication] creates it. It issues the one-time tickets that [SessionControls] hands to the
  * browser, and it's what the sign-in endpoint redeems them against. Tickets live in this process,
- * like live sessions do, so a ticket issued on one node can't be redeemed on another.
+ * like live UI sessions do, so a ticket issued on one node can't be redeemed on another.
  *
  * @param S the application's session type.
  */
@@ -105,7 +105,7 @@ public class SessionAuth<S : Any> internal constructor(
     private val random = SecureRandom()
 
     /**
-     * Returns the controls for the session that's composing this.
+     * Returns the controls for the UI session that's composing this.
      *
      * Call it in a composable, and call the controls from a handler:
      *
@@ -131,22 +131,22 @@ public class SessionAuth<S : Any> internal constructor(
     }
 
     /**
-     * Ends the live sessions of the browser that made [call], and returns how many there were.
+     * Ends the live UI sessions of the browser that made [call], and returns how many there were.
      *
-     * Call it from a sign-out route of your own, before clearing the session. Signing out through
-     * [SessionControls] does it for you.
+     * Call it from a sign-out route of your own, before clearing the sign-in session. Signing out
+     * through [SessionControls] does it for you.
      */
-    public fun endSessions(call: ApplicationCall): Int {
+    public fun endUiSessions(call: ApplicationCall): Int {
         val binding = bindingOf(call) ?: return 0
-        return call.application.jetlinSessions.endSessions(binding)
+        return call.application.uiSessions.endUiSessions(binding)
     }
 
     /**
-     * Returns what binds a Jetlin session to the browser that made [call]: a hash of the cookie's
+     * Returns what binds a UI session to the browser that made [call]: a hash of the cookie's
      * session ID, or `null` if the browser has no valid session.
      *
-     * It's a hash because hibernated sessions keep it in the session store, and the ID itself is a
-     * credential.
+     * It's a hash because hibernated UI sessions keep it in the UI session store, and the ID itself
+     * is a credential.
      */
     internal fun bindingOf(call: ApplicationCall): String? = call.sessionId(sessionType)?.let(::sha256)
 
@@ -171,11 +171,11 @@ public class SessionAuth<S : Any> internal constructor(
             return
         }
 
-        // End the old identity's sessions whichever way this goes. When Alice switches to Bob, a tab
-        // still showing Alice's data must not go on as Alice with Bob's cookie.
+        // End the old identity's UI sessions whichever way this goes. When Alice switches to Bob, a
+        // tab still showing Alice's data must not go on as Alice with Bob's cookie.
         val oldId = call.sessionId(sessionType)
         if (oldId != null) {
-            call.application.jetlinSessions.endSessions(sha256(oldId))
+            call.application.uiSessions.endUiSessions(sha256(oldId))
             call.sessions.clear(scheme.name, oldId)
         }
 
@@ -193,7 +193,7 @@ public class SessionAuth<S : Any> internal constructor(
 
     /** Stores [pending] under a new ticket, and returns the ticket. */
     private fun issue(pending: Pending<S>): String {
-        // Sweep on write, like the session store does. Only issuing grows the map.
+        // Sweep on write, like the UI session store does. Only issuing grows the map.
         tickets.entries.removeAll { it.value.expiresAt.hasPassedNow() }
         val bytes = ByteArray(32)
         random.nextBytes(bytes)
@@ -258,7 +258,7 @@ public class SessionAuth<S : Any> internal constructor(
  * to the other overload instead.
  *
  * Otherwise it does what the other overload does: it puts Jetlin's page renders and socket under
- * optional authentication, binds every Jetlin session token to the cookie, and registers
+ * optional authentication, binds every UI session token to the cookie, and registers
  * `POST /jetlin/auth` for [SessionControls].
  *
  * @param S the application's session type. Ktor stores it, so it must be `@Serializable`.
@@ -321,10 +321,11 @@ internal const val SESSION_COOKIE: String = "jetlin_session"
  * It does three things:
  *
  * - It puts Jetlin's page renders and socket under `authenticateWithOptional(scheme)`, and supplies
- *   `principalOrNull` as the session's principal. Authentication is optional because route guards
- *   decide who may see what. A browser whose session no longer validates, for example because its
- *   user was deleted, has the cookie cleared and is sent back to the same URL as nobody.
- * - It binds every Jetlin session token to the cookie's session ID, so a token that leaks from a page
+ *   `principalOrNull` as the UI session's principal. Authentication is optional because route
+ *   guards decide who may see what. A browser whose session no longer validates, for example
+ *   because its user was deleted, has the cookie cleared and is sent back to the same URL as
+ *   nobody.
+ * - It binds every UI session token to the cookie's session ID, so a token that leaks from a page
  *   is no use without the browser's cookie.
  * - It registers `POST /jetlin/auth`, which redeems the tickets that [SessionControls] issues.
  *
@@ -383,7 +384,7 @@ internal fun <S : Any, P : Any> JetlinConfig.authentication(
     principal(principal) { call ->
         with(checkNotNull(principalContext) { "Jetlin's routes were not built" }) { call.principalOrNull }
     }
-    bindSessions { call -> auth.bindingOf(call) }
+    bindUiSessions { call -> auth.bindingOf(call) }
     return auth
 }
 

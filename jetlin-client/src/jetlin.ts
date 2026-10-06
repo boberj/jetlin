@@ -196,7 +196,7 @@ function parseProps(element: Element): Record<string, unknown> {
 export interface JetlinOptions {
   /** The WebSocket URL. It defaults to `/jetlin` on the page's host. */
   url?: string;
-  /** The session token that the server rendered into the page. */
+  /** The UI session token that the server rendered into the page. */
   token: string;
   /** The element that holds the page's content. It defaults to the element with the ID `jetlin-root`. */
   container?: HTMLElement;
@@ -209,12 +209,12 @@ export interface JetlinOptions {
   adopt?: boolean;
 }
 
-/** Connects the page to its server session. The page's inline script calls this. */
+/** Connects the page to its server UI session. The page's inline script calls this. */
 export function connect(options: JetlinOptions): Jetlin {
   return new Jetlin(options);
 }
 
-/** One page's connection to its server session, and the DOM it manages. */
+/** One page's connection to its server UI session, and the DOM it manages. */
 class Jetlin {
   private readonly container: HTMLElement;
   private readonly url: string;
@@ -229,7 +229,7 @@ class Jetlin {
    * can adopt it, and after a disconnect the server stops recording, so its tree changes unseen.
    */
   private pendingAdopt = false;
-  /** Whether the server said the session can't recover. It stops the reconnect loop. */
+  /** Whether the server said the UI session can't recover. It stops the reconnect loop. */
   private fatal = false;
 
   /** The DOM node for each server node ID. */
@@ -310,8 +310,8 @@ class Jetlin {
     socket.onopen = () => {
       this.reconnectAttempt = 0;
       document.body.classList.remove("jl-disconnected");
-      // The address bar is authoritative. If the server has to wake the session from storage, the
-      // user might have pressed the back button while this socket was down.
+      // The address bar is authoritative. If the server has to wake the UI session from storage,
+      // the user might have pressed the back button while this socket was down.
       socket.send(
         JSON.stringify({
           t: "hello",
@@ -365,7 +365,7 @@ class Jetlin {
     const handled = !window.dispatchEvent(event);
 
     if (fatal) {
-      // The session is gone for good: it hibernated past its expiry, never existed, or its
+      // The UI session is gone for good: it hibernated past its expiry, never existed, or its
       // composition stopped. Nothing on this page can change again.
       this.fatal = true;
       this.socket?.close();
@@ -375,7 +375,7 @@ class Jetlin {
         document.body.classList.add("jl-dead");
         return;
       }
-      // Otherwise, start a new session instead of leaving a page that looks live but isn't.
+      // Otherwise, start a new UI session instead of leaving a page that looks live but isn't.
       this.reload();
       return;
     }
@@ -384,14 +384,14 @@ class Jetlin {
   }
 
   /**
-   * Reloads the page, which starts a new session. A page that cancelled a fatal error can offer
+   * Reloads the page, which starts a new UI session. A page that cancelled a fatal error can offer
    * this.
    */
   public reload(): void {
     location.reload();
   }
 
-  /** Reconnects after an exponential backoff of up to 10 seconds, unless the session is gone. */
+  /** Reconnects after an exponential backoff of up to 10 seconds, unless the UI session is gone. */
   private scheduleReconnect(): void {
     if (this.fatal) return;
     const delay = Math.min(1000 * 2 ** this.reconnectAttempt, 10000);
@@ -429,7 +429,7 @@ class Jetlin {
   }
 
   /**
-   * Leaves the session with a real page load, so the server can answer with cookies.
+   * Leaves the UI session with a real page load, so the server can answer with cookies.
    *
    * A `POST` goes through a form instead of `fetch`, because a form submission is a top-level
    * navigation: the browser applies the response's `Set-Cookie` and follows its redirect like any
@@ -718,7 +718,7 @@ class Jetlin {
     const factory = components.get(name);
     if (!factory) {
       // Leave the element empty instead of failing. A missing registration is a build problem in one
-      // corner of the page, and ending the whole session over it helps nobody.
+      // corner of the page, and ending the whole UI session over it helps nobody.
       console.warn(`jetlin: no client component registered as "${name}"`);
       return;
     }

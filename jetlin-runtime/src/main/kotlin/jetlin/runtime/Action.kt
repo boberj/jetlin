@@ -50,8 +50,9 @@ public sealed interface Run<out R> {
  * (save.state as? Run.Failed)?.let { P({ classes("error") }) { Text(it.cause.message.orEmpty()) } }
  * ```
  *
- * The work runs in the composition's coroutine scope and is cancelled when the session ends. Work
- * that must complete even if nobody is watching should run on a scope owned by the application.
+ * The work runs in the composition's coroutine scope and is cancelled when the UI session ends.
+ * Work that must complete even if nobody is watching should run on a scope owned by the
+ * application.
  */
 public class Action<R> internal constructor(
     private val scope: CoroutineScope,
@@ -70,9 +71,9 @@ public class Action<R> internal constructor(
     /**
      * Starts the work, unless it is already running.
      *
-     * This method never throws. An exception here would end the session, and a failed action should
-     * produce only an error message. Calls made while the state is [Run.Running] are ignored, not
-     * queued, so clicking a busy button twice doesn't send a second request.
+     * This method never throws. An exception here would end the UI session, and a failed action
+     * should produce only an error message. Calls made while the state is [Run.Running] are
+     * ignored, not queued, so clicking a busy button twice doesn't send a second request.
      *
      * Starting a new attempt replaces the previous outcome, so a retry clears the old error.
      */

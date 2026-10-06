@@ -64,8 +64,8 @@ fun NewIssueButton(request: CreateRequest) {
 // ---------------------------------------------------------------------------------------- filters
 
 /**
- * One chip per property, each a multi-select. Held in the session's [UiState], so the list and the
- * board narrow the same way and switching between them keeps the filter.
+ * One chip per property, each a multi-select. Held in the UI session's [UiState], so the list and
+ * the board narrow the same way and switching between them keeps the filter.
  */
 @Composable
 fun FilterBar() {

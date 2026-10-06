@@ -68,7 +68,7 @@ public fun <T> rememberField(initial: T, validate: (T) -> String? = { null }): F
     )
 
 /**
- * A form field whose value survives the session hibernating.
+ * A form field whose value survives the UI session hibernating.
  *
  * Use it for input that's worth more than it costs to store, such as a half-written message or a
  * long form partly filled in, so a dropped connection or a deployment doesn't throw away what the

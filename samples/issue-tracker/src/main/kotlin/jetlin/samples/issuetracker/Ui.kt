@@ -29,13 +29,14 @@ data class Filters(
 }
 
 /**
- * One session's view state: which overlay is open, how the lists are filtered.
+ * One UI session's view state: which overlay is open, how the lists are filtered.
  *
  * Remembered in the app container rather than in a view, so it outlives navigation — a filter set on
- * the list still applies on the board — and deliberately not saved, so a hibernated session wakes
- * with menus closed rather than with a popover hanging open from yesterday.
+ * the list still applies on the board — and deliberately not saved, so a hibernated UI session
+ * wakes with menus closed rather than with a popover hanging open from yesterday.
  *
- * None of this touches the shared [Workspace]. Two sessions filtering differently is the normal case.
+ * None of this touches the shared [Workspace]. Two UI sessions filtering differently is the normal
+ * case.
  */
 class UiState {
     /** The one popover that is open, by an id its trigger chose; opening another closes this one. */
@@ -83,8 +84,8 @@ class CreateRequest(
 )
 
 /**
- * The session's [UiState]. Static, because the holder itself never changes: its fields are state,
- * and reading one of those is what subscribes a composable.
+ * The UI session's [UiState]. Static, because the holder itself never changes: its fields are
+ * state, and reading one of those is what subscribes a composable.
  *
  * The default is a fresh holder, so a view composed alone in a test still works.
  */

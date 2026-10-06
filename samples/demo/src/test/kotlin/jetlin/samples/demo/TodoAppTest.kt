@@ -143,7 +143,7 @@ class TodoAppTest {
     }
 
     @Test
-    fun `another session's edit shows up without any interaction here`(): Unit = runViewTest {
+    fun `another UI session's edit shows up without any interaction here`(): Unit = runViewTest {
         setContent { TodoListPage() }
 
         // The store is shared, so this stands in for a second browser window or a background job.

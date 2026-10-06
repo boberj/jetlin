@@ -50,8 +50,8 @@ public class RoutesBuilder internal constructor() {
     }
 
     /**
-     * Wraps every view in a container that's composed once for the session, as `JetlinConfig.app`
-     * does.
+     * Wraps every view in a container that's composed once for the UI session, as
+     * `JetlinConfig.app` does.
      *
      * You need it to test anything that outlives a navigation, because a `remember` in a view doesn't.
      */
@@ -61,13 +61,13 @@ public class RoutesBuilder internal constructor() {
 }
 
 /**
- * Composes whichever route from [block] matches the session's location, and follows the session as
- * it navigates.
+ * Composes whichever route from [block] matches the UI session's location, and follows the UI
+ * session as it navigates.
  *
  * The alternative, [ViewTest.setContent], keeps one view in place. That's right for testing a view on
- * its own, but wrong as soon as anything calls `LocalNavigator.push`. The session moves, the view
- * stays composed at a location it wasn't written for, and a page that reads a path parameter that no
- * longer exists fails inside the composition instead of in an assertion.
+ * its own, but wrong as soon as anything calls `LocalNavigator.push`. The UI session moves, the
+ * view stays composed at a location it wasn't written for, and a page that reads a path parameter
+ * that no longer exists fails inside the composition instead of in an assertion.
  *
  * ```kotlin
  * runViewTest(url = "/todo/1") {

@@ -23,12 +23,12 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Tests binding session tokens to the browser that the page was rendered for.
+ * Tests binding UI session tokens to the browser that the page was rendered for.
  *
  * The browser is identified here by a header, which stands in for the hash of a sign-in cookie's
  * session ID that `jetlin-server-ktor-auth` supplies. What's under test is the registry's side: a
- * token is useless without the browser it belongs to, and ending a browser's sessions reaches every
- * one of them.
+ * token is useless without the browser it belongs to, and ending a browser's UI sessions reaches
+ * every one of them.
  */
 class BindingTest {
 
@@ -46,7 +46,7 @@ class BindingTest {
             assertEquals(ServerMessage.Error("Unknown or already-attached session", fatal = true), error)
         }
 
-        // The refusal didn't use the session up. Its own browser still gets it.
+        // The refusal didn't use the UI session up. Its own browser still gets it.
         client.webSocket("/jetlin", request = { header(BROWSER, "alice") }) {
             hello(token)
             awaitMessage<ServerMessage.Reset>()
@@ -68,10 +68,10 @@ class BindingTest {
 
     @Test
     fun `a hibernated session wakes only for its own browser`(): Unit = testApplication {
-        val store = InMemorySessionStore()
+        val store = InMemoryUiSessionStore()
         application {
             boundApp {
-                sessionStore = store
+                uiSessionStore = store
                 disconnectGrace = grace
             }
         }
@@ -101,10 +101,10 @@ class BindingTest {
     @Test
     fun `ending a browser's sessions tells every attached socket and spares other browsers`(): Unit =
         testApplication {
-            lateinit var registry: SessionRegistry
+            lateinit var registry: UiSessionRegistry
             application {
                 boundApp()
-                registry = jetlinSessions
+                registry = uiSessions
             }
             val client = createClient { install(WebSockets) }
             val first = client.tokenFor("alice")
@@ -120,17 +120,18 @@ class BindingTest {
                     awaitMessage<ServerMessage.Reset>()
 
                     // The second tab is still between render and connect. It's ended too.
-                    assertEquals(2, registry.endSessions("alice"))
+                    assertEquals(2, registry.endUiSessions("alice"))
                     assertEquals(ServerMessage.Error("This session has ended.", fatal = true), awaitMessage())
                 }
 
-                // The ended session is gone, so the tab that never connected can't claim it later.
+                // The ended UI session is gone, so the tab that never connected can't claim it
+                // later.
                 client.webSocket("/jetlin", request = { header(BROWSER, "alice") }) {
                     hello(second)
                     assertTrue(awaitMessage<ServerMessage.Error>().fatal)
                 }
 
-                // Bob's session is untouched and still answers.
+                // Bob's UI session is untouched and still answers.
                 send(ClientMessage.Event(node = 3, event = "click", seq = 1))
                 awaitMessage<ServerMessage.Load>()
             }
@@ -157,10 +158,13 @@ class BindingTest {
 /** The header that stands in for the browser's identity. */
 private const val BROWSER = "X-Browser"
 
-/** An application that binds sessions to [BROWSER], with a saved draft and a button that loads a page. */
+/**
+ * An application that binds UI sessions to [BROWSER], with a saved draft and a button that loads a
+ * page.
+ */
 private fun Application.boundApp(configure: JetlinConfig.() -> Unit = {}) {
     jetlin {
-        bindSessions { call -> call.request.headers[BROWSER] }
+        bindUiSessions { call -> call.request.headers[BROWSER] }
         configure()
         view("/") {
             val draft = rememberSavedField("saved draft", key = "draft")
@@ -173,7 +177,7 @@ private fun Application.boundApp(configure: JetlinConfig.() -> Unit = {}) {
     }
 }
 
-/** Renders the page as [browser], and returns the page's session token. */
+/** Renders the page as [browser], and returns the page's UI session token. */
 private suspend fun HttpClient.tokenFor(browser: String): String {
     val html = get("/") { header(BROWSER, browser) }.bodyAsText()
     return Regex("""token: "([^"]+)"""").find(html)?.groupValues?.get(1)

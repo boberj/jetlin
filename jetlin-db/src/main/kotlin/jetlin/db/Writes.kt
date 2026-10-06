@@ -53,7 +53,7 @@ internal class WriteSet {
  *
  * A thread-local works here because [Db.transact] takes a block that can't suspend. The write set
  * is set and cleared within one uninterrupted call, so it can't move to another thread with a
- * coroutine or leak into another session. A session's dispatcher runs one task at a time but
+ * coroutine or leak into another UI session. A UI session's dispatcher runs one task at a time but
  * doesn't always use the same thread, and this relies only on the first of those.
  */
 internal object Transactions {

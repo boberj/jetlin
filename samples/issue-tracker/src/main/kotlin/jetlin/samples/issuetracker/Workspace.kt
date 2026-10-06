@@ -9,8 +9,8 @@ import java.time.LocalDate
  * A shared in-memory workspace standing in for a database.
  *
  * Process-wide on purpose, as in the demo: open the issue tracker in two windows and a card dragged in one
- * moves in the other. Nothing broadcasts anything — every session reads the same state objects, so
- * every session that shows a changed issue recomposes.
+ * moves in the other. Nothing broadcasts anything — every UI session reads the same state objects,
+ * so every UI session that shows a changed issue recomposes.
  *
  * There is no sign-in, so every visitor is [me]. That keeps "My issues" meaningful without pretending
  * to be an authentication example.
@@ -150,8 +150,8 @@ object Workspace {
     }
 
     /**
-     * Returns the workspace to its seeded state. Every open session sees it at once, and every test
-     * starts here.
+     * Returns the workspace to its seeded state. Every open UI session sees it at once, and every
+     * test starts here.
      */
     @Synchronized
     fun reset() {

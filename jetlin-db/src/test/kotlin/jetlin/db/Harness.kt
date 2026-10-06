@@ -41,16 +41,16 @@ internal class Harness(private val content: @Composable () -> Unit) : AutoClosea
 
     suspend fun drain(): List<Op> = host.confined { owner.drainOps() }
 
-    /** Returns the rendered HTML, for checking what the session shows now. */
+    /** Returns the rendered HTML, for checking what the UI session shows now. */
     suspend fun html(): String = host.confined { renderToHtml(owner) }
 
     /**
-     * Writes state from outside this composition, as another session or a background job would,
-     * then waits for the session to settle.
+     * Writes state from outside this composition, as another UI session or a background job would,
+     * then waits for the UI session to settle.
      *
      * The write uses one mutable snapshot, so the recomposer sees one apply however many fields
-     * change. Nothing explicitly subscribes this session to the records: `awaitIdle` publishes the
-     * apply, and the session recomposes because it read them.
+     * change. Nothing explicitly subscribes this UI session to the records: `awaitIdle` publishes
+     * the apply, and the UI session recomposes because it read them.
      */
     suspend fun write(block: () -> Unit) {
         Snapshot.withMutableSnapshot(block)
@@ -58,7 +58,7 @@ internal class Harness(private val content: @Composable () -> Unit) : AutoClosea
     }
 
     /**
-     * Waits until a change made elsewhere, such as another session's transaction or a background
+     * Waits until a change made elsewhere, such as another UI session's transaction or a background
      * job, has been applied to this composition.
      */
     suspend fun settle(): Unit = host.awaitIdle()

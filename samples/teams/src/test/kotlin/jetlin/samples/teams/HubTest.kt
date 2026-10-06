@@ -159,7 +159,8 @@ class HubTest {
                     onNode(hasTestTag("status-error"))
                         .assertText("a status has to fit in $STATUS_LIMIT characters")
                 }
-                // Nothing was saved, and the session still works. The only effect is an error message.
+                // Nothing was saved, and the UI session still works. The only effect is an error
+                // message.
                 onNode(hasTestTag("status")).assertText("no status · 0 updates")
                 onNode(hasTestTag("save-status")).assertExists()
             }
@@ -186,13 +187,13 @@ private suspend fun ViewTest.signedInToHub(db: Db, hub: Hub, email: String) {
  */
 private class HubFixture(val data: HubData) {
     /**
-     * Retries [assertion] until it passes, for work that the session started and `awaitIdle` can't
-     * see.
+     * Retries [assertion] until it passes, for work that the UI session started and `awaitIdle`
+     * can't see.
      *
-     * A command waits on a network socket instead of queuing work on the session's dispatcher, so a
-     * session with a request in progress really is idle, and can handle other events. A test that
-     * needs the outcome has to wait for the outcome itself. This is the only real-time wait in these
-     * tests, so it has a time limit, and it reports the last failure it saw.
+     * A command waits on a network socket instead of queuing work on the UI session's dispatcher,
+     * so a UI session with a request in progress really is idle, and can handle other events. A
+     * test that needs the outcome has to wait for the outcome itself. This is the only real-time
+     * wait in these tests, so it has a time limit, and it reports the last failure it saw.
      */
     suspend fun ViewTest.eventually(assertion: suspend () -> Unit) {
         var last: AssertionError? = null

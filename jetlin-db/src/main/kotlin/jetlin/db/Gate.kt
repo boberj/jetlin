@@ -235,8 +235,8 @@ public object Gate {
  * checked.
  *
  * ```kotlin
- * val auth = session<AuthSession, User>("auth") {
- *     validate { session -> db.authenticate(User::class) { user -> user.email == session.email } }
+ * val auth = authentication(Principals) { session: AuthSession ->
+ *     db.authenticate(User::class) { user -> user.email == session.email }
  * }
  * ```
  *
@@ -347,8 +347,8 @@ internal class Gated<T : Record, P : Principal>(
  *
  * It's a thread-local instead of a parameter because its only user, the leak detector, runs inside
  * field reads, where there's no signature to pass it through. A thread-local is safe here for the
- * same reason the transaction's write set is: each session runs on a dispatcher that executes one
- * task at a time, so the value is set and cleared within one task.
+ * same reason the transaction's write set is: each UI session runs on a dispatcher that executes
+ * one task at a time, so the value is set and cleared within one task.
  *
  * Authorization doesn't depend on it. Access checks take the principal as an explicit argument. This
  * value only lets [LeakDetector] find leaked references.

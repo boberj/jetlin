@@ -16,11 +16,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Tests what a session costs when nobody is reading it.
+ * Tests what a UI session costs when nobody is reading it.
  *
- * A composition outlives its socket, which is what lets a reconnecting user find their session as
- * they left it. So a session with a running timer keeps producing updates whether or not anyone is
- * listening. These tests check that those updates can't pile up without limit.
+ * A composition outlives its socket, which is what lets a reconnecting user find their UI session
+ * as they left it. So a UI session with a running timer keeps producing updates whether or not
+ * anyone is listening. These tests check that those updates can't pile up without limit.
  */
 class BackPressureTest {
 
