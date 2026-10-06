@@ -350,6 +350,20 @@ a `CookieId` transport: the cookie holds only an opaque ID, and the session stay
 Signing out is the same flow. It clears the session and ends every live session of the browser, so
 another tab can't go on as the user who left.
 
+Applications usually set this up with one call, `authentication(Principals) { session -> … }`. It
+builds the scheme with a `CookieId` transport over in-memory storage by default. The cookie is always
+named `jetlin_session`, and it's `Secure`, `HttpOnly`, `Path=/`, and `SameSite=Lax`. Browsers treat
+`http://localhost` as a secure context, so `Secure` doesn't get in the way of local development. Any
+other plain-HTTP host has to turn it off through `configureCookie`. Lax rather than Strict means that
+following a link into the application arrives signed in. Cross-site form posts don't carry the
+cookie, and `/jetlin/auth` checks the origin anyway. The call installs Ktor's `Sessions` plugin itself, on
+the routing root, just as `Application.install(scheme)` does, so forgetting the install step can't
+leave sign-in broken at runtime. Ktor's typed session API is `@ExperimentalKtorApi`. Jetlin opts in
+inside the module rather than passing the annotation on to every application. An application that
+needs its own `Sessions` configuration builds the scheme, installs it, and passes it to
+`authentication(scheme, …)`. That overload keeps the experimental marker, because its parameter is
+Ktor's type.
+
 Jetlin's page renders and socket are registered under `authenticateWithOptional(scheme)`.
 Authentication is optional because route guards decide who may see what, and they redirect to the
 sign-in page with the original URL in `next`. A cookie whose session no longer validates, for example

@@ -855,25 +855,20 @@ the field should sometimes be empty.
 
 ## 3. Getting a principal, and protecting routes
 
-`authentication(scheme, principal = PrincipalKey)`, from `jetlin-server-ktor-auth`, adds the
-principal to a session from a Ktor session scheme. The scheme's `validate` finds the user with
+`authentication(Principals) { session -> … }`, from `jetlin-server-ktor-auth`, signs users in with a
+session cookie and adds the principal to each Jetlin session. Its `validate` lambda finds the user with
 `authenticate`, the one unchecked lookup, because there's no principal yet to check it against. The
 principal is looked up for the initial HTTP request, and again when a WebSocket wakes a hibernated
 session, so it's recomputed from the new connection instead of restored from a snapshot that might be
 minutes old.
 
 ```kotlin
-val PrincipalKey = AttributeKey<User?>("principal")
-val Principals = Principals(PrincipalKey, signIn = "/login")
-
-val sessionAuth = session<AppSession, User>("app") {
-    transport = SessionTransportType.CookieId(storage) { cookie.path = "/"; cookie.httpOnly = true }
-    validate { session -> db.authenticate(User::class) { it.email == session.email } }
-}
-install(sessionAuth)
+val Principals = Principals<User>(signIn = "/login")
 
 jetlin {
-    val auth = authentication(sessionAuth, principal = PrincipalKey)
+    val auth = authentication(Principals) { session: AppSession ->
+        db.authenticate(User::class) { it.email == session.email }
+    }
 
     view("/login", title = "Sign in") { SignInPage(auth.rememberControls()) }
     view("/", title = "Todos", requires = Principals.signedIn) { WithPrincipal { TodoListPage(db) } }

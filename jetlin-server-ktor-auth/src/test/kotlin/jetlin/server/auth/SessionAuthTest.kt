@@ -2,6 +2,7 @@ package jetlin.server.auth
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.cookies.HttpCookies
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.cookies.cookies
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
@@ -13,10 +14,15 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.parameters
+import io.ktor.http.parseServerSetCookieHeader
 import io.ktor.server.auth.SessionTransportType
 import io.ktor.server.auth.install
 import io.ktor.server.auth.session
+import io.ktor.server.routing.RoutingContext
+import io.ktor.server.sessions.CookieConfiguration
+import io.ktor.server.sessions.SameSite
 import io.ktor.server.sessions.SessionStorageMemory
+import io.ktor.server.sessions.sameSite
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.ktor.utils.io.ExperimentalKtorApi
@@ -24,7 +30,6 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.WebSocketSession
 import io.ktor.websocket.readText
 import java.util.concurrent.ConcurrentHashMap
-import jetlin.html.AttributeKey
 import jetlin.html.Button
 import jetlin.html.Div
 import jetlin.html.LocalRequest
@@ -52,8 +57,11 @@ import kotlinx.serialization.Serializable
  * Each [HttpClient] with its own cookie jar is one browser. The flow under test is the one a user
  * goes through: a handler asks to sign in, the socket receives a page load, the browser posts the
  * ticket, and the response sets the cookie that every later request authenticates with.
+ *
+ * Most tests sign in through the one-call `authentication(Principals) { … }`, which is what
+ * applications use. The tests marked as using a scheme go through a Ktor scheme that the application
+ * built and installed itself.
  */
-@OptIn(ExperimentalKtorApi::class)
 class SessionAuthTest {
 
     @Test
@@ -137,7 +145,7 @@ class SessionAuthTest {
         alice.signIn("alice")
         val token = alice.tokenOf("/")
 
-        browser().webSocket("/jetlin") {
+        browser().webSocket(SOCKET) {
             hello(token)
             assertTrue(awaitMessage<ServerMessage.Error>().fatal, "another browser must not get alice's session")
         }
@@ -150,7 +158,7 @@ class SessionAuthTest {
         val first = browser.tokenOf("/")
         val second = browser.tokenOf("/")
 
-        browser.webSocket("/jetlin") {
+        browser.webSocket(SOCKET) {
             hello(second)
             awaitMessage<ServerMessage.Reset>()
 
@@ -177,6 +185,49 @@ class SessionAuthTest {
     }
 
     @Test
+    fun `the cookie is Secure, HttpOnly, site-wide and SameSite=Lax by default`(): Unit = authTest {
+        val cookie = assertNotNull(browser().signIn("alice").setCookie(COOKIE))
+        assertTrue(cookie.secure, "a session cookie must not travel over plain HTTP")
+        assertTrue(cookie.httpOnly, "a session cookie must be out of reach of scripts")
+        assertEquals("/", cookie.path)
+        assertEquals("Lax", cookie.extensions["SameSite"])
+    }
+
+    @Test
+    fun `configureCookie changes the cookie after the defaults`(): Unit =
+        authTest(configureCookie = { secure = false; sameSite = SameSite.Strict }) {
+            val cookie = assertNotNull(browser().signIn("alice").setCookie(COOKIE))
+            assertTrue(!cookie.secure)
+            assertEquals("Strict", cookie.extensions["SameSite"])
+        }
+
+    @Test
+    fun `with a scheme, signing in sets a session cookie and goes to next`(): Unit = authTest(withScheme = true) {
+        val browser = browser()
+        val redeemed = browser.signIn("alice", next = "/")
+
+        assertEquals(HttpStatusCode.SeeOther, redeemed.status, redeemed.bodyAsText())
+        assertEquals("/", redeemed.headers[HttpHeaders.Location])
+        assertTrue(browser.get("/").bodyAsText().contains("Signed in as alice"))
+    }
+
+    @Test
+    fun `with a scheme, signing out in one tab ends the others`(): Unit = authTest(withScheme = true) {
+        val browser = browser()
+        browser.signIn("alice")
+        val first = browser.tokenOf("/")
+        val second = browser.tokenOf("/")
+
+        browser.webSocket(SOCKET) {
+            hello(second)
+            awaitMessage<ServerMessage.Reset>()
+            browser.redeem(browser.ticketFrom(first, button = "sign-out"))
+            assertEquals(ServerMessage.Error("This session has ended.", fatal = true), awaitMessage())
+        }
+        assertEquals(HttpStatusCode.Found, browser.get("/").status, "the browser is signed out")
+    }
+
+    @Test
     fun `local paths pass and everything else becomes the root`() {
         assertEquals("/todos?filter=open", localPath("/todos?filter=open"))
         assertEquals("/", localPath("https://evil.example"))
@@ -191,19 +242,37 @@ class SessionAuthTest {
         mapOf("alice" to User("alice"), "bob" to User("bob"), "carol" to User("carol")),
     )
 
-    private fun authTest(block: suspend ApplicationTestBuilder.() -> Unit): Unit = testApplication {
+    /**
+     * Runs [block] against an application that signs in with the one-call `authentication`, or, with
+     * [withScheme], with a Ktor scheme that the application builds and installs itself.
+     */
+    @OptIn(ExperimentalKtorApi::class)
+    private fun authTest(
+        withScheme: Boolean = false,
+        configureCookie: CookieConfiguration.() -> Unit = {},
+        block: suspend ApplicationTestBuilder.() -> Unit,
+    ): Unit = testApplication {
         application {
-            val sessionAuth = session<TestSession, User>(COOKIE) {
-                transport = SessionTransportType.CookieId(SessionStorageMemory()) {
-                    cookie.path = "/"
-                    cookie.httpOnly = true
-                }
-                validate { session -> users[session.name] }
+            val scheme = if (withScheme) {
+                session<TestSession, User>(COOKIE) {
+                    transport = SessionTransportType.CookieId(SessionStorageMemory()) {
+                        cookie.secure = true
+                        cookie.sameSite = SameSite.Lax
+                        cookie.configureCookie()
+                    }
+                    validate { session -> users[session.name] }
+                }.also { install(it) }
+            } else {
+                null
             }
-            install(sessionAuth)
 
             jetlin {
-                val auth = authentication(sessionAuth, principal = PrincipalKey)
+                val auth = if (scheme != null) {
+                    authentication(scheme, Principals)
+                } else {
+                    val validate: suspend RoutingContext.(TestSession) -> User? = { session -> users[session.name] }
+                    authentication(Principals, configureCookie = configureCookie, validate = validate)
+                }
                 view("/login") {
                     val controls = auth.rememberControls()
                     val next = queryParam("next") ?: "/"
@@ -230,10 +299,16 @@ class SessionAuthTest {
         block()
     }
 
-    /** Returns a new browser: a client with its own cookie jar that doesn't follow redirects. */
+    /**
+     * Returns a new browser: a client with its own cookie jar that doesn't follow redirects.
+     *
+     * It talks HTTPS, because the session cookie is `Secure`, and a cookie jar doesn't send a
+     * `Secure` cookie over plain HTTP.
+     */
     private fun ApplicationTestBuilder.browser(): HttpClient = createClient {
         install(HttpCookies)
         install(WebSockets)
+        defaultRequest { url("https://localhost/") }
         followRedirects = false
     }
 
@@ -248,7 +323,7 @@ class SessionAuthTest {
     /** Clicks [button] in the session [token], and returns the ticket that the page load carries. */
     private suspend fun HttpClient.ticketFrom(token: String, button: String): String {
         var ticket: String? = null
-        webSocket("/jetlin") {
+        webSocket(SOCKET) {
             hello(token)
             val reset = awaitMessage<ServerMessage.Reset>()
             send(ClientMessage.Event(node = reset.nodeNamed(button), event = "click", seq = 1))
@@ -262,7 +337,7 @@ class SessionAuthTest {
     /** Posts [ticket] as the browser's hidden form would. */
     private suspend fun HttpClient.redeem(
         ticket: String,
-        origin: String = "http://localhost",
+        origin: String = "https://localhost",
         fetchSite: String = "same-origin",
     ): HttpResponse = submitForm("/jetlin/auth", parameters { append("ticket", ticket) }) {
         // The test engine sends no Host header, which a browser always does.
@@ -278,7 +353,11 @@ class SessionAuthTest {
             ?: error("no session token in $url: $html")
     }
 
-    private suspend fun HttpClient.sessionCookie() = cookies("http://localhost/").firstOrNull { it.name == COOKIE }
+    /** Returns the cookie named [name] that this response sets, with all its attributes. */
+    private fun HttpResponse.setCookie(name: String) =
+        headers.getAll(HttpHeaders.SetCookie).orEmpty().map(::parseServerSetCookieHeader).firstOrNull { it.name == name }
+
+    private suspend fun HttpClient.sessionCookie() = cookies("https://localhost/").firstOrNull { it.name == COOKIE }
 }
 
 @Serializable
@@ -286,11 +365,13 @@ private data class TestSession(val name: String)
 
 private data class User(val name: String)
 
-private const val COOKIE = "test_session"
+/** Jetlin's socket, over TLS so that the cookie jar sends the `Secure` session cookie. */
+private const val SOCKET = "wss://localhost/jetlin"
 
-private val PrincipalKey = AttributeKey<User?>("user")
+/** The cookie's name, which applications can't change. */
+private const val COOKIE = "jetlin_session"
 
-private val Principals = Principals(PrincipalKey, signIn = "/login")
+private val Principals = Principals<User>(signIn = "/login")
 
 /** Returns the ID of the button whose `name` attribute is [name]. */
 private fun ServerMessage.Reset.nodeNamed(name: String): NodeId {

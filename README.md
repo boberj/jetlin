@@ -330,21 +330,17 @@ interval, and it stops when the last of them leaves. [`docs/architecture.md`](do
 
 ## Sign users in
 
-`jetlin-server-ktor-auth` connects a Ktor typed session scheme to Jetlin. The cookie holds only an
-opaque session ID, and the session stays on the server:
+`jetlin-server-ktor-auth` signs users in with a cookie that holds only an opaque session ID. The
+session stays on the server:
 
 ```kotlin
-val sessionAuth = session<AppSession, User>("app") {
-    transport = SessionTransportType.CookieId(SessionStorageMemory()) {
-        cookie.path = "/"
-        cookie.httpOnly = true
-    }
-    validate { session -> users.find(session.userId) }
-}
-install(sessionAuth)
+@Serializable
+data class AppSession(val userId: String)
+
+val Principals = Principals<User>(signIn = "/login")
 
 jetlin {
-    val auth = authentication(sessionAuth, principal = PrincipalKey)
+    val auth = authentication(Principals) { session: AppSession -> users.find(session.userId) }
     view("/login") { SignInPage(auth.rememberControls()) }
     view("/", requires = Principals.signedIn) { HomePage() }
 }
@@ -360,9 +356,15 @@ fun SignInPage(session: SessionControls<AppSession>) {
 Handlers run over the WebSocket, which can't set a cookie. So `signIn` and `signOut` hand the browser
 a one-time ticket, and the browser posts it to an HTTP endpoint that sets the cookie with a new session
 ID and redirects to `next`. Signing out ends the browser's other tabs as well. Every session token is
-bound to the cookie, so a token that leaks from a page is no use in another browser. The API builds on
-Ktor's `@ExperimentalKtorApi` typed authentication, so it can change with Ktor.
-[`docs/architecture.md`](docs/architecture.md) §7 describes the flow and its defenses.
+bound to the cookie, so a token that leaks from a page is no use in another browser.
+
+The cookie is named `jetlin_session`, and it's `Secure`, `HttpOnly`, and `SameSite=Lax`. Browsers
+treat `http://localhost` as secure, so local development over plain HTTP still works. Sessions are
+kept in memory. Pass `storage` to keep them across restarts. This builds on
+Ktor's experimental typed session authentication. Jetlin opts in for you, so a Ktor upgrade can change
+it. An application that needs more control can build the Ktor scheme itself and pass it to
+`authentication(scheme, Principals)`. [`docs/architecture.md`](docs/architecture.md) §7 describes the
+flow and its defenses.
 
 ## Run the tests
 

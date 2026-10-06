@@ -56,25 +56,35 @@ public infix fun Guard.and(other: Guard): Guard = Guard { request ->
 /**
  * Creates guards for the application's own principal type.
  *
- * Jetlin has no built-in authentication. The application provides the attribute key that holds its
- * principal, and gets typed guards in return:
+ * Jetlin has no built-in authentication. The application names its principal type, and gets typed
+ * guards in return:
  *
  * ```kotlin
- * val PrincipalKey = AttributeKey<User?>("principal")
- * val Principals = Principals(PrincipalKey, signIn = "/login")
+ * val Principals = Principals<User>(signIn = "/login")
  *
  * view("/login", title = "Sign in") { LoginPage() }
  * view("/todos", title = "My todos", requires = Principals.signedIn) { TodoListPage() }
  * view("/admin/users", title = "Users", requires = Principals.where { it.admin }) { AdminUsers() }
  * ```
  *
+ * Whatever supplies the principal, such as `jetlin-server-ktor-auth`, stores it under [key]. Tests
+ * that set the principal directly use [key] too.
+ *
  * @param key the attribute key that holds the principal, or `null` when nobody is signed in.
  * @param signIn the path of the sign-in page.
  */
 public class Principals<P : Any>(
-    private val key: AttributeKey<P?>,
+    public val key: AttributeKey<P?>,
     private val signIn: String = "/login",
 ) {
+    /**
+     * Creates guards with a key of their own, for an application that has no other use for the key.
+     *
+     * @param signIn the path of the sign-in page.
+     * @param name the key's name, which appears only in diagnostics.
+     */
+    public constructor(signIn: String = "/login", name: String = "principal") : this(AttributeKey(name), signIn)
+
     /** Returns the principal for [request], or `null` if nobody is signed in. */
     public fun of(request: RequestContext): P? = request[key]
 

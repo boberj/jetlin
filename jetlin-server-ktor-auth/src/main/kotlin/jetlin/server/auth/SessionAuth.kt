@@ -1,3 +1,8 @@
+// Ktor's typed session authentication is experimental. Jetlin absorbs the opt-in, so applications
+// that sign in through [authentication] with [Principals] don't need it, and Ktor changes reach them
+// through Jetlin's release instead.
+@file:OptIn(ExperimentalKtorApi::class)
+
 package jetlin.server.auth
 
 import androidx.compose.runtime.Composable
@@ -8,9 +13,12 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.auth.OptionalPrincipalContext
 import io.ktor.server.auth.SessionAuthenticationScheme
 import io.ktor.server.auth.UnauthorizedHandler
+import io.ktor.server.auth.SessionTransportType
 import io.ktor.server.auth.authenticateWithOptional
 import io.ktor.server.auth.clearSession
+import io.ktor.server.auth.install
 import io.ktor.server.auth.principalOrNull
+import io.ktor.server.auth.session
 import io.ktor.server.auth.setSession
 import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.uri
@@ -19,6 +27,11 @@ import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.RoutingContext
 import io.ktor.server.routing.post
+import io.ktor.server.sessions.CookieConfiguration
+import io.ktor.server.sessions.SameSite
+import io.ktor.server.sessions.SessionStorage
+import io.ktor.server.sessions.SessionStorageMemory
+import io.ktor.server.sessions.sameSite
 import io.ktor.server.sessions.sessionId
 import io.ktor.server.sessions.sessions
 import io.ktor.util.AttributeKey as KtorAttributeKey
@@ -29,6 +42,7 @@ import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import jetlin.html.AttributeKey
 import jetlin.html.LocalNavigator
+import jetlin.html.Principals
 import jetlin.server.JetlinConfig
 import jetlin.server.jetlinSessions
 import jetlin.server.originAllowed
@@ -82,7 +96,6 @@ public interface SessionControls<S : Any> {
  *
  * @param S the application's session type.
  */
-@ExperimentalKtorApi
 public class SessionAuth<S : Any> internal constructor(
     private val scheme: SessionAuthenticationScheme<S, *>,
     private val sessionType: KClass<S>,
@@ -218,16 +231,81 @@ public class SessionAuth<S : Any> internal constructor(
 }
 
 /**
+ * Signs browsers in with a session cookie, and supplies the principal to Jetlin's views through
+ * [principals].
+ *
+ * ```kotlin
+ * val Principals = Principals<User>(signIn = "/login")
+ *
+ * jetlin {
+ *     val auth = authentication(Principals) { session: AppSession -> users.find(session.userId) }
+ *     view("/login") { SignInPage(auth.rememberControls()) }
+ *     view("/", requires = Principals.signedIn) { HomePage() }
+ * }
+ * ```
+ *
+ * The cookie is named `jetlin_session`. It holds only a random session ID, and [S] stays in [storage]
+ * on the server. The cookie is `Secure`, so it's sent only over HTTPS, and `HttpOnly`, so scripts
+ * can't read it. Its path is `/`. It's `SameSite=Lax`, so it's sent when someone follows a link into
+ * the application but not with another site's form posts.
+ *
+ * Browsers treat `http://localhost` as secure, so local development over plain HTTP still works. An
+ * application that is reached over plain HTTP on any other host, such as a LAN address during
+ * development, has to turn `secure` off with [configureCookie]. Don't do that in production.
+ *
+ * It installs Ktor's `Sessions` plugin for the cookie, so don't install `Sessions` yourself. An
+ * application that needs its own `Sessions` configuration builds a Ktor session scheme and passes it
+ * to the other overload instead.
+ *
+ * Otherwise it does what the other overload does: it puts Jetlin's page renders and socket under
+ * optional authentication, binds every Jetlin session token to the cookie, and registers
+ * `POST /jetlin/auth` for [SessionControls].
+ *
+ * @param S the application's session type. Ktor stores it, so it must be `@Serializable`.
+ * @param principals the guards that views use. The principal is stored under their key.
+ * @param storage where sessions are kept. The default keeps them in memory, so a restart signs
+ *   everyone out. Use `directorySessionStorage` or a shared store to keep them.
+ * @param ticketLifetime how long a sign-in or sign-out ticket can be redeemed for.
+ * @param configureCookie changes the cookie's attributes, after Jetlin's defaults are applied. The
+ *   name isn't an attribute, so it can't be changed.
+ * @param validate returns the principal for a session, or `null` if the session no longer names
+ *   anyone, for example because the user was deleted. Such a browser is signed out.
+ * @return the handle that views get [SessionControls] from.
+ */
+public inline fun <reified S : Any, reified P : Any> JetlinConfig.authentication(
+    principals: Principals<P>,
+    storage: SessionStorage = SessionStorageMemory(),
+    ticketLifetime: Duration = 60.seconds,
+    noinline configureCookie: CookieConfiguration.() -> Unit = {},
+    noinline validate: suspend RoutingContext.(session: S) -> P?,
+): SessionAuth<S> {
+    val scheme = session<S, P>(SESSION_COOKIE) {
+        transport = SessionTransportType.CookieId(storage) {
+            cookie.secure = true
+            cookie.sameSite = SameSite.Lax
+            cookie.configureCookie()
+        }
+        validate { session -> validate(session) }
+    }
+    return authentication(scheme, S::class, principals.key, ticketLifetime, install = true)
+}
+
+/** The name of the cookie that [authentication] with [Principals] sets. Applications can't change it. */
+@PublishedApi
+internal const val SESSION_COOKIE: String = "jetlin_session"
+
+/**
  * Signs browsers in with [scheme], and supplies its principal to Jetlin's views under [principal].
  *
- * Install the scheme first, so that the `Sessions` plugin can read the cookie:
+ * Most applications should use the overload that takes only [Principals] and a `validate` function,
+ * which builds and installs the scheme for them. Use this one when the scheme needs something that
+ * overload doesn't offer, or when the application installs `Sessions` itself. Install the scheme
+ * first, so that the `Sessions` plugin can read the cookie:
  *
  * ```kotlin
  * val sessionAuth = session<AppSession, User>("app") {
  *     transport = SessionTransportType.CookieId(storage) {
- *         cookie.path = "/"
- *         cookie.httpOnly = true
- *         cookie.extensions["SameSite"] = "Lax"
+ *         cookie.sameSite = SameSite.Lax
  *     }
  *     validate { session -> users.find(session.userId) }
  * }
@@ -262,15 +340,31 @@ public inline fun <reified S : Any, P : Any> JetlinConfig.authentication(
     scheme: SessionAuthenticationScheme<S, P>,
     principal: AttributeKey<P?>,
     ticketLifetime: Duration = 60.seconds,
-): SessionAuth<S> = authentication(scheme, S::class, principal, ticketLifetime)
+): SessionAuth<S> = authentication(scheme, S::class, principal, ticketLifetime, install = false)
 
-@PublishedApi
+/**
+ * Signs browsers in with [scheme], and supplies its principal to Jetlin's views through [principals].
+ *
+ * The same as the overload that takes an attribute key, with the key of [principals].
+ */
 @ExperimentalKtorApi
+public inline fun <reified S : Any, P : Any> JetlinConfig.authentication(
+    scheme: SessionAuthenticationScheme<S, P>,
+    principals: Principals<P>,
+    ticketLifetime: Duration = 60.seconds,
+): SessionAuth<S> = authentication(scheme, S::class, principals.key, ticketLifetime, install = false)
+
+/**
+ * Wires [scheme] into Jetlin. With [install], it also installs the `Sessions` plugin for it, which is
+ * what `Application.install(scheme)` would do: Ktor installs it on the routing root either way.
+ */
+@PublishedApi
 internal fun <S : Any, P : Any> JetlinConfig.authentication(
     scheme: SessionAuthenticationScheme<S, P>,
     sessionType: KClass<S>,
     principal: AttributeKey<P?>,
     ticketLifetime: Duration,
+    install: Boolean,
 ): SessionAuth<S> {
     val auth = SessionAuth(scheme, sessionType, ticketLifetime)
     // Ktor exposes the principal only through a context that exists inside the route builder.
@@ -278,6 +372,7 @@ internal fun <S : Any, P : Any> JetlinConfig.authentication(
     var principalContext: OptionalPrincipalContext<P>? = null
 
     routes { jetlinRoutes ->
+        if (install) install(scheme)
         authenticateWithOptional(scheme, onUnauthorized = UnauthorizedHandler { forgetStaleSession(scheme) }) {
             principalContext = captured()
             jetlinRoutes()
@@ -303,7 +398,6 @@ private fun <P : Any> captured(): OptionalPrincipalContext<P> = context
  * on an error for something only the server can fix. A socket can't follow a redirect, so it gets
  * the `401`, and the cleared cookie makes its next attempt anonymous.
  */
-@ExperimentalKtorApi
 private suspend fun <S : Any, P : Any> RoutingContext.forgetStaleSession(scheme: SessionAuthenticationScheme<S, P>) {
     scheme.clearSession()
     if (call.request.headers[HttpHeaders.Upgrade].equals("websocket", ignoreCase = true)) {
