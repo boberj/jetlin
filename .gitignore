@@ -6,6 +6,8 @@ build/
 *.db
 *.db-shm
 *.db-wal
+# The copies jetlin-db makes before migrating, such as app.db.before-0002_add_notes.
+*.db.before-*
 
 node_modules/
 test-results/

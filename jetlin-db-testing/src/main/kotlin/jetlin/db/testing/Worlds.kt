@@ -22,6 +22,7 @@ import jetlin.db.insertUnchecked
 import jetlin.db.unsafe
 import jetlin.db.storedColumns
 import jetlin.db.valueOf
+import jetlin.db.migrate.MigrationSource
 
 /** A column value in a [WorldSpec]: a plain value, or a reference to an earlier record. */
 internal sealed interface SpecValue {
@@ -123,7 +124,9 @@ internal class Universe(schema: Schema, private val settings: PolicyCheck) {
  */
 internal class World(val universe: Universe, val spec: WorldSpec) : AutoCloseable {
     private val directory: Path = createTempDirectory("jetlin-db-testing")
-    val db: Db = Db.open(directory.resolve("world.db"), universe.tables)
+    // A world is built straight from the entities. The application's migrations would only make
+    // every world slower to build, and print a line for each.
+    val db: Db = Db.open(directory.resolve("world.db"), universe.tables, migrations = MigrationSource.None)
     val records: MutableList<Record> = mutableListOf()
     private val indexOf = IdentityHashMap<Record, Int>()
 

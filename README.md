@@ -423,7 +423,8 @@ instead, because a browser reconnects too quickly for the grace period to expire
 | `jetlin-testing` | Runs views without a browser, for testing an application's own UI logic |
 | `jetlin-db` | Records, cells, the identity map, policies, the gate, snapshot transactions, and SQLite |
 | `jetlin-db-ksp` | KSP processor: tables, column objects, drafts, policy-checked accessors, and the schema snapshot |
-| `jetlin-db-gradle` | `dbDiff`, `dbMigrate`, `dbVerify`, and the migration engine behind them |
+| `jetlin-db-gradle` | `dbDiff`, `dbMigrate`, `dbVerify`, and packaging migrations into the JAR |
+| `jetlin-db-migrate` | The migration engine that `Db.open` runs at startup and `dbMigrate` runs from Gradle |
 | `samples/demo` | A runnable five-page demo, and the UI session memory benchmark |
 | `jetlin-db-testing` | Tests `jetlin-db` policies for loopholes, such as users who can make themselves admins, in many small, random databases |
 | `samples/teams` | A sample with several users, with owner-only records, team-shared records, and an admin-only column |

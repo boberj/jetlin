@@ -1,6 +1,7 @@
 package jetlin.db
 
 import androidx.compose.runtime.Composable
+import jetlin.db.migrate.MigrationSource
 import jetlin.html.AttributeKey
 import jetlin.html.Div
 import jetlin.html.H1
@@ -133,7 +134,7 @@ private fun Page(heading: String) {
 private fun withRoutedDb(block: (Db, User, User) -> Unit) {
     val directory = createTempDirectory("jetlin-db")
     try {
-        Db.open(directory.resolve("test.db"), schema()).use { db ->
+        Db.open(directory.resolve("test.db"), schema(), MigrationSource.None).use { db ->
             val alice = db.transact { db.insert(User("Alice")) }
             val bob = db.transact { db.insert(User("Bob")) }
             block(db, alice, bob)

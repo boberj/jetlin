@@ -7,6 +7,7 @@ import jetlin.html.Text
 import jetlin.protocol.Op
 import java.nio.file.Path
 import java.sql.DriverManager
+import jetlin.db.migrate.MigrationSource
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteRecursively
@@ -28,14 +29,14 @@ class PersistenceTest {
     fun `a committed write survives a restart`(): Unit = runTest {
         withStore { file ->
             val taskId: Long
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val task = db.transact { db.insert(Task(alice, "Read the plan")) }
                 db.transact { task.done = true }
                 taskId = task.id
             }
 
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val task = db.resident.find(Task::class, Id(taskId))
                 assertEquals("Read the plan", task?.title)
                 assertEquals(true, task?.done)
@@ -50,11 +51,11 @@ class PersistenceTest {
     fun `a new record gets a fresh id after a restart`(): Unit = runTest {
         withStore { file ->
             val first: Long
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 first = db.transact { db.insert(User("Alice")) }.id
             }
 
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val second = db.transact { db.insert(User("Bob")) }
                 assertTrue(second.id > first, "ids must not be reused across a restart")
                 assertEquals(2, db.resident.recordCount)
@@ -65,14 +66,14 @@ class PersistenceTest {
     @Test
     fun `a reference survives a restart and resolves to the same object`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val inbox = db.transact { db.insert(Project(alice, "Inbox")) }
                 db.transact { db.insert(Task(alice, "filed")).also { it.project = inbox } }
                 db.transact { db.insert(Task(alice, "unfiled")) }
             }
 
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val inbox = db.resident.all(Project::class).single()
                 val (filed, unfiled) = db.resident.all(Task::class).sortedBy { it.title }
                 assertEquals(inbox, filed.project)
@@ -84,7 +85,7 @@ class PersistenceTest {
     @Test
     fun `a transaction that throws leaves the database and every session untouched`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val task = db.transact { db.insert(Task(alice, "Read the plan")) }
 
@@ -115,7 +116,7 @@ class PersistenceTest {
     @Test
     fun `two sessions reading one record both recompose on a single write`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val task = db.transact { db.insert(Task(alice, "Read the plan")) }
 
@@ -138,7 +139,7 @@ class PersistenceTest {
     @Test
     fun `a session sees a record another session inserted`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
 
                 harness {
@@ -162,7 +163,7 @@ class PersistenceTest {
     @Test
     fun `writing stored state outside a transaction is refused`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
 
                 val failure = assertFailsWith<IllegalStateException> { alice.name = "Alice again" }
@@ -179,7 +180,7 @@ class PersistenceTest {
     @Test
     fun `a record inserted and deleted in one transaction is never written`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 db.transact {
                     val doomed = db.insert(User("Ghost"))
                     db.delete(doomed)
@@ -194,7 +195,7 @@ class PersistenceTest {
     @Test
     fun `deleting a record removes it from disk and from the graph`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val task = db.transact { db.insert(Task(alice, "Read the plan")) }
 
@@ -205,14 +206,14 @@ class PersistenceTest {
             }
 
             // The record is still gone after reopening.
-            Db.open(file, schema()).use { db -> assertEquals(0, db.resident.all(Task::class).size) }
+            Db.open(file, schema(), MigrationSource.None).use { db -> assertEquals(0, db.resident.all(Task::class).size) }
         }
     }
 
     @Test
     fun `a write touches only the columns that changed`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val task = db.transact { db.insert(Task(alice, "Read the plan")) }
 
@@ -227,7 +228,7 @@ class PersistenceTest {
     @Test
     fun `a record can be deleted and its id reused in the same transaction`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 val alice = db.transact { db.insert(User("Alice")) }
                 val first = unsafe("test fixture") { db.insertUnchecked(Task(alice, "first"), id = 7) }
 
@@ -250,7 +251,7 @@ class PersistenceTest {
     @Test
     fun `one transaction can create a record and the record that points at it`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 // Inserted in whatever order the application writes them, which might not be the
                 // order that foreign keys would require if each statement were checked on its own.
                 val task = db.transact {
@@ -267,7 +268,7 @@ class PersistenceTest {
     @Test
     fun `a write by another connection is refused rather than silently diverging`(): Unit = runTest {
         withStore { file ->
-            Db.open(file, schema()).use { db ->
+            Db.open(file, schema(), MigrationSource.None).use { db ->
                 db.transact { db.insert(User("Alice")) }
 
                 DriverManager.getConnection("jdbc:sqlite:$file").use { outside ->

@@ -5,9 +5,9 @@ plugins {
 }
 
 dependencies {
-    // The migration runner runs SQL against the database file, so it uses the same driver as the
-    // runtime.
-    implementation(libs.sqlite.jdbc)
+    // The engine that `dbMigrate` runs, and that `Db.open` runs at startup. `dbVerify` uses it too, to
+    // replay the migrations.
+    implementation(project(":jetlin-db-migrate"))
     implementation(libs.serialization.json)
 
     testImplementation(libs.kotlin.test)

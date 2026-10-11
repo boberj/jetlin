@@ -1,13 +1,6 @@
 package jetlin.db.gradle
 
-/**
- * A marker line that stops `dbMigrate` from running a destructive migration until someone has read it.
- *
- * The generator adds it to every migration that loses data, and the author confirms the migration by
- * deleting it. That confirmation is an edit to a file, so it shows up in code review, unlike a
- * command-line flag, which leaves no trace.
- */
-public const val ACKNOWLEDGEMENT_MARKER: String = "-- jetlin-db:unacknowledged"
+import jetlin.db.migrate.ACKNOWLEDGEMENT_MARKER
 
 /** The suffix of the temporary table that a rebuild creates before replacing the original. */
 private const val REBUILD_SUFFIX = "__jetlin_new"
@@ -24,8 +17,8 @@ private const val REBUILD_SUFFIX = "__jetlin_new"
  * SQLite's `ALTER TABLE` can only add, drop, and rename columns, and rename tables. Changing a
  * column's type, nullability, or foreign key requires creating a new table, copying the rows,
  * dropping the old table, and renaming the new one. SQLite documents this as a twelve-step
- * procedure. This function generates the SQL steps. The runner, [applyMigrations], does the steps
- * that need a live connection: turning off foreign keys, running a transaction, running
+ * procedure. This function generates the SQL steps. The runner, `jetlin.db.migrate.migrate`, does
+ * the steps that need a live connection: turning off foreign keys, running a transaction, running
  * `PRAGMA foreign_key_check`, and checking that no index, trigger, or view was lost.
  *
  * @param from the recorded schema.
@@ -44,7 +37,7 @@ public fun migrationSql(from: SchemaFile, to: SchemaFile, changes: List<Change>)
         appendLine("-- This migration is destructive:")
         destructive.forEach { appendLine("--   ! ${it.summary}") }
         appendLine("--")
-        appendLine("-- dbMigrate will not run this migration until you review it and delete the next line.")
+        appendLine("-- It will not run until you review it and delete the next line.")
         appendLine(ACKNOWLEDGEMENT_MARKER)
     }
     appendLine()

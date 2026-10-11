@@ -24,3 +24,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "jetlin-db-gradle"
+
+// The migration engine. Both the plugin (`dbMigrate`) and `:jetlin-db` (`Db.open`) run it, so it lives
+// here, where the plugin can depend on it directly. The root build's `:jetlin-db` depends on it by
+// coordinates, and Gradle substitutes this project for them.
+include("jetlin-db-migrate")

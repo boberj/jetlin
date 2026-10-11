@@ -8,6 +8,7 @@ import jetlin.db.authenticate
 import jetlin.db.insertUnchecked
 import jetlin.db.unsafe
 import jetlin.db.Id
+import jetlin.db.migrate.MigrationSource
 import jetlin.html.AttributeKey
 import jetlin.html.LocalRequest
 import jetlin.html.RequestContext
@@ -15,7 +16,6 @@ import jetlin.html.Principals
 import jetlin.server.auth.authentication
 import jetlin.server.jetlin
 import java.nio.file.Path
-import kotlin.io.path.createTempDirectory
 import kotlinx.serialization.Serializable
 
 /**
@@ -158,16 +158,22 @@ internal fun Db.todoFor(request: RequestContext): Todo? {
 }
 
 /**
- * Creates a new database seeded with two teammates, a user with no team, and an admin.
+ * Opens the sample's database, and seeds it with two teammates, a user with no team, and an admin if
+ * it's empty.
  *
- * By default, the database goes in a temporary directory, so the sample always starts from the
- * same state. A real application would open a persistent file that `./gradlew dbMigrate` has
- * migrated.
+ * By default, the database is `db/app.db`, the same file `./gradlew dbMigrate` uses, and it persists
+ * across restarts. `Db.open` applies the migrations the plugin packaged into the JAR, so after an
+ * entity changes and `./gradlew dbDiff` writes a migration, the next start migrates the existing data
+ * instead of starting over. Delete the file to start from the seeded state again.
  *
  * @param file the database file. If it already has records, nothing is seeded.
+ * @param migrations where the migrations come from. Tests replace them to simulate an older version.
  */
-internal fun openSeeded(file: Path = createTempDirectory("jetlin-teams").resolve("teams.db")): Db {
-    val db = Db.open(file, JetlinSchema.tables)
+internal fun openSeeded(
+    file: Path = Path.of("db", "app.db"),
+    migrations: MigrationSource = MigrationSource.Classpath,
+): Db {
+    val db = Db.open(file, JetlinSchema.tables, migrations)
     if (db.resident.recordCount > 0) return db
 
     // Seeding needs `unsafe`, because there's no principal yet: nobody can be allowed to create the

@@ -12,6 +12,11 @@ dependencies {
     // SQLite runs in the process, against a single file. This is the only storage dependency.
     implementation(libs.sqlite.jdbc)
 
+    // The migration engine, which `Db.open` runs before loading anything. `dbMigrate` runs the same
+    // engine. It's a project of the included `jetlin-db-gradle` build, so the plugin can use it too, and
+    // Gradle substitutes it for these coordinates. It's `api` because `Db.open` takes its types.
+    api("jetlin:jetlin-db-migrate")
+
     // Tests compose a real view and assert on the ops that a write produces. That's the most direct way
     // to check that reading a field subscribes the reader. Only the tests need the HTML applier.
     testImplementation(project(":jetlin-html"))

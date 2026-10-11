@@ -1163,21 +1163,51 @@ checked into the repository. The migration tasks compare the two:
 
 ```
 ./gradlew dbDiff --name=share_todos_by_team   # writes db/migrations/0002_share_todos_by_team.sql
-./gradlew dbMigrate                           # applies pending migrations
-./gradlew dbVerify                            # fails if the entities and db/schema.json differ (CI)
+./gradlew dbVerify                            # fails if the entities, db/schema.json and the migrations disagree (CI)
+./gradlew dbMigrate                           # applies pending migrations to db/app.db, without starting the app
 ```
 
 A migration is a SQL file that's meant to be read and, if needed, edited. Files are named like
-`0001_what_it_does.sql`, applied in order, and recorded in a `jetlin_migrations` table. The SQL in the
-file is exactly what runs.
+`0001_what_it_does.sql`, applied in order, and recorded in a `jetlin_migrations` table, with each
+file's SHA-256. The SQL in the file is exactly what runs.
+
+### The application migrates itself
+
+The plugin packages `db/migrations/` into the JAR, under `META-INF/jetlin-db/migrations/`, with an
+index. `Db.open` applies whichever of them the database hasn't had, before it loads anything, so a
+deployment is one step: ship the JAR, start it. There's nothing to copy into an image, and no path to
+configure.
+
+```kotlin
+val db = Db.open(Path.of("/data/app.db"), JetlinSchema.tables)   // migrates, verifies, loads
+```
+
+When it starts, the database is either:
+
+- **New.** Every migration runs, from the first. So the migrations are tested on every fresh start, not
+  only in production.
+- **Partly migrated, or current.** The history says which migrations are pending.
+
+So every database has a history from its first start, and an application needs at least one
+migration before it runs at all, even in development. A new application writes its first with
+`./gradlew dbDiff --name=initial_schema`. Without one, `Db.open` fails and says so.
+`MigrationSource.None` creates tables from the entities instead, without history. It's for tests and
+throwaway databases. A database it created, with tables but no history, is refused once there are
+migrations, because nothing says which of them it has had. Delete it.
+
+`dbMigrate` runs the same engine, with the same checks, and writes the same history. Use it in
+development, or to migrate a copy first when the application opens the database with
+`onStartup = MigrationMode.Verify`, which applies nothing and fails if anything is pending, naming it.
+
+### What stops a migration
 
 SQLite's `ALTER TABLE` can add, drop, and rename columns, and rename tables. Changing a column's type,
 nullability, or foreign key requires creating a new table, copying the rows, dropping the old table,
 and renaming the new one: the twelve-step procedure in SQLite's documentation. The generator writes
 that SQL. The runner handles the steps that need a live connection:
 
-- It turns off foreign keys during the migration, because the rebuild drops a table that other tables
-  reference.
+- It runs each migration in its own transaction, and turns off foreign keys during it, because the
+  rebuild drops a table that other tables reference.
 - It runs `PRAGMA foreign_key_check` before committing, so a new constraint that orphans existing rows
   fails the migration, instead of producing a warning.
 - It checks that every index, trigger, and view that existed before still exists afterward. A rebuild
@@ -1185,14 +1215,42 @@ that SQL. The runner handles the steps that need a live connection:
   given database has. So the runner detects the loss and stops, naming what was lost. A view over a
   rebuilt table is the most common case.
 
-A migration that destroys data contains a marker line, and `dbMigrate` refuses to run it until someone
-deletes the line. Deleting a line in the file shows up in code review permanently. A `--force` flag
-would leave no trace once typed.
+A failed migration is rolled back, and the exception from `Db.open` names the migration, the
+statement, and SQLite's message. The application doesn't start.
 
-`Db.open` creates any missing tables, and verifies the existing ones. A missing column, a mismatched
+A migration that destroys data contains a marker line, and neither `Db.open` nor `dbMigrate` runs it
+until someone deletes the line. Deleting a line in the file shows up in code review permanently. A
+`--force` flag would leave no trace once typed. Nothing runs if any pending migration is
+unacknowledged.
+
+A migration edited after it was applied stops startup too: the history's SHA-256 no longer matches the
+file, which means this database and a new one would now differ. Put the change in a new migration
+instead. (Line endings are normalized before hashing, so a Windows checkout isn't an edit.)
+`dbVerify` also replays every migration at build time and compares the result with the entities, so a
+migration edited into something that no longer produces the schema fails the build, not a deployment.
+
+Before the first pending migration runs on a database that has data, the runner copies it to
+`<file>.before-<migration>` with `VACUUM INTO`, and keeps the three most recent copies
+(`keepBackups = 0` turns this off). A failed migration already rolls back; the copy is for one that
+succeeds and turns out to be wrong. It's a quick local undo on the same volume, and doesn't replace
+Litestream.
+
+After migrating, `Db.open` verifies the tables against the entities. A missing column, a mismatched
 type or nullability, a missing foreign key, or a stored column that no entity declares all make
-startup fail, with the table and column named. That turns a forgotten migration into a startup error,
-instead of a failed insert during a deployment.
+startup fail, with the table and column named.
+
+`Db.open` reports what it did through `onMigration`, which prints to standard error by default: a line
+for each migration applied, with how long it took. Nothing is reported when nothing is pending.
+
+### Deploying a new version
+
+The runner takes SQLite's write lock (`BEGIN IMMEDIATE`) before it reads the history, so if two
+processes start at once, the second waits, then finds the migrations applied and applies nothing. But
+the old process doesn't know the schema changed, and its next write fails, because `jetlin-db` detects
+writes by another process (§6). That's the right outcome, but it's an error in the old process's log.
+
+So stop the old process before starting the new one: one replica, and the "stop first" update order
+in Dokploy and Docker Swarm. A single process is the supported setup anyway (§8).
 
 ## 8. What's missing
 
@@ -1252,7 +1310,8 @@ hibernation show the correct title. Fixing this requires a protocol change.
 ```
 :jetlin-db          Record, cells, the identity map, View, Policy, the gate, transactions, SQLite
 :jetlin-db-ksp      the processor: tables, column objects, drafts, policy-checked accessors, schema snapshot
-:jetlin-db-gradle   dbDiff, dbMigrate, dbVerify, and the migration engine they share
+:jetlin-db-migrate  the migration engine that Db.open and dbMigrate share (a project of the jetlin-db-gradle build)
+:jetlin-db-gradle   dbDiff, dbMigrate, dbVerify, and packaging migrations into the JAR
 :samples:teams      a sample with several users, using all three access patterns
 ```
 

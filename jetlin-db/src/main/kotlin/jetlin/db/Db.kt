@@ -2,6 +2,10 @@ package jetlin.db
 
 import androidx.compose.runtime.snapshots.Snapshot
 import java.nio.file.Path
+import jetlin.db.migrate.MigrationEvent
+import jetlin.db.migrate.MigrationMode
+import jetlin.db.migrate.MigrationSource
+import jetlin.db.migrate.migrate
 import java.sql.Connection
 import java.sql.DriverManager
 import java.util.concurrent.locks.ReentrantLock
@@ -100,21 +104,75 @@ public class Db private constructor(
 
     public companion object {
         /**
-         * Opens the database at [path], creating it if necessary, and loads every table into memory.
+         * Opens the database at [path], creating it if necessary, brings its schema up to date, and
+         * loads every table into memory.
+         *
+         * ## Migrations
+         *
+         * The `jetlin.db` Gradle plugin packages `db/migrations/` into the JAR, and by default this
+         * applies whichever of them the database hasn't had, before anything is loaded, so the
+         * identity map never sees a half-migrated schema. That makes a deployment one step, whether
+         * the database is new, partly migrated, or current. `jetlin.db.migrate.migrate` describes how,
+         * and the checks that stop a migration: one that destroys data and hasn't been acknowledged,
+         * one that was edited after it ran, and one that fails, which is rolled back.
+         *
+         * An application needs at least one migration, even before it's deployed, so that every
+         * database it opens has a history from the start. A new application gets its first one from
+         * `./gradlew dbDiff --name=initial_schema`. Only [MigrationSource.None] creates tables from the
+         * entities instead, without history, which is for tests and throwaway databases.
+         *
+         * Either way, the schema is then checked against the entities, and a difference fails startup.
+         *
+         * ## Load order
          *
          * Tables are loaded in the order of [tables]. A non-null reference can point only to a table
          * earlier in the list, because references are resolved against records that are already
          * loaded. A reference to a later table fails with an error that names both tables.
          *
+         * @param migrations where the migrations come from. [MigrationSource.None] turns them off, and
+         *   creates missing tables from the entities instead.
+         * @param onStartup [MigrationMode.Apply] applies pending migrations. [MigrationMode.Verify]
+         *   fails if any is pending, for operators who migrate as a separate step, with `dbMigrate`.
+         * @param keepBackups how many copies of the database to keep. Before applying migrations to a
+         *   database that has data, it's copied to `<path>.before-<first migration>`. Zero turns this
+         *   off. The copies are a quick local undo for a migration that succeeded and turned out to be
+         *   wrong. They're on the same volume, so they don't replace real backups.
+         * @param onMigration receives each thing the migrations did, for the application's log. It
+         *   prints to standard error by default. Nothing is reported when nothing is pending.
+         * @throws jetlin.db.migrate.MigrationException if the database can't be migrated. The
+         *   message names the migration, and the statement and SQLite's message if one failed.
+         * @throws IllegalArgumentException if [migrations] has none, and isn't [MigrationSource.None].
          * @throws IllegalStateException if the stored schema doesn't match the entities, or a
          *   reference points to a table later in the list.
          */
-        public fun open(path: Path, tables: List<Table<out Record>>): Db {
+        public fun open(
+            path: Path,
+            tables: List<Table<out Record>>,
+            migrations: MigrationSource = MigrationSource.Classpath,
+            onStartup: MigrationMode = MigrationMode.Apply,
+            keepBackups: Int = 3,
+            onMigration: (MigrationEvent) -> Unit = { System.err.println("jetlin-db: ${it.message}") },
+        ): Db {
+            val withMigrations = migrations != MigrationSource.None
+            if (withMigrations) {
+                val loaded = migrations.load()
+                require(loaded.isNotEmpty()) {
+                    "$migrations has no migrations. Apply the `jetlin.db` Gradle plugin and run " +
+                        "`./gradlew dbDiff --name=initial_schema` to write the first one. For a throwaway " +
+                        "database, such as in a test, pass MigrationSource.None instead."
+                }
+                // Migrate first, on the engine's own connection, so this connection opens a schema
+                // that's already final.
+                migrate(path, loaded, onStartup, keepBackups, onMigration)
+            }
+
             val connection = DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}")
             return try {
                 Db(connection, tables).apply {
                     configure()
-                    createSchema()
+                    // With migrations, they're what creates tables. A table they don't create is a
+                    // mismatch for verifySchema to report, not something to paper over.
+                    if (!withMigrations) createSchema()
                     verifySchema()
                     dataVersion = readDataVersion()
                     load()
@@ -327,7 +385,10 @@ public class Db private constructor(
             buildString {
                 appendLine("The database does not match the entities:")
                 problems.forEach { appendLine("  * $it") }
-                append("Run `./gradlew dbDiff --name=<what changed>` and `./gradlew dbMigrate`.")
+                append(
+                    "Run `./gradlew dbDiff --name=<what changed>` to write a migration for the difference. " +
+                        "Db.open applies it the next time it starts.",
+                )
             }
         }
     }

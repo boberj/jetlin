@@ -1,5 +1,6 @@
 package jetlin.db
 
+import jetlin.db.migrate.MigrationSource
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteRecursively
@@ -877,7 +878,7 @@ private fun Db.doc(owner: User, team: String? = null): Doc = store(Doc(owner, "P
 private fun withDb(block: (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-db")
     try {
-        Db.open(directory.resolve("test.db"), schema()).use(block)
+        Db.open(directory.resolve("test.db"), schema(), MigrationSource.None).use(block)
     } finally {
         directory.deleteRecursively()
     }

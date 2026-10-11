@@ -3,6 +3,9 @@ package jetlin.db.gradle
 import java.io.File
 import java.nio.file.Files
 import java.sql.DriverManager
+import jetlin.db.migrate.ACKNOWLEDGEMENT_MARKER
+import jetlin.db.migrate.MigrationResult
+import jetlin.db.migrate.migrate
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -58,9 +61,7 @@ class MigrationTest {
         assertContains(sql, "drop tasks.notes, and the values in it")
 
         val database = file()
-        create(database, before)
-        val migrations = directory()
-        val store = Migrations(migrations)
+        val store = create(database, before)
         val file = store.nextFile("drop notes")
         store.write(file, sql)
 
@@ -127,7 +128,7 @@ class MigrationTest {
         )
 
         val database = file()
-        create(database, before)
+        val store = create(database, before)
         DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
             connection.createStatement().use {
                 // A row that references a user that doesn't exist. It's valid before the constraint
@@ -135,13 +136,12 @@ class MigrationTest {
                 it.execute("INSERT INTO tasks (id, owner) VALUES (1, 404)")
             }
         }
-        val store = Migrations(directory())
         store.write(store.nextFile("add fk"), migrationFor(before, after))
 
         val failure = assertFailsWith<IllegalStateException> { applyMigrations(database, store) }
 
         assertContains(failure.message.orEmpty(), "Foreign key violations")
-        assertEquals(emptyList(), appliedMigrations(database), "a failed migration is not recorded")
+        assertEquals(listOf(INITIAL), appliedMigrations(database), "a failed migration is not recorded")
     }
 
     @Test
@@ -150,11 +150,10 @@ class MigrationTest {
         val after = schema(table("tasks", id(), text("title"), integer("rank", nullable = false)))
 
         val database = file()
-        create(database, before)
+        val store = create(database, before)
         DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
             connection.createStatement().use { it.execute("CREATE INDEX tasks_by_rank ON tasks(rank)") }
         }
-        val store = Migrations(directory())
         val file = store.nextFile("retype rank")
         val sql = migrationFor(before, after).replace("$ACKNOWLEDGEMENT_MARKER\n", "")
         store.write(file, sql)
@@ -177,8 +176,7 @@ class MigrationTest {
         val after = schema(table("tasks", id(), text("title"), text("notes", nullable = true)))
 
         val database = file()
-        create(database, before)
-        val store = Migrations(directory())
+        val store = create(database, before)
         store.write(store.nextFile("add notes"), migrationFor(before, after))
 
         assertEquals(1, applyMigrations(database, store).applied.size)
@@ -195,6 +193,30 @@ class MigrationTest {
 
         assertEquals(after.table("tasks")?.columns, columnsOf(database, "tasks"))
         assertEquals(after.table("users")?.columns, columnsOf(database, "users"))
+    }
+
+    @Test
+    fun `migrations that produce the declared schema pass the replay check`() {
+        val declared = schema(table("tasks", id(), text("title"), text("notes", nullable = true)))
+        val store = Migrations(directory())
+        store.write(store.nextFile("initial"), migrationFor(SchemaFile.Empty, declared))
+
+        assertEquals(emptyList(), replayProblems(declared, store.all()))
+    }
+
+    @Test
+    fun `a migration edited into something else fails the replay check, naming the difference`() {
+        val declared = schema(table("tasks", id(), text("title"), text("notes", nullable = true)))
+        val store = Migrations(directory())
+        val file = store.nextFile("initial")
+        // Someone edits the migration by hand. db/schema.json still matches the entities, so only
+        // replaying the migrations notices.
+        store.write(file, migrationFor(SchemaFile.Empty, declared).replace("notes TEXT", "notes INTEGER"))
+
+        assertEquals(
+            listOf("tasks.notes is INTEGER, expected TEXT"),
+            replayProblems(declared, store.all()),
+        )
     }
 
     @Test
@@ -222,6 +244,10 @@ private fun text(name: String, nullable: Boolean = false) = ColumnSchema(name, "
 private fun integer(name: String, nullable: Boolean = false, references: String? = null) =
     ColumnSchema(name, "INTEGER", nullable, references)
 
+/** Applies [store]'s migrations the way `dbMigrate` does, without keeping backups. */
+private fun applyMigrations(database: File, store: Migrations): MigrationResult =
+    migrate(database.toPath(), store.all(), keepBackups = 0)
+
 private fun migrationFor(before: SchemaFile, after: SchemaFile): String =
     migrationSql(before, after, diff(before, after))
 
@@ -236,25 +262,27 @@ private fun migrated(
     seed: (java.sql.Connection) -> Unit,
 ): File {
     val database = file()
-    create(database, before)
+    val store = create(database, before)
     DriverManager.getConnection("jdbc:sqlite:$database").use(seed)
 
-    val store = Migrations(directory())
     val sql = migrationFor(before, after)
     store.write(store.nextFile("test"), if (acknowledge) sql.replace("$ACKNOWLEDGEMENT_MARKER\n", "") else sql)
     applyMigrations(database, store)
     return database
 }
 
-private fun create(database: File, schema: SchemaFile) {
-    DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
-        connection.createStatement().use { statement ->
-            for (table in schema.tables) {
-                val columns = table.columns.joinToString(", ") { it.definition() }
-                statement.execute("CREATE TABLE ${table.name} ($columns)")
-            }
-        }
-    }
+/** The name of the migration that [create] writes. */
+private const val INITIAL = "0001_initial.sql"
+
+/**
+ * Creates a database with [schema] the way a real one gets it, by applying a first migration, and
+ * returns the store that holds it. The migration under test is then the second.
+ */
+private fun create(database: File, schema: SchemaFile): Migrations {
+    val store = Migrations(directory())
+    store.write(store.nextFile("initial"), migrationFor(SchemaFile.Empty, schema))
+    applyMigrations(database, store)
+    return store
 }
 
 /** Reads the database's current schema for [table], in the same format as the schema snapshot. */

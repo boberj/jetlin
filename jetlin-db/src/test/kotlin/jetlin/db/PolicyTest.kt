@@ -1,6 +1,7 @@
 package jetlin.db
 
 import androidx.compose.runtime.key
+import jetlin.db.migrate.MigrationSource
 import jetlin.html.Div
 import jetlin.html.Span
 import jetlin.html.Text
@@ -532,7 +533,7 @@ private suspend fun Harness.textOfFirstSpan(): String = html().substringAfter("<
 private fun withDb(block: (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-db")
     try {
-        Db.open(directory.resolve("test.db"), schema()).use(block)
+        Db.open(directory.resolve("test.db"), schema(), MigrationSource.None).use(block)
     } finally {
         directory.deleteRecursively()
     }
@@ -543,7 +544,7 @@ private fun withDb(block: (Db) -> Unit) {
 private suspend fun withLiveDb(block: suspend (Db) -> Unit) {
     val directory = createTempDirectory("jetlin-db")
     try {
-        Db.open(directory.resolve("test.db"), schema()).use { db -> block(db) }
+        Db.open(directory.resolve("test.db"), schema(), MigrationSource.None).use { db -> block(db) }
     } finally {
         directory.deleteRecursively()
     }
